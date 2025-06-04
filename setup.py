@@ -1,13 +1,13 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="chromakit-qt",
+    name="ms-toolkit",  # Package name (with hyphen) for PyPI
     version="0.1.0",
     description="A python application for GC-MS data analysis and visualization",
     author="Caleb Coatney",
     author_email="caleb.coatney@nrel.gov",  # Update with your email
     url="https://github.com/NREL/chromakit-qt",  # Update with actual repository URL
-    packages=find_packages(),
+    packages=["ms_toolkit"],  # Import name (with underscore) for Python
     include_package_data=True,
     package_data={
         "": ["*.qss", "*.png", "*.ico"],
