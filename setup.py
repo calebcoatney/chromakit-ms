@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="ms-toolkit",  # Package name (with hyphen) for PyPI
+    name="chromakit-ms",
     version="0.1.0",
     description="A python application for GC-MS data analysis and visualization",
     author="Caleb Coatney",
