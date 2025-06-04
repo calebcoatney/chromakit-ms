@@ -1,12 +1,12 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="chromakit-qt",
+    name="chromakit-ms",
     version="0.1.0",
     description="A python application for GC-MS data analysis and visualization",
     author="Caleb Coatney",
     author_email="caleb.coatney@nrel.gov",  # Update with your email
-    url="https://github.com/NREL/chromakit-qt",  # Update with actual repository URL
+    url="https://github.com/NREL/chromakit-ms",  # Update with actual repository URL
     packages=find_packages(),
     include_package_data=True,
     package_data={
