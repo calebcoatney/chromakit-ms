@@ -7,7 +7,7 @@ setup(
     author="Caleb Coatney",
     author_email="caleb.coatney@nrel.gov",
     url="https://github.com/NREL/chromakit-ms",
-    packages=["ms_toolkit"],
+    packages=find_packages(),
     include_package_data=True,
     package_data={
         "": ["*.qss", "*.png", "*.ico"],
