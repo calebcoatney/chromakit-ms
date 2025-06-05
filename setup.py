@@ -24,7 +24,7 @@ setup(
         "rainbow-api",
     ],
     extras_require={
-        "ms": ["ms-toolkit"],
+        "ms": ["ms-toolkit-nrel"],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",

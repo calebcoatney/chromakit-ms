@@ -567,7 +567,7 @@ class MSFrame(QWidget):
         missing_label = QLabel("MSToolkit is not installed.")
         missing_label.setStyleSheet("color: #990000; font-weight: bold;")
         
-        install_label = QLabel("Install with: pip install ms-toolkit")
+        install_label = QLabel("Install with: pip install ms-toolkit-nrel")
         install_label.setStyleSheet("font-family: monospace;")
         
         self.layout.addWidget(missing_label)
