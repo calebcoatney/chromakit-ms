@@ -14,7 +14,7 @@ class MSOptionsDialog(QDialog):
         self.setMinimumWidth(450)
         
         # Initialize settings
-        self.settings = QSettings("NREL", "ChromaKit")
+        self.settings = QSettings("CalebCoatney", "ChromaKit")
         
         # Create main layout
         self.layout = QVBoxLayout(self)

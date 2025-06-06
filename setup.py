@@ -6,21 +6,25 @@ setup(
     description="A python application for GC-MS data analysis and visualization",
     author="Caleb Coatney",
     author_email="caleb.coatney@nrel.gov",
-    url="https://github.com/NREL/chromakit-ms",
+    url="https://github.com/calebcoatney/chromakit-ms",
+    license="Apache-2.0",
     packages=find_packages(),
+    py_modules=["main"],
     include_package_data=True,
     package_data={
         "": ["*.qss", "*.png", "*.ico"],
     },
     entry_points={
         "console_scripts": [
-            "chromakit-qt=main:main",
+            "chromakit-ms=main:main",
         ],
     },
     install_requires=[
         "PySide6>=6.0.0",
         "numpy",
         "matplotlib",
+        "scipy",
+        "pybaselines",
         "rainbow-api",
     ],
     extras_require={
@@ -35,6 +39,7 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Topic :: Scientific/Engineering :: Chemistry",
+        "License :: OSI Approved :: Apache Software License",
     ],
     python_requires=">=3.7",
 )
