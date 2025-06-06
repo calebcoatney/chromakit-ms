@@ -7,6 +7,8 @@ This project incorporates code from the following third-party packages:
   See COPYING.LESSER in that project for license details.
 - Portions derived from the ms-toolkit-nrel project licensed under the
   Apache License, Version 2.0.
+- pybaselines, licensed under the BSD 3-Clause License.
+
 
 These third-party components are distributed under their respective licenses.
 The source code in this repository is licensed under the Apache License,

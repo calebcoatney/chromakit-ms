@@ -15,7 +15,7 @@ ChromaKit-MS is a Python application for inspecting and processing GC-MS (Gas Ch
 * Python 3.7+
 * [PySide6](https://pypi.org/project/PySide6/)
 * [rainbow-api](https://github.com/reciprocal-space/rainbow-api) (for reading Agilent data)
-* NumPy, Matplotlib and SciPy
+* NumPy, SciPy, Matplotlib and pybaselines
 
 Optional features such as MS library searching require `ms-toolkit-nrel`.
 
@@ -54,5 +54,6 @@ to third-party components under their own licenses:
 
 * `ms-toolkit-nrel` – Apache License 2.0
 * `rainbow-api` – GNU Lesser General Public License v3.0
+* `pybaselines` – BSD 3-Clause License
 
 See the [NOTICE](NOTICE) file for attribution and additional details.

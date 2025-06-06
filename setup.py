@@ -23,6 +23,8 @@ setup(
         "PySide6>=6.0.0",
         "numpy",
         "matplotlib",
+        "scipy",
+        "pybaselines",
         "rainbow-api",
     ],
     extras_require={
