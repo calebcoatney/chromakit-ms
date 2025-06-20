@@ -29,22 +29,22 @@ class ParametersFrame(QWidget):
             'smoothing': {
                 'enabled': False,
                 'median_filter': {
-                    'kernel_size': 9  # Increased from 5
+                    'kernel_size': 9
                 },
                 'savgol_filter': {
-                    'window_length': 15,  # Increased from 11
-                    'polyorder': 2  # Decreased from 3 for more smoothing
+                    'window_length': 15,
+                    'polyorder': 2
                 }
             },
             'baseline': {
-                'show_corrected': False,  # Changed from 'enabled' to 'show_corrected'
-                'method': 'asls',
-                'lambda': 1e6,
+                'show_corrected': False,
+                'method': 'arpls',  # Changed from 'asls' to 'arpls'
+                'lambda': 1e4,      # Changed from 1e6 to 1e4
                 'asymmetry': 0.01
             },
             'peaks': {
                 'enabled': False,
-                'min_prominence': 0.5,
+                'min_prominence': 1e5,  # Changed from 0.5 to 1e5
                 'min_height': 0.0,
                 'min_width': 0.0
             }

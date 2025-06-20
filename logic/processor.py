@@ -35,8 +35,15 @@ class ChromatogramProcessor:
             }
         }
     
-    def process(self, x, y, params=None):
-        """Process chromatogram data with given parameters."""
+    def process(self, x, y, params=None, ms_range=None):
+        """Process chromatogram data with given parameters.
+        
+        Args:
+            x: X values (time)
+            y: Y values (intensity)
+            params: Processing parameters
+            ms_range: Optional tuple of (min_time, max_time) for MS data range
+        """
         if params is None:
             params = self.default_params
         
@@ -62,7 +69,7 @@ class ChromatogramProcessor:
         peaks_x = np.array([])
         peaks_y = np.array([])
         if params['peaks']['enabled']:
-            peaks_x, peaks_y = self._find_peaks(x_values, baseline_corrected_y, params['peaks'])
+            peaks_x, peaks_y = self._find_peaks(x_values, baseline_corrected_y, params['peaks'], ms_range)
         
         # Return processed data
         return {
@@ -198,13 +205,14 @@ class ChromatogramProcessor:
                 print(f"Fallback baseline also failed: {str(e2)}")
                 return np.zeros_like(y), y
     
-    def _find_peaks(self, x, y, peak_params):
+    def _find_peaks(self, x, y, peak_params, ms_range=None):
         """Find peaks in the chromatogram.
         
         Args:
             x (np.ndarray): X values array
             y (np.ndarray): Y values array
             peak_params (dict): Peak finding parameters
+            ms_range (tuple): Optional (min_time, max_time) for MS data range
             
         Returns:
             tuple: (peaks_x, peaks_y) arrays of peak positions and heights
@@ -220,6 +228,22 @@ class ChromatogramProcessor:
             if len(peak_indices) > 0:
                 peaks_x = x[peak_indices]
                 peaks_y = y[peak_indices]
+                
+                # Filter peaks based on MS data range if provided
+                if ms_range is not None:
+                    ms_min, ms_max = ms_range
+                    # Create mask for peaks within MS range
+                    in_range_mask = (peaks_x >= ms_min) & (peaks_x <= ms_max)
+                    
+                    # Print info about peaks outside the MS range (solvent delay)
+                    if not np.all(in_range_mask):
+                        filtered_count = np.sum(~in_range_mask)
+                        print(f"Filtered out {filtered_count} peaks outside MS range (solvent delay region)")
+                    
+                    # Only keep peaks within MS range
+                    peaks_x = peaks_x[in_range_mask]
+                    peaks_y = peaks_y[in_range_mask]
+                
                 return peaks_x, peaks_y
             
         except Exception as e:

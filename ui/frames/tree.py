@@ -51,8 +51,9 @@ class FileTreeFrame(QWidget):
             self.tree_view.hideColumn(i)
             
         # Connect signals
-        self.tree_view.clicked.connect(self.on_item_clicked)
-        
+        # self.tree_view.clicked.connect(self.on_item_clicked)  # Remove single-click loading
+        self.tree_view.doubleClicked.connect(self.on_item_double_clicked)  # Add double-click loading
+
         self.layout.addWidget(self.tree_view)
     
     def open_directory(self):
@@ -71,10 +72,10 @@ class FileTreeFrame(QWidget):
         self.tree_view.setRootIndex(root_index)
         self.path_label.setText(path)
     
-    def on_item_clicked(self, index):
-        """Handle item click in the tree view."""
+    def on_item_double_clicked(self, index):
+        """Handle item double-click in the tree view."""
         file_path = self.model.filePath(index)
-        
+
         # Check if it's a .D directory or regular file
         if os.path.isdir(file_path) and file_path.endswith('.D'):
             self.file_selected.emit(file_path)

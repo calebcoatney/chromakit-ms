@@ -5,9 +5,9 @@ setup(
     version="0.1.0",
     description="A python application for GC-MS data analysis and visualization",
     author="Caleb Coatney",
-    author_email="caleb.coatney@nrel.gov",  # Update with your email
-    url="https://github.com/NREL/chromakit-qt",  # Update with actual repository URL
-    packages=["ms_toolkit"],  # Import name (with underscore) for Python
+    author_email="caleb.coatney@nrel.gov",
+    url="https://github.com/NREL/chromakit-ms",
+    packages=["ms_toolkit"],
     include_package_data=True,
     package_data={
         "": ["*.qss", "*.png", "*.ico"],
@@ -20,8 +20,10 @@ setup(
     install_requires=[
         "PySide6>=6.0.0",
         "numpy",
+        "scipy",
         "matplotlib",
         "rainbow-api",
+        "pybaselines",
     ],
     extras_require={
         "ms": ["ms-toolkit"],

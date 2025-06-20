@@ -245,6 +245,8 @@ class ChromaKitApp(QMainWindow):
             
             # Enable export button
             self.button_frame.enable_export(True)
+
+            self.process_and_display(self.current_x, self.current_y, new_file=True)
             
         except Exception as e:
             # Handle any errors during loading
@@ -1325,7 +1327,7 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage("Processing with updated parameters...")
             
             # Process and display the data with new parameters
-            self.process_and_display(self.current_x, self.current_y)
+            self.process_and_display(self.current_x, self.current_y, new_file=False)
             
             # Update status message with details
             method_name = params['baseline']['method']
@@ -1357,7 +1359,7 @@ class ChromaKitApp(QMainWindow):
             print("No data available to process!")
             self.status_bar.showMessage("Load data first before changing parameters")
     
-    def process_and_display(self, x, y):
+    def process_and_display(self, x, y, new_file=False):
         """Process data with current parameters and update display"""
         # Validate input data
         if x is None or y is None:
@@ -1374,13 +1376,23 @@ class ChromaKitApp(QMainWindow):
         # Get current parameters
         params = self.parameters_frame.get_parameters()
         
+        # Get MS data range if available
+        ms_range = None
+        if hasattr(self, 'plot_frame') and hasattr(self.plot_frame, 'tic_data') and self.plot_frame.tic_data is not None:
+            if 'x' in self.plot_frame.tic_data and len(self.plot_frame.tic_data['x']) > 0:
+                ms_min = np.min(self.plot_frame.tic_data['x'])
+                ms_max = np.max(self.plot_frame.tic_data['x'])
+                ms_range = (ms_min, ms_max)
+                print(f"Using MS range for peak filtering: {ms_min:.2f} to {ms_max:.2f} min")
+
         # Process the data (already interpolated)
-        processed = self.processor.process(x, y, params)
+        processed = self.processor.process(x, y, params, ms_range)
         
         # Update the chromatogram plot
         self.plot_frame.plot_chromatogram(
             processed,
-            show_corrected=params['baseline']['show_corrected']
+            show_corrected=params['baseline']['show_corrected'], 
+            new_file=new_file
         )
         
         # Force a repaint
@@ -1688,6 +1700,7 @@ class ChromaKitApp(QMainWindow):
         # Update other UI elements as needed
         self.update_results_view()
 
+    # Export integration results to JSON file
     def export_results(self):
         """Export integration results to JSON file."""
         if not hasattr(self, 'integrated_peaks') or not self.integrated_peaks:
@@ -1877,7 +1890,7 @@ class ChromaKitApp(QMainWindow):
 
     def on_batch_cancelled(self):
         """Handle batch processing cancellation."""
-        # Set cancelled flag on any active workers
+               # Set cancelled flag on any active workers
         if hasattr(self, 'current_batch_worker') and self.current_batch_worker:
             self.current_batch_worker.cancelled = True
         

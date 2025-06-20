@@ -86,7 +86,7 @@ class DataHandler:
             data = data_dir.get_file(detector + '.ch')
         except:
             # If not found, try some common alternatives
-            alternatives = ['FID1A', 'TCD2B', 'FID2B', 'TCD1A']
+            alternatives = ['FID1A', 'TCD2B', 'FID2B', 'TCD1A', 'TCD1B']
             # Remove the failed detector from alternatives if it's in there
             if detector in alternatives:
                 alternatives.remove(detector)

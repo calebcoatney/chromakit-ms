@@ -84,8 +84,22 @@ class PlotFrame(QWidget):
         self.figure.tight_layout()
         self.canvas.draw()
         
-    def plot_chromatogram(self, data, show_corrected=False):
-        """Plot the chromatogram data."""
+    def plot_chromatogram(self, data, show_corrected=False, new_file=True):
+        """
+        Plot the chromatogram data.
+        
+        Args:
+            data: Chromatogram data dictionary
+            show_corrected: Whether to show baseline-corrected data
+            new_file: Whether this is a new file (True) or just parameter updates (False)
+        """
+        # Store current view limits BEFORE doing anything else
+        x_was_autoscaled = self.chromatogram_ax.get_autoscalex_on()
+        y_was_autoscaled = self.chromatogram_ax.get_autoscaley_on()
+        
+        previous_xlim = self.chromatogram_ax.get_xlim() if not x_was_autoscaled else None
+        previous_ylim = self.chromatogram_ax.get_ylim() if not y_was_autoscaled else None
+        
         # Clear any existing peak highlights
         self._clear_peak_highlights()
         
@@ -95,7 +109,7 @@ class PlotFrame(QWidget):
         # Clear previous plot
         self.chromatogram_ax.clear()
         
-        # Extract data from dictionary with different naming
+        # Extract data
         x = data['x']
         
         # Handle both old and new formats
@@ -139,53 +153,84 @@ class PlotFrame(QWidget):
         # Plot baseline
         self.chromatogram_ax.plot(x, baseline_to_show, 'r--', linewidth=1, alpha=0.7, label='Baseline')
         
-        # Plot peaks using orange star markers (only if not empty)
+        # Plot peaks if available
         if len(peaks_x) > 0:
             if not show_corrected:
                 # Adjust peak heights to be on the raw/smoothed data
                 peak_indices = np.searchsorted(x, peaks_x)
                 peak_baselines = baseline[peak_indices]
                 adjusted_peaks_y = peaks_y + peak_baselines
-                # Use star markers with orange color and appropriate size
                 self.chromatogram_ax.plot(peaks_x, adjusted_peaks_y, '*', 
-                                         color='orange', markersize=6, alpha=0.8, 
-                                         label='Peaks')
+                                     color='orange', markersize=6, alpha=0.8, 
+                                     label='Peaks')
             else:
                 self.chromatogram_ax.plot(peaks_x, peaks_y, '*', 
-                                         color='orange', markersize=6, alpha=0.8, 
-                                         label='Peaks')
+                                     color='orange', markersize=6, alpha=0.8, 
+                                     label='Peaks')
         
-        # Set labels
+        # Set labels and add legend
         self.chromatogram_ax.set_xlabel('Time (min)')
         self.chromatogram_ax.set_ylabel('Intensity')
         self.chromatogram_ax.grid(True, linestyle='--', alpha=0.7)
-        
-        # Add legend
         self.chromatogram_ax.legend()
         
-        # Force autoscale to see all data
-        if len(x) > 0 and len(main_y) > 0:
-            # Set x limits to show all data
-            x_min, x_max = np.min(x), np.max(x)
-            x_padding = (x_max - x_min) * 0.02  # 2% padding
-            self.chromatogram_ax.set_xlim(x_min - x_padding, x_max + x_padding)
-            
-            # Set y limits to show all data with some padding
-            y_min = np.min(baseline_to_show)
-            y_max = np.max(main_y) * 1.1  # Add 10% padding at the top
-            self.chromatogram_ax.set_ylim(y_min, y_max)
-        
-        # Also update TIC x-axis to match
-        if hasattr(self, 'tic_ax') and self.tic_ax is not None:
-            if len(x) > 0:
-                self.tic_ax.set_xlim(self.chromatogram_ax.get_xlim())
+        # Only calculate and apply new view limits for new files
+        # or if previous limits weren't set
+        if new_file or previous_xlim is None or previous_ylim is None:
+            if len(x) > 0 and len(main_y) > 0:
+                x_min, x_max = np.min(x), np.max(x)
+                x_padding = (x_max - x_min) * 0.02  # 2% padding
+                x_full_range = [x_min - x_padding, x_max + x_padding]
+                
+                y_min = np.min(baseline_to_show)
+                y_max = np.max(main_y) * 1.1  # Add 10% padding at the top
+                
+                # Only apply MS range adjustment for new files
+                if new_file and self.tic_data is not None and 'x' in self.tic_data:
+                    ms_x = self.tic_data['x']
+                    if len(ms_x) > 0:
+                        ms_x_min, ms_x_max = np.min(ms_x), np.max(ms_x)
+                        
+                        # Mask FID x to MS x range
+                        mask = (x >= ms_x_min) & (x <= ms_x_max)
+                        if np.any(mask):
+                            y_max_in_ms_range = np.max(main_y[mask])
+                            y_max = y_max_in_ms_range * 1.1  # 10% padding
+                            print(f"Solvent delay detected at {ms_x_min:.2f} minutes, rescaling FID ylim to {y_max:.2f}")
+                
+                # Apply the calculated limits
+                self.chromatogram_ax.set_xlim(x_full_range)
+                self.chromatogram_ax.set_ylim(y_min, y_max)
+                
+                # If TIC plot exists, sync x limits for new files
+                if new_file and hasattr(self, 'tic_ax') and self.tic_ax is not None:
+                    self.tic_ax.set_xlim(x_full_range)
+        else:
+            # Restore previous view limits for parameter changes
+            self.chromatogram_ax.set_xlim(previous_xlim)
+            self.chromatogram_ax.set_ylim(previous_ylim)
         
         # Adjust layout and draw
         self.figure.tight_layout()
         self.canvas.draw()
+
+    def plot_tic(self, x, y, show_baseline=False, baseline_x=None, baseline_y=None, new_file=True):
+        """
+        Plot the Total Ion Chromatogram (TIC) data.
         
-    def plot_tic(self, x, y, show_baseline=False, baseline_x=None, baseline_y=None):
-        """Plot the Total Ion Chromatogram (TIC) data."""
+        Args:
+            x, y: TIC data arrays
+            show_baseline: Whether to show baseline
+            baseline_x, baseline_y: Baseline data arrays
+            new_file: Whether this is a new file (True) or just parameter updates (False)
+        """
+        # Store current view limits before doing anything
+        x_was_autoscaled = self.tic_ax.get_autoscalex_on()
+        y_was_autoscaled = self.tic_ax.get_autoscaley_on()
+        
+        previous_xlim = self.tic_ax.get_xlim() if not x_was_autoscaled else None
+        previous_ylim = self.tic_ax.get_ylim() if not y_was_autoscaled else None
+        
         # Store data
         self.tic_data = {'x': x, 'y': y}
         
@@ -197,7 +242,6 @@ class PlotFrame(QWidget):
         
         # Plot baseline if available
         if show_baseline and baseline_x is not None and baseline_y is not None:
-            # Add the baseline as a red dashed line
             self.tic_ax.plot(baseline_x, baseline_y, 'r--', linewidth=1, alpha=0.7, label='Baseline')
         
         # Set labels and title
@@ -206,24 +250,31 @@ class PlotFrame(QWidget):
         self.tic_ax.set_ylabel('Intensity')
         self.tic_ax.grid(True, linestyle='--', alpha=0.7)
         
-        # Set appropriate limits to see the data
-        if len(x) > 0 and len(y) > 0:
-            # Set x limits to show all data
-            x_min, x_max = np.min(x), np.max(x)
-            x_padding = (x_max - x_min) * 0.02  # 2% padding
-            self.tic_ax.set_xlim(x_min - x_padding, x_max + x_padding)
-            
-            # Set y limits to show all data with some padding
-            if show_baseline and baseline_y is not None:
-                y_min = np.min(baseline_y)
-            else:
-                y_min = 0
-            y_max = np.max(y) * 1.1  # Add 10% padding at the top
-            self.tic_ax.set_ylim(y_min, y_max)
-        
-        # If chromatogram plot exists, synchronize x limits
-        if hasattr(self, 'chromatogram_ax') and self.chromatogram_ax is not None:
-            self.chromatogram_ax.set_xlim(self.tic_ax.get_xlim())
+        # Only calculate and apply new view limits for new files
+        # or if previous limits weren't set
+        if new_file or previous_xlim is None or previous_ylim is None:
+            if len(x) > 0 and len(y) > 0:
+                x_min, x_max = np.min(x), np.max(x)
+                x_padding = (x_max - x_min) * 0.02  # 2% padding
+                x_full_range = [x_min - x_padding, x_max + x_padding]
+                
+                if show_baseline and baseline_y is not None:
+                    y_min = np.min(baseline_y)
+                else:
+                    y_min = 0
+                y_max = np.max(y) * 1.1  # Add 10% padding at the top
+                
+                # Apply the calculated limits
+                self.tic_ax.set_xlim(x_full_range)
+                self.tic_ax.set_ylim(y_min, y_max)
+                
+                # Sync chromatogram x axis for new files
+                if new_file and hasattr(self, 'chromatogram_ax') and self.chromatogram_ax is not None:
+                    self.chromatogram_ax.set_xlim(x_full_range)
+        else:
+            # Restore previous view limits for parameter changes
+            self.tic_ax.set_xlim(previous_xlim)
+            self.tic_ax.set_ylim(previous_ylim)
         
         # Add legend if baseline is shown
         if show_baseline and baseline_x is not None:
@@ -592,6 +643,10 @@ class PlotFrame(QWidget):
         if hasattr(self, 'baseline_peaks'):
             delattr(self, 'baseline_peaks')
     
+    def set_tic_data(self, x, y):
+        """Store the TIC data without plotting it."""
+        self.tic_data = {'x': x, 'y': y}
+
     def _show_peak_context_menu(self, peak_index, event):
         """Show context menu for a peak."""
         from PySide6.QtWidgets import QMenu
