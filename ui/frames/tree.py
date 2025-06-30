@@ -70,8 +70,10 @@ class FileTreeFrame(QWidget):
         """Set the root path of the tree view."""
         root_index = self.model.setRootPath(path)
         self.tree_view.setRootIndex(root_index)
-        self.path_label.setText(path)
-    
+        # Elide the path if it's too long for the label
+        metrics = self.path_label.fontMetrics()
+        elided = metrics.elidedText(path, Qt.ElideMiddle, 200)
+        self.path_label.setText(elided)
     def on_item_double_clicked(self, index):
         """Handle item double-click in the tree view."""
         file_path = self.model.filePath(index)

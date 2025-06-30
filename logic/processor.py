@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import signal, interpolate
 from scipy.signal import medfilt, savgol_filter, find_peaks
 from pybaselines import Baseline
 
@@ -298,3 +299,133 @@ class ChromatogramProcessor:
         )
         
         return integration_results
+
+    def align_tic_to_fid(self, fid_time, fid_signal, tic_time, tic_signal, max_lag_seconds=2.0, num_points=10000, verbose=True):
+        """
+        Align TIC signal to FID signal using cross-correlation to estimate the time lag.
+        
+        Args:
+            fid_time (np.ndarray): FID time points (minutes)
+            fid_signal (np.ndarray): FID signal intensities
+            tic_time (np.ndarray): TIC time points (minutes)
+            tic_signal (np.ndarray): TIC signal intensities
+            max_lag_seconds (float): Maximum lag to consider in seconds
+            num_points (int): Number of points for interpolation
+            verbose (bool): Whether to print diagnostic information
+        
+        Returns:
+            tuple: (aligned_tic_time, aligned_tic_signal, lag_seconds)
+        """
+        def log(msg):
+            if verbose:
+                print(msg)
+        
+        # Handle empty input data
+        if len(fid_time) == 0 or len(tic_time) == 0:
+            log("Warning: Empty input data")
+            return tic_time, tic_signal, 0.0
+            
+        # Print input data summary
+        log(f"FID time range: {np.min(fid_time):.2f} to {np.max(fid_time):.2f} minutes, {len(fid_time)} points")
+        log(f"TIC time range: {np.min(tic_time):.2f} to {np.max(tic_time):.2f} minutes, {len(tic_time)} points")
+        
+        # Step 1: Identify the valid TIC region (after solvent delay)
+        tic_start = np.min(tic_time)  
+        tic_end = np.max(tic_time)
+        
+        # Step 2: Create analysis window (allowing for potential lag in either direction)
+        analysis_start = max(tic_start - (max_lag_seconds / 60.0), np.min(fid_time))
+        analysis_end = min(tic_end + (max_lag_seconds / 60.0), np.max(fid_time))
+        
+        if analysis_end <= analysis_start:
+            log("Warning: No valid analysis window available")
+            return tic_time, tic_signal, 0.0
+            
+        log(f"Analysis window: {analysis_start:.2f} to {analysis_end:.2f} minutes")
+        
+        # Step 3: Interpolate to common time base
+        common_time = np.linspace(analysis_start, analysis_end, num_points)
+        
+        # Calculate sampling rate and max lag in points
+        dt = (analysis_end - analysis_start) / (num_points - 1) * 60.0  # seconds per point
+        max_lag_points = int(max_lag_seconds / dt)
+        
+        log(f"Common time base: {num_points} points, dt={dt:.6f}s, max lag={max_lag_points} points")
+        
+        try:
+            # Step 4: Interpolate both signals to common time base
+            fid_interp = interpolate.interp1d(fid_time, fid_signal, bounds_error=False, fill_value=0)
+            tic_interp = interpolate.interp1d(tic_time, tic_signal, bounds_error=False, fill_value=0)
+            
+            fid_common = fid_interp(common_time)
+            tic_common = tic_interp(common_time)
+            
+            # Step 5: Handle solvent delay by masking
+            valid_mask = common_time >= tic_start
+            if not np.any(valid_mask):
+                log("Warning: No valid data after accounting for solvent delay")
+                return tic_time, tic_signal, 0.0
+                
+            # Focus correlation on regions where both signals have data
+            fid_masked = fid_common * valid_mask
+            tic_masked = tic_common * valid_mask
+            
+            # Step 6: Normalize signals for cross-correlation
+            nonzero_mask = (fid_masked != 0) & (tic_masked != 0)
+            if not np.any(nonzero_mask):
+                log("Warning: No non-zero overlapping data points found")
+                return tic_time, tic_signal, 0.0
+                
+            fid_mean = np.mean(fid_masked[nonzero_mask])
+            fid_std = np.std(fid_masked[nonzero_mask])
+            tic_mean = np.mean(tic_masked[nonzero_mask])
+            tic_std = np.std(tic_masked[nonzero_mask])
+            
+            if fid_std == 0 or tic_std == 0:
+                log("Warning: Standard deviation is zero, cannot normalize")
+                return tic_time, tic_signal, 0.0
+                
+            fid_norm = (fid_masked - fid_mean) / fid_std
+            tic_norm = (tic_masked - tic_mean) / tic_std
+            
+            # Replace NaN/inf values
+            fid_norm = np.nan_to_num(fid_norm, nan=0.0)
+            tic_norm = np.nan_to_num(tic_norm, nan=0.0)
+            
+            # Step 7: Calculate cross-correlation
+            cross_corr = signal.correlate(fid_norm, tic_norm, mode='full')
+            
+            # Find lag that maximizes correlation
+            zero_lag_idx = len(fid_norm) - 1
+            correlation_lags = np.arange(len(cross_corr)) - zero_lag_idx
+            
+            # Step 8: Restrict to reasonable lags
+            valid_lags = (correlation_lags >= -max_lag_points) & (correlation_lags <= max_lag_points)
+            restricted_corr = cross_corr[valid_lags]
+            restricted_lags = correlation_lags[valid_lags]
+            
+            if len(restricted_corr) == 0:
+                log("Warning: No valid lags within specified max_lag_seconds")
+                return tic_time, tic_signal, 0.0
+                
+            # Step 9: Find optimal lag
+            best_lag_idx = np.argmax(restricted_corr)
+            best_lag_points = restricted_lags[best_lag_idx]
+            
+            # Convert lag from points to seconds
+            lag_seconds = best_lag_points * dt
+            log(f"Estimated lag: {lag_seconds:.4f} seconds ({best_lag_points} points)")
+            log(f"Max correlation: {restricted_corr[best_lag_idx]:.4f}")
+            
+            # Step 10: Apply lag to original TIC time
+            aligned_tic_time = tic_time - lag_seconds/60.0  # Convert seconds to minutes
+            aligned_tic_signal = tic_signal  # Signal values remain unchanged
+            
+            return aligned_tic_time, aligned_tic_signal, lag_seconds
+            
+        except Exception as e:
+            log(f"Error during signal alignment: {str(e)}")
+            if verbose:
+                import traceback
+                traceback.print_exc()
+            return tic_time, tic_signal, 0.0

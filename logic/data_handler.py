@@ -244,22 +244,41 @@ class DataHandler:
         except Exception as e:
             raise ValueError(f"Could not get {detector} metadata: {str(e)}")
 
-    def extract_spectrum_at_rt(self, retention_time):
-        """Extract mass spectrum at given retention time from current data."""
+    def extract_spectrum_at_rt(self, retention_time, aligned_tic_data=None):
+        """
+        Extract mass spectrum at given retention time from current data.
+        
+        Args:
+            retention_time: The FID retention time
+            aligned_tic_data: Optional dict with aligned TIC data {'x': times, 'y': intensities}
+                              If provided, will use this for matching RT to MS data
+        
+        Returns:
+            dict: Spectrum data or None if extraction fails
+        """
         if not self.current_directory_path:
             return None
         
         try:
-            # Get TIC data to find corresponding RT index
-            tic_data = self._get_tic_data(self.current_data_dir)
-            if not tic_data or len(tic_data['x']) == 0:
-                return None
+            # Get MS data
+            ms_data = self.get_ms_data()
+            
+            # Get TIC data - either from aligned data or extract it fresh
+            if aligned_tic_data and 'x' in aligned_tic_data and len(aligned_tic_data['x']) > 0:
+                # Use aligned TIC data
+                tic_x = aligned_tic_data['x']
+                print(f"Using aligned TIC data for spectrum extraction at RT={retention_time:.3f}")
+            else:
+                # Use original TIC data
+                tic_data = self._get_tic_data(self.current_data_dir)
+                if not tic_data or len(tic_data['x']) == 0:
+                    return None
+                tic_x = tic_data['x']
                 
             # Find closest RT index
-            rt_index = np.argmin(np.abs(np.array(tic_data['x']) - retention_time))
+            rt_index = np.argmin(np.abs(np.array(tic_x) - retention_time))
             
             # Get spectrum at that index
-            ms_data = self.get_ms_data()
             spectrum = ms_data.data[rt_index, :].astype(float)
             
             # Create m/z values and filter low intensities

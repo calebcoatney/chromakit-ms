@@ -63,6 +63,55 @@ class MSFrame(QWidget):
             self._init_mstoolkit()
         else:
             self._show_toolkit_missing_message()
+        
+        # Add this attribute to track if theme has been applied
+        self.theme_applied = False
+
+    def apply_theme(self):
+        """Apply the current theme to MS plots."""
+        # Check if we have a parent with theme colors
+        if not hasattr(self, 'ms_fig') or not hasattr(self, 'ms_ax'):
+            return
+            
+        # Try to get theme colors from parent
+        parent = self.parent()
+        while parent and not hasattr(parent, 'matplotlib_theme_colors'):
+            parent = parent.parent()
+            
+        if not parent or not hasattr(parent, 'matplotlib_theme_colors'):
+            return
+            
+        colors = parent.matplotlib_theme_colors
+        if not colors:
+            return
+            
+        # Apply colors to the figure and axes
+        self.ms_fig.patch.set_facecolor(colors['background'])
+        self.ms_ax.set_facecolor(colors['axes'])
+        
+        # Update spines
+        for spine in self.ms_ax.spines.values():
+            spine.set_color(colors['edge'])
+        
+        # Update ticks and labels
+        self.ms_ax.tick_params(axis='both', colors=colors['ticks'], which='both',
+                            labelcolor=colors['label'], reset=True)
+        
+        if self.ms_ax.xaxis.label:
+            self.ms_ax.xaxis.label.set_color(colors['label'])
+        if self.ms_ax.yaxis.label:
+            self.ms_ax.yaxis.label.set_color(colors['label'])
+        if self.ms_ax.title:
+            self.ms_ax.title.set_color(colors['text'])
+        
+        # Update grid
+        # self.ms_ax.grid(True, linestyle='--', alpha=0.7, color=colors['grid'])
+        
+        # Mark theme as applied
+        self.theme_applied = True
+        
+        # Force redraw
+        self.ms_canvas.draw()
     
     def _create_ms_tools(self):
         """Create the MS library search and peak identification tools."""
@@ -129,6 +178,7 @@ class MSFrame(QWidget):
         self.ms_ax.set_xlabel("m/z", fontsize=8)
         self.ms_ax.set_xlim((1, 150))
         self.ms_ax.set_yticks([])
+        self.ms_ax.tick_params(axis='x', top=False) # Add this line to remove top ticks
         self.ms_ax.margins(0.05)
         self.ms_canvas = FigureCanvasQTAgg(self.ms_fig)
         ms_plot_layout.addWidget(self.ms_canvas)
@@ -370,6 +420,10 @@ class MSFrame(QWidget):
         # Enable search button if library is loaded
         if hasattr(self, 'library_loaded') and self.library_loaded and hasattr(self, 'search_button'):
             self.search_button.setEnabled(True)
+        
+        # Apply theme if it hasn't been applied yet
+        if not getattr(self, 'theme_applied', False):
+            self.apply_theme()
     
     def set_extract_spectrum_function(self, func):
         """Set a function that can extract real MS spectra.

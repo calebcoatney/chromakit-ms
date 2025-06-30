@@ -1,4 +1,10 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QStatusBar, QVBoxLayout, QMessageBox, QTableWidget, QTableWidgetItem, QDialog, QVBoxLayout, QPushButton, QFileDialog, QHBoxLayout, QHeaderView, QProgressDialog, QApplication, QCheckBox, QLabel, QComboBox, QDialogButtonBox
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QHBoxLayout, QStatusBar, QVBoxLayout, 
+    QMessageBox, QTableWidget, QTableWidgetItem, QDialog, 
+    QPushButton, QFileDialog, QHeaderView, QProgressDialog, 
+    QApplication, QCheckBox, QLabel, QComboBox, QDialogButtonBox,
+    QTabWidget  # Add QTabWidget to imports
+)
 from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer
 from PySide6.QtGui import QIcon, QBrush, QColor
 from ui.frames.tree import FileTreeFrame
@@ -19,6 +25,7 @@ import json
 import datetime
 import time
 import traceback
+import matplotlib
 
 # Import the data handler directly as a required dependency
 from logic.data_handler import DataHandler
@@ -68,11 +75,18 @@ class ChromaKitApp(QMainWindow):
         
         # Create and add parameters frame to the right side
         self.parameters_frame = ParametersFrame()
-        self.main_layout.addWidget(self.parameters_frame)
         
         # Create and add MS frame to the far right
         self.ms_frame = MSFrame()
-        self.main_layout.addWidget(self.ms_frame)
+        
+        # Create a tab widget for the right-side panels
+        self.right_tabs = QTabWidget()
+        self.right_tabs.addTab(self.parameters_frame, "Parameters")
+        self.right_tabs.addTab(self.ms_frame, "Mass Spectrometry")
+        self.right_tabs.setMinimumWidth(350) # Ensure the tab widget has a reasonable minimum width
+        
+        # Add the tab widget to the main layout
+        self.main_layout.addWidget(self.right_tabs)
         
         # Create status bar
         self.status_bar = QStatusBar()
@@ -127,6 +141,233 @@ class ChromaKitApp(QMainWindow):
         detector_action = settings_menu.addAction("Select Detector Channel...")
         detector_action.triggered.connect(self.show_detector_selection_dialog)
         
+        # Theme state
+        self.current_theme = 'light'
+        self.matplotlib_theme_colors = None
+        self.apply_stylesheet(self.current_theme)
+
+        # Add theme toggle to Settings menu
+        self.theme_action = settings_menu.addAction("Toggle Dark/Light Mode")
+        self.theme_action.triggered.connect(self.toggle_theme)
+
+    def apply_stylesheet(self, theme):
+        """Apply the QSS stylesheet with the selected theme."""
+        qss_path = os.path.join(os.path.dirname(__file__), "style.qss")
+        if os.path.exists(qss_path):
+            with open(qss_path, "r", encoding="utf-8") as f:
+                qss = f.read()
+            
+            # Set the theme property on the main window first
+            self.setProperty("theme", theme)
+            
+            # Apply stylesheet to application
+            self.setStyleSheet(qss)
+            
+            # Process special widgets first (QTreeView, etc.)
+            self._apply_theme_to_special_widgets(theme)
+            
+            # Now update all regular widgets
+            self._apply_theme_to_regular_widgets(theme)
+            
+            # Apply matplotlib theme and update any existing plots
+            self.set_matplotlib_theme(theme)
+            
+            # Update the main window
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
+        else:
+            self.setStyleSheet("")
+
+    def _apply_theme_to_special_widgets(self, theme):
+        """Apply theme to special widget types that need custom handling."""
+        from PySide6.QtWidgets import QTreeView, QTreeWidget, QHeaderView, QAbstractItemView, QTableView
+
+        # Process tree views and similar widgets separately with special handling
+        special_widgets = []
+        for widget_type in (QTreeView, QTreeWidget, QHeaderView, QAbstractItemView, QTableView):
+            special_widgets.extend(self.findChildren(widget_type))
+
+        for widget in special_widgets:
+            try:
+                # Set theme property explicitly
+                widget.setProperty("theme", theme)
+
+                # Force style refresh - this is critical for these widget types
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+
+                # Use repaint instead of update to avoid argument errors
+                widget.repaint()
+                # For views, also update the viewport
+                if hasattr(widget, "viewport"):
+                    widget.viewport().update()
+            except Exception as e:
+                print(f"Error updating special widget {widget.__class__.__name__}: {e}")
+
+    def _apply_theme_to_regular_widgets(self, theme):
+        """Apply theme to all other regular widgets."""
+        from PySide6.QtWidgets import QWidget, QTreeView, QTreeWidget, QHeaderView, QAbstractItemView, QTableView
+        
+        # Skip special widget types which were handled separately
+        special_types = (QTreeView, QTreeWidget, QHeaderView, QAbstractItemView, QTableView)
+        
+        # Get all widgets
+        all_widgets = self.findChildren(QWidget)
+        
+        for widget in all_widgets:
+            # Skip special widgets that were already processed
+            if any(isinstance(widget, special_type) for special_type in special_types):
+                continue
+                
+            try:
+                # Set theme property
+                widget.setProperty("theme", theme)
+                
+                # Force style refresh
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+                widget.update()
+            except Exception as e:
+                print(f"Error updating widget {widget.__class__.__name__}: {e}")
+
+    def _apply_theme_to_regular_widgets(self, theme):
+        """Apply theme to all other regular widgets."""
+        from PySide6.QtWidgets import QWidget, QTreeView, QTreeWidget, QHeaderView, QAbstractItemView, QTableView
+        
+        # Skip special widget types which were handled separately
+        special_types = (QTreeView, QTreeWidget, QHeaderView, QAbstractItemView, QTableView)
+        
+        # Get all widgets
+        all_widgets = self.findChildren(QWidget)
+        
+        for widget in all_widgets:
+            # Skip special widgets that were already processed
+            if any(isinstance(widget, special_type) for special_type in special_types):
+                continue
+                
+            try:
+                # Set theme property
+                widget.setProperty("theme", theme)
+                
+                # Force style refresh
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+                widget.update()
+            except Exception as e:
+                print(f"Error updating widget {widget.__class__.__name__}: {e}")
+
+    def set_matplotlib_theme(self, theme):
+        """Set matplotlib rcParams based on the current theme."""
+        if theme == "dark":
+            colors = {
+                'background': '#23272e',
+                'axes': '#23272e',
+                'edge': '#f3f3f3',
+                'label': '#f3f3f3',
+                'grid': '#555555',
+                'ticks': '#f3f3f3',
+                'line1': '#4cc2ff',
+                'line2': '#ff7f50',
+                'line3': '#7fff7f',
+                'text': '#f3f3f3'
+            }
+        else:
+            colors = {
+                'background': '#f6f7fa',
+                'axes': '#f6f7fa', 
+                'edge': '#2E2E2E',
+                'label': '#2E2E2E',
+                'grid': '#888888',
+                'ticks': '#2E2E2E',
+                'line1': '#2B6A99',
+                'line2': '#8B3C41',
+                'line3': '#3C6E47',
+                'text': '#2E2E2E'
+            }
+        
+        # Store current theme colors for reference in plot creation
+        self.matplotlib_theme_colors = colors
+        
+        # Update matplotlib rcParams - more comprehensive settings
+        matplotlib.rcParams.update({
+            'axes.facecolor': colors['axes'],
+            'figure.facecolor': colors['background'],
+            'axes.edgecolor': colors['edge'],
+            'axes.labelcolor': colors['label'],
+            'xtick.color': colors['ticks'],
+            'ytick.color': colors['ticks'],
+            'grid.color': colors['grid'],
+            'text.color': colors['text'],
+            'axes.titlecolor': colors['text'],  # Add this explicitly
+            'figure.titlesize': 14,
+            'axes.titlesize': 12,
+            'axes.labelsize': 10,
+            'xtick.labelsize': 9,   # Add explicit tick label sizes
+            'ytick.labelsize': 9,
+            'legend.fontsize': 9,
+            'legend.frameon': True,
+            'legend.framealpha': 0.8,
+            'legend.loc': 'best',
+            'legend.edgecolor': colors['edge'],
+            'legend.facecolor': colors['background'],
+            'legend.labelcolor': colors['label'],
+            'figure.autolayout': True,
+            'figure.dpi': 100,
+            'savefig.dpi': 600,
+            'savefig.transparent': False,
+            'axes.spines.top': True,    # Ensure spines are visible
+            'axes.spines.right': True,
+            'axes.spines.bottom': True,
+            'axes.spines.left': True,
+        })
+        
+        # Update existing plots
+        self._update_existing_plots(colors)
+
+    def _update_existing_plots(self, colors):
+        """Update any existing matplotlib plots with the new theme."""
+        # This method now simply calls the apply_theme method on each plot frame.
+        if hasattr(self, 'plot_frame') and hasattr(self.plot_frame, 'apply_theme'):
+            self.plot_frame.apply_theme()
+        
+        if hasattr(self, 'ms_frame') and hasattr(self.ms_frame, 'apply_theme'):
+            self.ms_frame.apply_theme()
+    
+    def refresh_matplotlib_theme(self):
+        """Force refresh of matplotlib theme on all plot elements."""
+        # This method is now simpler and just calls _update_existing_plots
+        if hasattr(self, 'matplotlib_theme_colors'):
+            self._update_existing_plots(self.matplotlib_theme_colors)
+    
+    def toggle_theme(self):
+        """Toggle between dark and light mode."""
+        self.current_theme = "dark" if self.current_theme == "light" else "light"
+        self.apply_stylesheet(self.current_theme)
+        
+        # Special handling for file tree after theme switch
+        if hasattr(self, 'file_tree'):
+            self._refresh_tree_view(self.file_tree)
+        
+        # Add explicit matplotlib theme refresh
+        self.refresh_matplotlib_theme()
+    
+        self.status_bar.showMessage(f"Switched to {self.current_theme.capitalize()} Mode")
+
+    def _refresh_tree_view(self, tree_widget):
+        """Special refresh for tree views after theme change."""
+        if hasattr(tree_widget, 'tree'):
+            tree = tree_widget.tree
+            tree.setProperty("theme", self.current_theme)
+            tree.style().unpolish(tree)
+            tree.style().polish(tree)
+            tree.viewport().update()
+            
+            # Sometimes a full reset helps
+            current_model = tree.model()
+            tree.setModel(None)
+            tree.setModel(current_model)
+
     def generate_sample_data(self):
         """Generate sample chromatogram data for testing."""
         # Skip if real data is already loaded
@@ -1667,6 +1908,8 @@ class ChromaKitApp(QMainWindow):
                 # Create mz array
                 mz_values = np.arange(len(spectrum)) + 1
                 
+               
+                
                 # Filter out low intensity values
                 threshold = 0.01 * np.max(spectrum)
                 mask = spectrum > threshold
@@ -1833,7 +2076,7 @@ class ChromaKitApp(QMainWindow):
                 if compound_id and "Unknown" not in str(compound_id):
                     self.results_table.setItem(i, 4, QTableWidgetItem(str(compound_id)))
                     if hasattr(peak, 'Qual') and peak.Qual is not None:
-                        self.results_table.setItem(i, 5, QTableWidgetItem(f"{peak.Qual:.4f}"))
+                                               self.results_table.setItem(i, 5, QTableWidgetItem(f"{peak.Qual:.4f}"))
         
         # Update any visualization that might depend on peak identifications
         if hasattr(self, 'plot_frame'):

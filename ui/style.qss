@@ -1,0 +1,273 @@
+/* Base Light Theme - default theme */
+QWidget {
+    background: #f6f7fa;
+    color: #222;
+    font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+}
+
+QPushButton {
+    background: #e5e9f2;
+    color: #222;
+    border-radius: 7px;
+    border: 1px solid #d1d5db;
+    padding: 6px 16px;
+}
+
+QPushButton:hover {
+    background: #d0d6e1;
+    border: 1px solid #0078d7;
+}
+
+QPushButton:pressed {
+    background: #0078d7;
+    color: #fff;
+}
+
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    background: #fff;
+    color: #222;
+    border-radius: 6px;
+    border: 1px solid #d1d5db;
+    padding: 4px 8px;
+}
+
+/* FIX: Style for items in the dropdown list */
+QComboBox::item {
+    color: #222;
+}
+QComboBox::item:selected {
+    background-color: #cce6ff;
+}
+
+/* FIX: Style the dropdown list view itself */
+QComboBox QAbstractItemView {
+    background-color: #fff;
+    color: #222;
+    selection-background-color: #cce6ff;
+    selection-color: #222;
+}
+
+
+QTableWidget, QTableView {
+    background: #f6f7fa;
+    alternate-background-color: #f0f2f7;
+    gridline-color: #d1d5db;
+    selection-background-color: #cce6ff;
+    selection-color: #222;
+    border-radius: 8px;
+    border: 1px solid #d1d5db;
+}
+
+QHeaderView::section {
+    background: #e5e9f2;
+    color: #222;
+    border: 1px solid #d1d5db;
+    padding: 4px 8px;
+    font-weight: bold;
+}
+
+QStatusBar {
+    background: #e5e9f2;
+    color: #222;
+    border-top: 1px solid #d1d5db;
+}
+
+QMenuBar, QMenu {
+    background: #e5e9f2;
+    color: #222;
+    border: none;
+}
+
+QMenu::item:selected {
+    background: #0078d7;
+    color: #fff;
+}
+
+QDialog {
+    background: #f6f7fa;
+    color: #222;
+    border-radius: 10px;
+}
+
+QCheckBox, QLabel {
+    color: #222;
+}
+
+/* Add styles for Tab Widgets */
+QTabWidget::pane {
+    border: 1px solid #d1d5db;
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+}
+
+QTabBar::tab {
+    background: #e5e9f2;
+    color: #222;
+    border: 1px solid #d1d5db;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 6px 12px;
+}
+
+QTabBar::tab:selected {
+    background: #f6f7fa;
+    border-bottom: 1px solid #f6f7fa;
+}
+
+QTabBar::tab:hover {
+    background: #d0d6e1;
+}
+
+/* Dark Theme - applied when theme property is "dark" */
+QWidget[theme="dark"] {
+    background: #23272e;
+    color: #f3f3f3;
+}
+
+QPushButton[theme="dark"] {
+    background: #2d323b;
+    color: #f3f3f3;
+    border-radius: 7px;
+    border: 1px solid #3a3f4a;
+    padding: 6px 16px;
+}
+
+QPushButton[theme="dark"]:hover {
+    background: #3a3f4a;
+    border: 1px solid #4cc2ff;
+}
+
+QPushButton[theme="dark"]:pressed {
+    background: #4cc2ff;
+    color: #23272e;
+}
+
+QLineEdit[theme="dark"], QComboBox[theme="dark"], QSpinBox[theme="dark"], QDoubleSpinBox[theme="dark"] {
+    background: #23272e;
+    color: #f3f3f3;
+    border-radius: 6px;
+    border: 1px solid #3a3f4a;
+    padding: 4px 8px;
+}
+
+/* FIX: Style for items in the dropdown list in dark mode */
+QComboBox[theme="dark"]::item {
+    color: #f3f3f3;
+}
+QComboBox[theme="dark"]::item:selected {
+    background-color: #2d7fd6;
+}
+
+/* FIX: Style the dropdown list view itself for dark mode */
+QComboBox[theme="dark"] QAbstractItemView {
+    background-color: #23272e;
+    color: #f3f3f3;
+    selection-background-color: #2d7fd6;
+    selection-color: #f3f3f3;
+}
+
+QTableWidget[theme="dark"], QTableView[theme="dark"] {
+    background: #23272e;
+    alternate-background-color: #262b33;
+    gridline-color: #3a3f4a;
+    selection-background-color: #2d7fd6;
+    selection-color: #f3f3f3;
+    border-radius: 8px;
+    border: 1px solid #3a3f4a;
+}
+
+QHeaderView::section[theme="dark"] {
+    background: #2d323b;
+    color: #f3f3f3;
+    border: 1px solid #3a3f4a;
+    padding: 4px 8px;
+    font-weight: bold;
+}
+
+QStatusBar[theme="dark"] {
+    background: #2d323b;
+    color: #f3f3f3;
+    border-top: 1px solid #3a3f4a;
+}
+
+QMenuBar[theme="dark"], QMenu[theme="dark"] {
+    background: #2d323b;
+    color: #f3f3f3;
+    border: none;
+}
+
+QMenu::item:selected[theme="dark"] {
+    background: #4cc2ff;
+    color: #23272e;
+}
+
+QDialog[theme="dark"] {
+    background: #23272e;
+    color: #f3f3f3;
+    border-radius: 10px;
+}
+
+QCheckBox[theme="dark"], QLabel[theme="dark"] {
+    color: #f3f3f3;
+}
+
+/* Add dark theme styles for Tab Widgets */
+QTabWidget::pane[theme="dark"] {
+    border: 1px solid #3a3f4a;
+}
+
+QTabBar::tab[theme="dark"] {
+    background: #2d323b;
+    color: #f3f3f3;
+    border: 1px solid #3a3f4a;
+    border-bottom: none;
+}
+
+QTabBar::tab:selected[theme="dark"] {
+    background: #23272e;
+    border-bottom: 1px solid #23272e;
+}
+
+QTabBar::tab:hover[theme="dark"] {
+    background: #3a3f4a;
+}
+
+/* Light mode */
+QTreeView, QTreeWidget, QAbstractItemView {
+    background: #f6f7fa;
+    color: #222;
+}
+
+QTreeView::item, QTreeWidget::item {
+    color: #222;
+}
+
+QTreeView::item:selected, QTreeWidget::item:selected {
+    background-color: #cce6ff;
+    color: #222;
+}
+
+/* Dark mode */
+QTreeView[theme="dark"], QTreeWidget[theme="dark"], QAbstractItemView[theme="dark"] {
+    background: #23272e;
+    color: #f3f3f3;
+}
+
+QTreeView[theme="dark"]::item, QTreeWidget[theme="dark"]::item {
+    color: #f3f3f3;
+}
+
+QTreeView[theme="dark"]::item:selected, QTreeWidget[theme="dark"]::item:selected {
+    background-color: #2d7fd6;
+    color: #f3f3f3;
+}
+
+/* Ensure QHeaderView items have correct text color */
+QHeaderView::section {
+    color: #222;
+}
+
+QHeaderView[theme="dark"]::section {
+    color: #f3f3f3;
+}

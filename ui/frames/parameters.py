@@ -40,7 +40,8 @@ class ParametersFrame(QWidget):
                 'show_corrected': False,
                 'method': 'arpls',  # Changed from 'asls' to 'arpls'
                 'lambda': 1e4,      # Changed from 1e6 to 1e4
-                'asymmetry': 0.01
+                'asymmetry': 0.01,
+                'align_tic': False  # Add alignment option
             },
             'peaks': {
                 'enabled': False,
@@ -236,6 +237,17 @@ class ParametersFrame(QWidget):
         
         form_layout.addRow(ms_baseline_frame)
         
+        # Add TIC alignment checkbox
+        self.align_tic = QCheckBox("Align TIC with FID")
+        self.align_tic.setChecked(self.current_params['baseline'].get('align_tic', False))
+        self.align_tic.stateChanged.connect(self._on_align_tic_toggled)
+        form_layout.addRow(self.align_tic)
+        
+        # Add explanation label
+        align_info = QLabel("Corrects for small time delays between FID and MS detectors")
+        align_info.setStyleSheet("color: #666666; font-size: 10px;")
+        form_layout.addRow("", align_info)
+        
         # Add to parameters layout
         self.params_layout.addWidget(baseline_group)
     
@@ -422,3 +434,21 @@ class ParametersFrame(QWidget):
     def get_parameters(self):
         """Get the current processing parameters"""
         return self.current_params
+
+    def _on_align_tic_toggled(self, state):
+        """Handle TIC alignment toggle."""
+        align_tic = bool(state)
+        
+        # Ensure the baseline dictionary has the align_tic key
+        if 'align_tic' not in self.current_params['baseline']:
+            self.current_params['baseline']['align_tic'] = align_tic
+        else:
+            self.current_params['baseline']['align_tic'] = align_tic
+        
+        # Provide visual feedback
+        if align_tic:
+            print("TIC alignment enabled - will align MS data to FID")
+        else:
+            print("TIC alignment disabled")
+        
+        self.parameters_changed.emit(self.current_params)

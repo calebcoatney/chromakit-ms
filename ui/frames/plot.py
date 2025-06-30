@@ -54,6 +54,8 @@ class PlotFrame(QWidget):
         # Initialize data for storage
         self.chromatogram_data = None
         self.tic_data = None
+        self.aligned_tic_data = None  # New attribute for aligned TIC data
+        self.tic_alignment_info = None  # Store alignment metadata
         
         # Replace existing mouse click connection with new connections
         self.canvas.mpl_connect('button_press_event', self._on_plot_click)
@@ -66,7 +68,36 @@ class PlotFrame(QWidget):
         
         # Set up initial empty plots
         self._setup_empty_plots()
+
+    def apply_theme(self):
+        """Apply the current theme to the plots."""
+        parent = self.parent()
+        while parent and not hasattr(parent, 'matplotlib_theme_colors'):
+            parent = parent.parent()
         
+        if not parent or not parent.matplotlib_theme_colors:
+            return
+
+        colors = parent.matplotlib_theme_colors
+        
+        self.figure.patch.set_facecolor(colors['background'])
+        
+        for ax in [self.chromatogram_ax, self.tic_ax]:
+            if ax:
+                ax.set_facecolor(colors['axes'])
+                for spine in ax.spines.values():
+                    spine.set_color(colors['edge'])
+                
+                ax.tick_params(axis='both', colors=colors['ticks'], which='both', labelcolor=colors['label'])
+                
+                if ax.title: ax.title.set_color(colors['text'])
+                if ax.xaxis.label: ax.xaxis.label.set_color(colors['label'])
+                if ax.yaxis.label: ax.yaxis.label.set_color(colors['label'])
+                
+                ax.grid(True, linestyle='--', alpha=0.7, color=colors['grid'])
+
+        self.canvas.draw_idle()
+
     def _setup_empty_plots(self):
         """Set up initial empty plots."""
         self.tic_ax.clear()
@@ -83,6 +114,7 @@ class PlotFrame(QWidget):
         
         self.figure.tight_layout()
         self.canvas.draw()
+        self.apply_theme() # Apply theme on initialization
         
     def plot_chromatogram(self, data, show_corrected=False, new_file=True):
         """
@@ -93,6 +125,10 @@ class PlotFrame(QWidget):
             show_corrected: Whether to show baseline-corrected data
             new_file: Whether this is a new file (True) or just parameter updates (False)
         """
+        # Get theme colors if available from the main app
+        colors = None
+        if hasattr(self.parent(), 'matplotlib_theme_colors'):
+            colors = self.parent().matplotlib_theme_colors
         # Store current view limits BEFORE doing anything else
         x_was_autoscaled = self.chromatogram_ax.get_autoscalex_on()
         y_was_autoscaled = self.chromatogram_ax.get_autoscaley_on()
@@ -105,6 +141,9 @@ class PlotFrame(QWidget):
         
         # Store data
         self.chromatogram_data = data
+        
+        # Apply theme to ensure it's up-to-date
+        self.apply_theme()
         
         # Clear previous plot
         self.chromatogram_ax.clear()
@@ -210,6 +249,43 @@ class PlotFrame(QWidget):
             self.chromatogram_ax.set_xlim(previous_xlim)
             self.chromatogram_ax.set_ylim(previous_ylim)
         
+        # Before returning, apply theme if available
+        if colors:
+            # Use the correct attributes for the figure and axes
+            self.figure.patch.set_facecolor(colors['background'])
+            
+            # Apply to chromatogram axis
+            self.chromatogram_ax.set_facecolor(colors['axes'])
+            for spine in self.chromatogram_ax.spines.values():
+                spine.set_color(colors['edge'])
+            
+            self.chromatogram_ax.tick_params(axis='both', colors=colors['ticks'], which='both',
+                                        labelcolor=colors['label'], reset=True)
+            
+            if self.chromatogram_ax.xaxis.label:
+                self.chromatogram_ax.xaxis.label.set_color(colors['label'])
+            if self.chromatogram_ax.yaxis.label:
+                self.chromatogram_ax.yaxis.label.set_color(colors['label'])
+            if self.chromatogram_ax.title:
+                self.chromatogram_ax.title.set_color(colors['text'])
+            
+            # Apply to TIC axis if it exists
+            if hasattr(self, 'tic_ax') and self.tic_ax is not None:
+                self.tic_ax.set_facecolor(colors['axes'])
+                for spine in self.tic_ax.spines.values():
+                    spine.set_color(colors['edge'])
+                
+                self.tic_ax.tick_params(axis='both', colors=colors['ticks'], which='both',
+                                    labelcolor=colors['label'], reset=True)
+                
+                if self.tic_ax.xaxis.label:
+                    self.tic_ax.xaxis.label.set_color(colors['label'])
+                if self.tic_ax.yaxis.label:
+                    self.tic_ax.yaxis.label.set_color(colors['label'])
+                if self.tic_ax.title:
+                    self.tic_ax.title.set_color(colors['text'])
+        
+      
         # Adjust layout and draw
         self.figure.tight_layout()
         self.canvas.draw()
@@ -224,6 +300,11 @@ class PlotFrame(QWidget):
             baseline_x, baseline_y: Baseline data arrays
             new_file: Whether this is a new file (True) or just parameter updates (False)
         """
+        # Get theme colors if available from the main app
+        colors = None
+        if hasattr(self.parent(), 'matplotlib_theme_colors'):
+            colors = self.parent().matplotlib_theme_colors
+        
         # Store current view limits before doing anything
         x_was_autoscaled = self.tic_ax.get_autoscalex_on()
         y_was_autoscaled = self.tic_ax.get_autoscaley_on()
@@ -234,6 +315,9 @@ class PlotFrame(QWidget):
         # Store data
         self.tic_data = {'x': x, 'y': y}
         
+        # Apply theme to ensure it's up-to-date
+        self.apply_theme()
+
         # Clear previous plot
         self.tic_ax.clear()
         
@@ -284,6 +368,33 @@ class PlotFrame(QWidget):
         self.figure.tight_layout()
         self.canvas.draw()
         
+        # Apply theme if available
+        if colors:
+            self.figure.patch.set_facecolor(colors['background'])
+            
+            # Apply to both axes to ensure consistency
+            for ax in [self.tic_ax, self.chromatogram_ax]:
+                if ax is not None:
+                    ax.set_facecolor(colors['axes'])
+                    
+                    for spine in ax.spines.values():
+                        spine.set_color(colors['edge'])
+                    
+                    ax.tick_params(axis='both', colors=colors['ticks'], which='both',
+                                labelcolor=colors['label'], reset=True)
+                    
+                    if ax.xaxis.label:
+                        ax.xaxis.label.set_color(colors['label'])
+                    if ax.yaxis.label:
+                        ax.yaxis.label.set_color(colors['label'])
+                    if ax.title:
+                        ax.title.set_color(colors['text'])
+                    
+                    ax.grid(True, linestyle='--', alpha=0.7, color=colors['grid'])
+            
+            # Force complete redraw
+            self.canvas.draw()
+
     def _on_plot_click(self, event):
         """Handle mouse button press on the plot."""
         if event.inaxes is None:
@@ -646,6 +757,12 @@ class PlotFrame(QWidget):
     def set_tic_data(self, x, y):
         """Store the TIC data without plotting it."""
         self.tic_data = {'x': x, 'y': y}
+
+    def set_aligned_tic_data(self, aligned_time, aligned_signal, lag_seconds):
+        """Store the aligned TIC data."""
+        self.aligned_tic_data = {'x': aligned_time, 'y': aligned_signal}
+        self.tic_alignment_info = {'lag_seconds': lag_seconds}
+        print(f"Stored aligned TIC data with lag of {lag_seconds:.4f} seconds")
 
     def _show_peak_context_menu(self, peak_index, event):
         """Show context menu for a peak."""
