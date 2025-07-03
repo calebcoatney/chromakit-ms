@@ -44,6 +44,9 @@ class DataHandler:
             # Get TIC data
             tic_data = self._get_tic_data(data_dir)
             
+            # Set flag indicating whether MS data is available
+            self.has_ms_data = len(tic_data['x']) > 0 and len(tic_data['y']) > 0
+            
             return {
                 'chromatogram': chromatogram_data,
                 'tic': tic_data,

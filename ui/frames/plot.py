@@ -764,6 +764,53 @@ class PlotFrame(QWidget):
         self.tic_alignment_info = {'lag_seconds': lag_seconds}
         print(f"Stored aligned TIC data with lag of {lag_seconds:.4f} seconds")
 
+    def set_tic_visible(self, visible: bool):
+        """Set the visibility of the TIC plot.
+        
+        Args:
+            visible (bool): Whether to show the TIC plot
+        """
+        # Store current axis limits to preserve them
+        chromatogram_xlim = self.chromatogram_ax.get_xlim()
+        chromatogram_ylim = self.chromatogram_ax.get_ylim()
+        
+        # Set visibility of the TIC axis
+        self.tic_ax.set_visible(visible)
+        
+        # When hiding TIC, make chromatogram plot take full height
+        if not visible:
+            # Remove the top plot and make the bottom plot take full height
+            self.figure.delaxes(self.tic_ax)
+            self.chromatogram_ax = self.figure.add_subplot(111)  # Full figure
+            
+            # Restore the original data
+            if self.chromatogram_data is not None:
+                self.plot_chromatogram(self.chromatogram_data, new_file=False)
+            
+            # Restore original view limits
+            self.chromatogram_ax.set_xlim(chromatogram_xlim)
+            self.chromatogram_ax.set_ylim(chromatogram_ylim)
+        else:
+            # If we're restoring visibility, we need to reset the subplot layout
+            if not self.tic_ax in self.figure.axes:
+                # Clear the figure
+                self.figure.clear()
+                
+                # Set up the axes again
+                self.tic_ax = self.figure.add_subplot(211)  # Top plot for TIC
+                self.chromatogram_ax = self.figure.add_subplot(212, sharex=self.tic_ax)  # Bottom plot with shared x axis
+                
+                # Restore the plots
+                if self.chromatogram_data is not None:
+                    self.plot_chromatogram(self.chromatogram_data, new_file=False)
+                if self.tic_data is not None and len(self.tic_data['x']) > 0:
+                    self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
+        
+        # Apply theme and refresh
+        self.apply_theme()
+        self.figure.tight_layout()
+        self.canvas.draw_idle()
+    
     def _show_peak_context_menu(self, peak_index, event):
         """Show context menu for a peak."""
         from PySide6.QtWidgets import QMenu

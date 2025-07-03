@@ -408,7 +408,6 @@ class ChromaKitApp(QMainWindow):
     @Slot(str)
     def on_file_selected(self, file_path):
         """Handle file selection from the tree view."""
-            
         try:
             # Clear stored peak data to prevent ghost peaks
             self.plot_frame.clear_peak_data()
@@ -429,7 +428,7 @@ class ChromaKitApp(QMainWindow):
             # Normalize path to ensure consistent path formatting
             file_path = os.path.normpath(os.path.abspath(file_path))
             
-            # Set current directory path (ADD THIS LINE)
+            # Set current directory path
             self.current_directory_path = file_path
             
             # Show loading message
@@ -469,12 +468,19 @@ class ChromaKitApp(QMainWindow):
                 # Set flag that real data is loaded
                 self.real_data_loaded = True
             
-            # Plot TIC using the original (non-interpolated) data
-            if 'tic' in data and len(data['tic']['x']) > 0:
-                self.plot_frame.plot_tic(
-                    data['tic']['x'],
-                    data['tic']['y']
-                )
+            # Check if MS data is available
+            has_ms_data = self.data_handler.has_ms_data
+            
+            # Show or hide TIC plot based on MS data availability
+            self.plot_frame.set_tic_visible(has_ms_data)
+            
+            # Enable or disable MS tab
+            ms_tab_index = self.right_tabs.indexOf(self.ms_frame)
+            self.right_tabs.setTabEnabled(ms_tab_index, has_ms_data)
+            
+            # Plot TIC only if MS data is available
+            if has_ms_data and 'tic' in data and len(data['tic']['x']) > 0:
+                self.plot_frame.plot_tic(data['tic']['x'], data['tic']['y'], new_file=True)
             
             # Update status bar with success message
             sample_name = os.path.basename(file_path)
@@ -482,11 +488,15 @@ class ChromaKitApp(QMainWindow):
             # Show navigation info
             num_dirs = len(self.data_handler.available_directories)
             curr_idx = self.data_handler.current_index + 1  # 1-indexed for display
-            self.status_bar.showMessage(f"Loaded: {sample_name} ({curr_idx}/{num_dirs})")
+            
+            # Add information about MS data availability to the status message
+            ms_status = "with" if has_ms_data else "without"
+            self.status_bar.showMessage(f"Loaded: {sample_name} ({curr_idx}/{num_dirs}) - {ms_status} MS data")
             
             # Enable export button
             self.button_frame.enable_export(True)
 
+            # Process and display the chromatogram data
             self.process_and_display(self.current_x, self.current_y, new_file=True)
             
         except Exception as e:
@@ -521,49 +531,27 @@ class ChromaKitApp(QMainWindow):
     @Slot(float)
     def on_ms_spectrum_requested(self, retention_time):
         """Handle request to view MS spectrum at specified retention time."""
+        # First check if MS data is available
+        if not hasattr(self.data_handler, 'has_ms_data') or not self.data_handler.has_ms_data:
+            self.status_bar.showMessage("No MS data available for this file")
+            return
+        
         self.status_bar.showMessage(f"Viewing MS spectrum at RT={retention_time:.3f}")
         
         # Check if we have MS data available
         if hasattr(self, 'data_handler'):
             try:
-                # Use data handler method instead of direct access
-                ms_data = self.data_handler.get_ms_data()
-                
-                # Define a function to extract spectrum from real data
-                def extract_real_spectrum(rt):
-                    max_time = ms_data.xlabels[-1]
-                    max_mz = ms_data.data.shape[1]
-                    
-                    # Validate RT
-                    if not (0 <= rt <= max_time):
-                        raise ValueError(f"Retention time {rt} is out of range (0 to {max_time}).")
-                    
-                    # Find the spectrum indices for the specified RT and range ±5 indices
-                    index = int(rt / max_time * ms_data.data.shape[0])
-                    lower_bound = max(0, index - 5)
-                    upper_bound = min(ms_data.data.shape[0], index + 5 + 1)
-                    spectrum = ms_data.data[lower_bound:upper_bound, :].astype(np.float64).mean(axis=0)
-                    
-                    # Normalize spectrum for consistent display
-                    if np.max(spectrum) > 0:
-                        spectrum = spectrum / np.max(spectrum)
-                    
-                    return {
-                        'mz': np.arange(max_mz) + 1,  # m/z values start at 1
-                        'intensities': spectrum
-                    }
-                
-                # Set the extract function in the MS frame
-                self.ms_frame.set_extract_spectrum_function(extract_real_spectrum)
-                
-                # Now display the spectrum
-                self.ms_frame.view_spectrum_at_rt(retention_time)
-                
+                spectrum = self.data_handler.extract_spectrum_at_rt(retention_time)
+                if spectrum and 'mz' in spectrum and 'intensities' in spectrum:
+                    self.ms_frame.plot_mass_spectrum(
+                        spectrum['mz'], 
+                        spectrum['intensities'],
+                        f"RT: {retention_time:.3f} min"
+                    )
+                else:
+                    self.status_bar.showMessage(f"Could not extract spectrum at RT={retention_time:.3f}")
             except Exception as e:
-                print(f"Error accessing MS data: {str(e)}")
-                self.ms_frame.set_extract_spectrum_function(None)  # Clear the function
-                # Still try to display something (will be simulated)
-                self.ms_frame.view_spectrum_at_rt(retention_time)
+                self.status_bar.showMessage(f"Error extracting spectrum: {str(e)}")
         else:
             # No real data available, display simulated spectrum
             self.ms_frame.set_extract_spectrum_function(None)  # Ensure no function is set
@@ -571,6 +559,10 @@ class ChromaKitApp(QMainWindow):
     
     def on_peak_spectrum_requested(self, peak_index):
         """Handle request to extract MS spectrum for a specific peak."""
+        # Check if MS data exists for this sample
+        if not hasattr(self.data_handler, 'has_ms_data') or not self.data_handler.has_ms_data:
+            self.status_bar.showMessage("No MS data available for this file")
+            return
         # Check if we have integrated peaks
         if not hasattr(self, 'integrated_peaks') or peak_index >= len(self.integrated_peaks):
             self.status_bar.showMessage("No peak data available at that position")
@@ -1919,6 +1911,7 @@ class ChromaKitApp(QMainWindow):
         
         # Update batch search button state based on peaks and library
         has_library = (hasattr(self.ms_frame, 'library_loaded') and 
+                      
                       self.ms_frame.library_loaded)
         
         self.button_frame.batch_search_button.setEnabled(bool(peaks) and has_library)
