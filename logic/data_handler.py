@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import rainbow as rb
+from logic.spectrum_extractor import SpectrumExtractor
 
 class DataHandler:
     """Handles loading and navigating through GC-MS data directories."""
@@ -11,6 +12,7 @@ class DataHandler:
         self.available_directories = []
         self.current_index = -1
         self.current_detector = 'FID1A'  # Default detector
+        self.spectrum_extractor = SpectrumExtractor()
     
     def load_data_directory(self, file_path):
         """Load an Agilent .D directory.
@@ -245,52 +247,23 @@ class DataHandler:
             raise ValueError(f"Could not get {detector} metadata: {str(e)}")
 
     def extract_spectrum_at_rt(self, retention_time, aligned_tic_data=None):
-        """
-        Extract mass spectrum at given retention time from current data.
-        
-        Args:
-            retention_time: The FID retention time
-            aligned_tic_data: Optional dict with aligned TIC data {'x': times, 'y': intensities}
-                              If provided, will use this for matching RT to MS data
-        
-        Returns:
-            dict: Spectrum data or None if extraction fails
-        """
+        """Extract mass spectrum at given retention time from current data."""
         if not self.current_directory_path:
             return None
         
-        try:
-            # Get MS data
-            ms_data = self.get_ms_data()
-            
-            # Get TIC data - either from aligned data or extract it fresh
-            if aligned_tic_data and 'x' in aligned_tic_data and len(aligned_tic_data['x']) > 0:
-                # Use aligned TIC data
-                tic_x = aligned_tic_data['x']
-                print(f"Using aligned TIC data for spectrum extraction at RT={retention_time:.3f}")
-            else:
-                # Use original TIC data
-                tic_data = self._get_tic_data(self.current_data_dir)
-                if not tic_data or len(tic_data['x']) == 0:
-                    return None
-                tic_x = tic_data['x']
-                
-            # Find closest RT index
-            rt_index = np.argmin(np.abs(np.array(tic_x) - retention_time))
-            
-            # Get spectrum at that index
-            spectrum = ms_data.data[rt_index, :].astype(float)
-            
-            # Create m/z values and filter low intensities
-            mz_values = np.arange(len(spectrum)) + 1
-            threshold = 0.01 * np.max(spectrum)
-            mask = spectrum > threshold
-            
-            return {
-                'rt': retention_time,
-                'mz': mz_values[mask],
-                'intensities': spectrum[mask]
-            }
-        except Exception as e:
-            print(f"Error extracting spectrum: {str(e)}")
+        return self.spectrum_extractor.extract_at_rt(
+            self.current_directory_path, 
+            retention_time, 
+            intensity_threshold=0.01
+        )
+    
+    def extract_spectrum_for_peak(self, peak, options=None):
+        """Extract mass spectrum for a peak using specified options."""
+        if not self.current_directory_path:
             return None
+        
+        return self.spectrum_extractor.extract_for_peak(
+            self.current_directory_path,
+            peak,
+            options
+        )

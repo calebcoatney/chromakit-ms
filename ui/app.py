@@ -582,7 +582,7 @@ class ChromaKitApp(QMainWindow):
         # Show info in status bar
         self.status_bar.showMessage(f"Extracting mass spectrum for peak {peak.peak_number} at RT={peak.retention_time:.3f}")
         
-        # Check if we have the MS toolkit and data directory
+        # Check if we have the MS toolkit
         if not hasattr(self.ms_frame, 'ms_toolkit') or not self.ms_frame.ms_toolkit:
             self.status_bar.showMessage("MS toolkit not available")
             return
@@ -600,38 +600,31 @@ class ChromaKitApp(QMainWindow):
                 'extraction_method': 'apex',
                 'range_points': 5,
                 'tic_weight': True,
-                'subtract_enabled': True,
+                'subtract_background': True,  # renamed from subtract_enabled for consistency
                 'subtraction_method': 'min_tic',
                 'subtract_weight': 0.1,
-                'intensity_threshold': 0.01,  # Add this line
-                'midpoint_width_percent': 20  # Add this line
+                'intensity_threshold': 0.01,
+                'midpoint_width_percent': 20
             }
         
         try:
-            # Import the extraction function
-            from logic.batch_search import extract_peak_spectrum
-            
-            # Apply extraction method based on options
-            extraction_method = options.get('extraction_method', 'apex')
-            
+            # Get the mz_shift from UI and set it on the toolkit
+            try:
+                mz_shift = int(self.ms_frame.mz_shift_entry.text() or 0)
+                self.ms_frame.ms_toolkit.mz_shift = mz_shift
+                print(f"Applied m/z shift of {mz_shift} to toolkit")
+            except (ValueError, AttributeError) as e:
+                print(f"Error setting m/z shift: {str(e)}")
+                
             # Debug print showing extraction parameters
             print(f"Extracting spectrum for peak {peak.peak_number} at RT={peak.retention_time:.3f}")
-            print(f"Method: {extraction_method}, Range points: {options.get('range_points', 5)}")
+            print(f"Method: {options.get('extraction_method', 'apex')}, Range points: {options.get('range_points', 5)}")
             print(f"Start time: {peak.start_time:.3f}, End time: {peak.end_time:.3f}")
             
-            # Extract the spectrum using the batch_search.py function
-            spectrum = extract_peak_spectrum(
-                self.data_handler.current_directory_path,
+            # Use the data handler to extract the spectrum
+            spectrum = self.data_handler.extract_spectrum_for_peak(
                 peak,
-                subtract_background=options.get('subtract_enabled', True),
-                subtraction_method=options.get('subtraction_method', 'min_tic'),
-                subtract_weight=options.get('subtract_weight', 0.1),
-                tic_weight=options.get('tic_weight', True),
-                extraction_method=extraction_method,
-                range_points=options.get('range_points', 5),
-                midpoint_width_percent=options.get('midpoint_width_percent', 20),  # Add this parameter
-                intensity_threshold=options.get('intensity_threshold', 0.01),  # Add this line
-                debug=True
+                {'extraction_method': 'apex', 'debug': False}
             )
             
             if spectrum and 'mz' in spectrum and 'intensities' in spectrum:
@@ -696,23 +689,15 @@ class ChromaKitApp(QMainWindow):
         
         # Get the spectrum for the peak if available
         spectrum = None
-        if hasattr(self, 'data_handler') and hasattr(self.data_handler, 'current_directory_path'):
+        if hasattr(self, 'data_handler'):
             try:
-                from logic.batch_search import extract_peak_spectrum
-                
                 # Get current MS search options
                 if hasattr(self.ms_frame, 'search_options'):
                     options = self.ms_frame.search_options
                 else:
                     options = {}
-                    
-                spectrum = extract_peak_spectrum(
-                    self.data_handler.current_directory_path,
-                    peak,
-                    extraction_method=options.get('extraction_method', 'apex'),
-                    range_points=options.get('range_points', 5),
-                    debug=False
-                )
+                        
+                spectrum = self.data_handler.extract_spectrum_for_peak(peak, options)
             except Exception as e:
                 print(f"Error extracting peak spectrum for assignment: {e}")
         
@@ -910,20 +895,17 @@ class ChromaKitApp(QMainWindow):
                 for peak in matching_peaks:
                     try:
                         # Extract spectrum
-                        from logic.batch_search import extract_peak_spectrum
-                        peak_spectrum = extract_peak_spectrum(
-                            file_path,
+                        spectrum = self.data_handler.extract_spectrum_for_peak(
                             peak,
-                            extraction_method='apex',
-                            debug=False
+                            {'extraction_method': 'apex', 'debug': False}
                         )
                         
-                        if not peak_spectrum or 'mz' not in peak_spectrum or 'intensities' not in peak_spectrum:
+                        if not spectrum or 'mz' not in spectrum or 'intensities' not in spectrum:
                             continue
                         
                         # Convert to tuples for similarity function
                         spectrum1 = [(m, i) for m, i in zip(spectrum['mz'], spectrum['intensities'])]
-                        spectrum2 = [(m, i) for m, i in zip(peak_spectrum['mz'], peak_spectrum['intensities'])]
+                        spectrum2 = [(m, i) for m, i in zip(spectrum['mz'], spectrum['intensities'])]
                         
                         # Calculate similarity
                         similarity = dot_product_similarity(spectrum1, spectrum2)
@@ -1530,7 +1512,6 @@ class ChromaKitApp(QMainWindow):
                 'search_method': 'vector',
                 'extraction_method': 'apex',
                 'range_points': 5,
-                'range_time': 0.05,
                 'tic_weight': True,
                 'subtract_enabled': True,
                 'subtraction_method': 'min_tic',
@@ -1712,6 +1693,8 @@ class ChromaKitApp(QMainWindow):
             }
         
         # Create the worker instance for batch search - FIX HERE
+        # Inconsistent construction of BatchSearchWorker. We have a method to do this.
+        '''
         worker = BatchSearchWorker(
             self.ms_frame.ms_toolkit,
             self.integrated_peaks,
@@ -1733,6 +1716,9 @@ class ChromaKitApp(QMainWindow):
                 'debug': True
             }
         )
+        '''
+        # Using the method we alread have here -->
+        worker = self._create_batch_search_worker()
         
         # Track the worker to be able to stop it
         self.batch_search_worker = worker
@@ -1742,9 +1728,6 @@ class ChromaKitApp(QMainWindow):
         progress_dialog.setWindowTitle("Batch MS Search")
         progress_dialog.setWindowModality(Qt.WindowModal)
         progress_dialog.setMinimumDuration(0)
-        progress_dialog.setValue(0)
-        
-        progress_dialog.canceled.connect(self._cancel_batch_search)
         
         # Connect signals
         worker.signals.started.connect(lambda total: 
