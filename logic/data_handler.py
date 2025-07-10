@@ -11,7 +11,7 @@ class DataHandler:
         self.current_directory_path = None
         self.available_directories = []
         self.current_index = -1
-        self.current_detector = 'FID1A'  # Default detector
+        self.current_detector = 'Unknown'  # Will be auto-detected when data is loaded
         self.spectrum_extractor = SpectrumExtractor()
     
     def load_data_directory(self, file_path):
@@ -38,7 +38,10 @@ class DataHandler:
             self.current_data_dir = data_dir
             self.current_directory_path = file_path
             
-            # Get chromatogram data (defaults to FID1A)
+            # Auto-detect the best available detector
+            self._auto_detect_detector(data_dir)
+            
+            # Get chromatogram data (using detected detector)
             chromatogram_data = self._get_chromatogram_data(data_dir)
             
             # Get TIC data
@@ -235,13 +238,17 @@ class DataHandler:
         except Exception as e:
             raise ValueError(f"Could not get MS data: {str(e)}")
 
-    def get_detector_metadata(self, detector='FID1A', data_dir=None):
+    def get_detector_metadata(self, detector=None, data_dir=None):
         """Get metadata for a specific detector file."""
         if data_dir is None:
             data_dir = self.current_data_dir
         
         if data_dir is None:
             raise ValueError("No data directory specified or current")
+        
+        # Use current detector if none specified
+        if detector is None:
+            detector = self.current_detector
         
         try:
             detector_file = data_dir.get_file(f"{detector}.ch")
@@ -270,3 +277,39 @@ class DataHandler:
             peak,
             options
         )
+    
+    def _auto_detect_detector(self, data_dir):
+        """Auto-detect the best available detector file in the data directory."""
+        try:
+            # Get all files in the data directory
+            files = data_dir.datafiles
+            
+            # Filter for detector files (ending with .ch)
+            detector_files = [str(f) for f in files if str(f).endswith('.ch')]
+            
+            if not detector_files:
+                print("Warning: No detector files (.ch) found in data directory")
+                return
+            
+            # Priority order for detector selection (preferred detectors first)
+            preferred_detectors = ['FID1A.ch', 'TCD2B.ch', 'FID2B.ch', 'TCD1A.ch', 'TCD1B.ch']
+            
+            # Try to find a preferred detector
+            selected_detector = None
+            for preferred in preferred_detectors:
+                if preferred in detector_files:
+                    selected_detector = preferred
+                    break
+            
+            # If no preferred detector found, use the first available one
+            if selected_detector is None:
+                selected_detector = detector_files[0]
+            
+            # Remove the .ch extension to get the detector name
+            self.current_detector = selected_detector.replace('.ch', '')
+            print(f"Auto-detected detector: {self.current_detector}")
+            
+        except Exception as e:
+            print(f"Error auto-detecting detector: {e}")
+            # Keep the default detector
+            print(f"Using default detector: {self.current_detector}")

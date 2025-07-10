@@ -9,6 +9,7 @@ library/
 overrides/
 results/
 cache/
+memory/
 
 # User-specific files
 *.rsuser

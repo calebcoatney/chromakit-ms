@@ -9,6 +9,16 @@ from matplotlib.backends.backend_qt5agg import (
 )
 
 class PlotFrame(QWidget):
+    def clear_tic(self):
+        """Clear the TIC plot and redraw the canvas."""
+        self.tic_ax.clear()
+        self.tic_ax.set_title('Total Ion Chromatogram (TIC)')
+        self.tic_ax.set_xlabel('Time (min)')
+        self.tic_ax.set_ylabel('Intensity')
+        self.tic_ax.grid(True, linestyle='--', alpha=0.7)
+        self.figure.tight_layout()
+        self.canvas.draw_idle()
+
     """Frame for displaying chromatogram and TIC plots."""
     
     # Signal to notify when a point has been selected on the plot
@@ -291,6 +301,10 @@ class PlotFrame(QWidget):
         self.canvas.draw()
 
     def plot_tic(self, x, y, show_baseline=False, baseline_x=None, baseline_y=None, new_file=True):
+        # Robustly handle empty or missing data
+        if x is None or y is None or len(x) == 0 or len(y) == 0:
+            self.clear_tic()
+            return
         """
         Plot the Total Ion Chromatogram (TIC) data.
         

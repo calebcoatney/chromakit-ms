@@ -13,6 +13,7 @@ from ui.frames.parameters import ParametersFrame
 from ui.frames.ms import MSFrame
 from ui.frames.buttons import ButtonFrame
 from ui.dialogs.automation_dialog import AutomationDialog
+from ui.dialogs.export_settings_dialog import ExportSettingsDialog
 from logic.automation_worker import AutomationWorker
 from logic.processor import ChromatogramProcessor
 from logic.batch_search import BatchSearchWorker
@@ -47,6 +48,10 @@ class ChromaKitApp(QMainWindow):
         
         # Initialize data handler
         self.data_handler = DataHandler()
+        
+        # Initialize export manager
+        from logic.export_manager import ExportManager
+        self.export_manager = ExportManager(self)
         
         # Create central widget and main layout
         self.central_widget = QWidget()
@@ -140,6 +145,10 @@ class ChromaKitApp(QMainWindow):
         # Add detector selection option
         detector_action = settings_menu.addAction("Select Detector Channel...")
         detector_action.triggered.connect(self.show_detector_selection_dialog)
+        
+        # Add export settings option
+        export_settings_action = settings_menu.addAction("Export Settings...")
+        export_settings_action.triggered.connect(self.show_export_settings_dialog)
         
         # Theme state
         self.current_theme = 'light'
@@ -406,8 +415,13 @@ class ChromaKitApp(QMainWindow):
         self.status_bar.showMessage("Generated sample data")
         
     @Slot(str)
-    def on_file_selected(self, file_path):
-        """Handle file selection from the tree view."""
+    def on_file_selected(self, file_path, batch_mode=False):
+        """Handle file selection from the tree view.
+        
+        Args:
+            file_path: Path to the .D directory to load
+            batch_mode: If True, suppress error dialogs (for batch processing)
+        """
         try:
             # Clear stored peak data to prevent ghost peaks
             self.plot_frame.clear_peak_data()
@@ -480,7 +494,19 @@ class ChromaKitApp(QMainWindow):
             
             # Plot TIC only if MS data is available
             if has_ms_data and 'tic' in data and len(data['tic']['x']) > 0:
-                self.plot_frame.plot_tic(data['tic']['x'], data['tic']['y'], new_file=True)
+                try:
+                    self.plot_frame.plot_tic(data['tic']['x'], data['tic']['y'], new_file=True)
+                except Exception as plot_error:
+                    # If TIC plotting fails, just log it and continue
+                    print(f"Warning: Failed to plot TIC data: {plot_error}")
+                    has_ms_data = False  # Treat as no MS data if plotting fails
+            
+            if not has_ms_data:
+                # Explicitly clear or hide the TIC plot if no MS data
+                if hasattr(self.plot_frame, 'clear_tic'):
+                    self.plot_frame.clear_tic()
+                if hasattr(self.plot_frame, 'tic_canvas'):
+                    self.plot_frame.tic_canvas.setVisible(False)
             
             # Update status bar with success message
             sample_name = os.path.basename(file_path)
@@ -501,8 +527,15 @@ class ChromaKitApp(QMainWindow):
             
         except Exception as e:
             # Handle any errors during loading
-            self.status_bar.showMessage(f"Error loading file: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Error loading file:\n{str(e)}")
+            error_msg = f"Error loading file: {str(e)}"
+            self.status_bar.showMessage(error_msg)
+            
+            # Only show error dialog if not in batch mode
+            if not batch_mode:
+                QMessageBox.critical(self, "Error", f"Error loading file:\n{str(e)}")
+            else:
+                # In batch mode, just log the error without showing dialog
+                print(f"Batch processing error: {error_msg}")
     
     @Slot(float)
     def on_point_selected(self, x_value):
@@ -761,7 +794,7 @@ class ChromaKitApp(QMainWindow):
                 
                 # Update integration results file
                 if hasattr(self, 'integration_results'):
-                    self._save_integration_json(self.integration_results)
+                    self._auto_update_json_with_assignment(peak)
                     
                 # Add to the override database
                 self._add_to_override_database(peak.retention_time, new_compound, spectrum)
@@ -1023,6 +1056,46 @@ class ChromaKitApp(QMainWindow):
         except Exception as e:
             print(f"Error saving override database: {e}")
 
+    def _auto_update_json_with_assignment(self, peak):
+        """Update JSON file when a peak assignment is manually changed."""
+        try:
+            from logic.json_exporter import update_json_with_ms_search_results
+            
+            # Get current data directory
+            if not hasattr(self, 'data_handler') or not hasattr(self.data_handler, 'current_directory_path'):
+                return
+                
+            d_path = self.data_handler.current_directory_path
+            if not d_path:
+                return
+                
+            # Get detector name
+            detector = self.data_handler.current_detector if hasattr(self.data_handler, 'current_detector') else 'Unknown'
+            
+            # Use export manager for assignment updates
+            export_result = self.export_manager.export_after_assignment(
+                self.integrated_peaks, 
+                d_path, 
+                detector
+            )
+            
+            # Show appropriate status message
+            success_messages = [msg for msg in export_result['messages'] if 'successfully' in msg or 'exported' in msg]
+            if success_messages:
+                self.status_bar.showMessage("Assignment updated. " + "; ".join(success_messages))
+            elif export_result['json']:
+                self.status_bar.showMessage("JSON file updated with assignment change")
+            else:
+                # Fallback to old method
+                self._save_integration_json(self.integration_results)
+                
+        except Exception as e:
+            print(f"Error updating JSON with assignment: {e}")
+            # Fallback to old method
+            try:
+                self._save_integration_json(self.integration_results)
+            except:
+                pass
 
     # Button handlers - now with navigation functionality
     def on_export(self):
@@ -1115,9 +1188,28 @@ class ChromaKitApp(QMainWindow):
         # Shade the areas under the curve
         self.plot_frame.shade_integration_areas(integration_results)
         
-        # Save integration results as JSON
-        if hasattr(self, 'current_directory_path') and self.current_directory_path:
-            self._save_integration_json(integration_results)
+        # Automatically save integration results using export manager
+        if hasattr(self, 'data_handler') and hasattr(self.data_handler, 'current_directory_path') and self.data_handler.current_directory_path:
+            try:
+                # Get integration results in the right format
+                peaks = integration_results.get('peaks', [])
+                d_path = self.data_handler.current_directory_path
+                detector = self.data_handler.current_detector if hasattr(self.data_handler, 'current_detector') else 'Unknown'
+                
+                # Use export manager for consistent export behavior
+                export_result = self.export_manager.export_after_integration(peaks, d_path, detector)
+                
+                # Show export status
+                success_messages = [msg for msg in export_result['messages'] if 'successfully' in msg or 'exported' in msg]
+                if success_messages:
+                    self.status_bar.showMessage(f"Integration complete: {len(peaks)} peaks. " + "; ".join(success_messages))
+                else:
+                    self.status_bar.showMessage(f"Integration complete: {len(peaks)} peaks found.")
+                    
+            except Exception as e:
+                print(f"Warning: Export manager failed: {e}")
+                # Fallback to old method
+                self._save_integration_json(integration_results)
         
         # Create and show the "View Integration Results" button in the status bar area
         if hasattr(self, 'view_results_button'):
@@ -1128,7 +1220,8 @@ class ChromaKitApp(QMainWindow):
             self.statusBar().addPermanentWidget(self.view_results_button)
         
         # Update status bar
-        self.status_bar.showMessage(f"Integration complete: {len(integration_results['peaks'])} peaks found. Click the button to view results.")
+        if not success_messages:
+            self.status_bar.showMessage(f"Integration complete: {len(integration_results['peaks'])} peaks found. Click the button to view results.")
         
         # Notify peaks integrated
         self.on_peaks_integrated(integration_results['peaks'])
@@ -1275,8 +1368,8 @@ class ChromaKitApp(QMainWindow):
                 print("DEBUG: Using metadata from current_sample_data")
                 sample_id = os.path.basename(data_dir_path)
                 
-                # Detector might be set somewhere else
-                detector = "FID1A"  # Default detector name
+                # Detector might be set from data handler
+                detector = getattr(self.data_handler, 'current_detector', 'Unknown')  # Use actual detector
                 
                 # Extract metadata from sample data
                 method = self.current_sample_data.metadata.get('method', 'Unknown')
@@ -1295,7 +1388,7 @@ class ChromaKitApp(QMainWindow):
                     fid_metadata = self.data_handler.get_detector_metadata(detector)
                     print(f"DEBUG: Successfully accessed {detector}.ch metadata")
                     
-                    # Extract metadata from the FID file
+                    # Extract metadata from the detector file
                     data_dir_obj = self.data_handler.current_data_dir
                     sample_id = getattr(data_dir_obj, 'name', os.path.basename(data_dir_path))
                     timestamp = fid_metadata.get('date', data_dir_obj.metadata.get('date', datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
@@ -1303,7 +1396,7 @@ class ChromaKitApp(QMainWindow):
                     if method and '.M' in method:
                         method = method.split('.M')[0]
                     
-                    detector = "FID1A"
+                    # Keep the detector as retrieved from data_handler (don't hardcode)
                     notebook = fid_metadata.get('notebook', data_dir_obj.metadata.get('notebook', sample_id))
                     signal = f"Signal: {notebook}\\{detector}.ch"
                     
@@ -1319,7 +1412,8 @@ class ChromaKitApp(QMainWindow):
                     if method and '.M' in method:
                         method = method.split('.M')[0]
                     
-                    detector = "FID1A"
+                    # Use the current detector from data handler (don't hardcode)
+                    detector = self.data_handler.current_detector
                     notebook = data_dir_obj.metadata.get('notebook', sample_id)
                     signal = f"Signal: {notebook}\\{detector}.ch"
             
@@ -1331,7 +1425,7 @@ class ChromaKitApp(QMainWindow):
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             method = "Unknown"
             notebook = sample_id
-            detector = "FID1A"
+            detector = getattr(self.data_handler, 'current_detector', 'Unknown')  # Use actual detector as fallback
             signal = f"Signal: {notebook}\\{detector}.ch"
         
         # Prepare data structure for output
@@ -1803,30 +1897,90 @@ class ChromaKitApp(QMainWindow):
         """Handle saving and exporting results on the main thread."""
         current_dir = self.data_handler.current_directory_path
         
-        # Create an integration_results dict with the updated peaks
-        integration_results = {'peaks': self.integrated_peaks}
-        
-        # Save JSON
-        json_success = self._save_integration_json(integration_results)
-        
-        if json_success:
-            # Automatically export CSV to the same directory
-            csv_filename = os.path.join(current_dir, "RESULTS.CSV")
-            csv_success = self.export_results_csv(csv_filename)
+        # Use export manager for consistent export behavior
+        try:
+            detector = self.data_handler.current_detector if hasattr(self.data_handler, 'current_detector') else 'Unknown'
+            # Export using export manager
+            export_result = self.export_manager.export_after_ms_search(
+                self.integrated_peaks, 
+                current_dir, 
+                detector
+            )
             
-            if csv_success:
-                self.status_bar.showMessage(f"Updated integration results and exported to {csv_filename}")
+            # Show appropriate status message
+            if export_result['json'] or export_result['csv']:
+                export_messages = [msg for msg in export_result['messages'] if 'successfully' in msg or 'exported' in msg]
+                if export_messages:
+                    status_msg = f"MS search completed with {match_count}/{total_peaks} peaks identified. " + "; ".join(export_messages)
+                    self.status_bar.showMessage(status_msg)
+                    
+                    # Only show dialog if not cancelled
+                    if not (hasattr(self, 'batch_search_worker') and self.batch_search_worker.cancelled):
+                        result_details = "\n".join(export_result['messages'])
+                        QMessageBox.information(
+                            self, "Batch Search Complete", 
+                            f"MS library search completed with {match_count}/{total_peaks} peaks identified.\n\n{result_details}",
+                            QMessageBox.Ok
+                        )
+                else:
+                    self.status_bar.showMessage(f"MS search completed with {match_count}/{total_peaks} peaks identified")
+            else:
+                self.status_bar.showMessage("MS search completed but export failed")
+                
+        except Exception as e:
+            print(f"Error in export manager: {e}")
+            # Fallback to old method
+            try:
+                from logic.json_exporter import update_json_with_ms_search_results
+                detector = self.data_handler.current_detector if hasattr(self.data_handler, 'current_detector') else 'Unknown'
+                json_success = update_json_with_ms_search_results(self.integrated_peaks, current_dir, detector)
+                
+                if json_success:
+                    # Automatically export CSV to the same directory
+                    csv_filename = os.path.join(current_dir, "RESULTS.CSV")
+                    csv_success = self.export_results_csv(csv_filename)
+                    
+                    if csv_success:
+                        self.status_bar.showMessage(f"Updated integration results and exported to {csv_filename}")
+                    
+                    # Only show info dialog if not cancelled
+                    if not (hasattr(self, 'batch_search_worker') and self.batch_search_worker.cancelled):
+                        QMessageBox.information(
+                            self, "Batch Search Complete", 
+                            f"MS library search completed with {match_count}/{total_peaks} peaks identified.\n\n"
+                            f"Results saved to JSON and exported to {csv_filename}.",
+                            QMessageBox.Ok
+                        )
+                else:
+                    self.status_bar.showMessage("Failed to update integration results")
+            except Exception as fallback_error:
+                print(f"Fallback export also failed: {fallback_error}")
+                self.status_bar.showMessage("Export failed")
+                
+        except Exception as e:
+            print(f"Error updating results: {e}")
+            self.status_bar.showMessage(f"Error updating results: {str(e)}")
             
-            # Only show info dialog if not cancelled
-            if not (hasattr(self, 'batch_search_worker') and self.batch_search_worker.cancelled):
-                QMessageBox.information(
-                    self, "Batch Search Complete", 
-                    f"MS library search completed with {match_count}/{total_peaks} peaks identified.\n\n"
-                    f"Results saved to JSON and exported to {csv_filename}.",
-                    QMessageBox.Ok
-                )
-        else:
-            self.status_bar.showMessage("Failed to save updated integration results")
+            # Fallback to old method
+            integration_results = {'peaks': self.integrated_peaks}
+            json_success = self._save_integration_json(integration_results)
+            
+            if json_success:
+                csv_filename = os.path.join(current_dir, "RESULTS.CSV")
+                csv_success = self.export_results_csv(csv_filename)
+                
+                if csv_success:
+                    self.status_bar.showMessage(f"Updated integration results and exported to {csv_filename}")
+                
+                if not (hasattr(self, 'batch_search_worker') and self.batch_search_worker.cancelled):
+                    QMessageBox.information(
+                        self, "Batch Search Complete", 
+                        f"MS library search completed with {match_count}/{total_peaks} peaks identified.\n\n"
+                        f"Results saved to JSON and exported to {csv_filename}.",
+                        QMessageBox.Ok
+                    )
+            else:
+                self.status_bar.showMessage("Failed to save updated integration results")
 
     def _on_batch_search_error(self, error_message, dialog):
         """Handle batch search error."""
@@ -1836,6 +1990,7 @@ class ChromaKitApp(QMainWindow):
 
     def _update_peak_match_in_results(self, peak_index, compound_name, match_score):
         """Update peak match in results table."""
+        # Update the compound name and match score in results table
         if hasattr(self, 'results_table') and self.results_table:
             # Update the compound name and match score in the appropriate columns
             compound_col = 4  # Adjust based on your actual table structure
@@ -2234,7 +2389,7 @@ class ChromaKitApp(QMainWindow):
     def perform_ms_baseline_correction(self):
         """Apply baseline correction to all ion traces in the MS data."""
         # Check if we have MS data
-        if not hasattr(self, 'data_handler') or not self.data_handler.current_directory_path:
+        if not hasattr(self.data_handler, 'current_directory_path') or not self.data_handler.current_directory_path:
             QMessageBox.warning(self, "Error", "No data loaded")
             return
         
@@ -2501,4 +2656,8 @@ class ChromaKitApp(QMainWindow):
                     # Reapply integration results if they existed
                     if had_integrated_peaks and integration_results:
                         self.plot_frame.shade_integration_areas(integration_results)
-                        self.status_bar.showMessage(f"Changed detector to {selected_detector} and restored peak data")
+
+    def show_export_settings_dialog(self):
+        """Show the export settings dialog."""
+        dialog = ExportSettingsDialog(self)
+        dialog.exec()

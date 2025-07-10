@@ -172,7 +172,8 @@ class AutomationWorker(QRunnable):
                     status_text = self.app.status_bar.currentMessage()
                     
                     # Load the file (which will update the status bar directly)
-                    self.app.on_file_selected(file_path)
+                    # Pass batch_mode=True to suppress error dialogs
+                    self.app.on_file_selected(file_path, batch_mode=True)
                     
                     # Set our success flag
                     self.load_success = True
@@ -507,15 +508,41 @@ class AutomationWorker(QRunnable):
                     try:
                         # This must run on the main thread
                         current_dir = self.app.data_handler.current_directory_path
-                        integration_results = {'peaks': self.app.integrated_peaks}
                         
-                        # Save JSON and CSV
-                        json_success = self.app._save_integration_json(integration_results)
-                        
-                        if json_success:
-                            csv_filename = os.path.join(current_dir, "RESULTS.CSV")
-                            self.app.export_results_csv(csv_filename)
-                            self.save_success = True
+                        # Update JSON with MS search results using the new exporter
+                        try:
+                            from logic.json_exporter import update_json_with_ms_search_results
+                            
+                            # Get detector name
+                            detector = self.app.data_handler.current_detector if hasattr(self.app.data_handler, 'current_detector') else 'Unknown'
+                            
+                            # Update JSON with MS search results
+                            json_success = update_json_with_ms_search_results(
+                                self.app.integrated_peaks, 
+                                current_dir, 
+                                detector
+                            )
+                            
+                            if json_success:
+                                csv_filename = os.path.join(current_dir, "RESULTS.CSV")
+                                self.app.export_results_csv(csv_filename)
+                                self.save_success = True
+                                self.signals.log_message.emit("Results updated with MS search and exported to CSV")
+                            else:
+                                self.signals.log_message.emit("Failed to update JSON with MS search results")
+                                
+                        except Exception as e:
+                            self.signals.log_message.emit(f"Error with new JSON exporter, using fallback: {str(e)}")
+                            
+                            # Fallback to old method
+                            integration_results = {'peaks': self.app.integrated_peaks}
+                            json_success = self.app._save_integration_json(integration_results)
+                            
+                            if json_success:
+                                csv_filename = os.path.join(current_dir, "RESULTS.CSV")
+                                self.app.export_results_csv(csv_filename)
+                                self.save_success = True
+                            
                     except Exception as e:
                         self.signals.log_message.emit(f"Error saving results: {str(e)}")
                     finally:
@@ -545,7 +572,65 @@ class AutomationWorker(QRunnable):
             return False
     
     def _save_integration_json_no_ui(self, integration_results, data_dir_path):
-        """Save integration results to JSON without updating UI."""
+        """Save integration results using export manager."""
+        try:
+            # Use export manager if available
+            if hasattr(self.app, 'export_manager'):
+                detector = "Unknown"  # Default fallback
+                if hasattr(self.app, 'data_handler') and hasattr(self.app.data_handler, 'current_detector'):
+                    detector = self.app.data_handler.current_detector
+                
+                # Use export manager for batch processing
+                export_result = self.app.export_manager.export_during_batch(
+                    integration_results.get('peaks', []),
+                    data_dir_path,
+                    detector
+                )
+                
+                success = export_result.get('json', False) or export_result.get('csv', False)
+                if success:
+                    messages = [msg for msg in export_result['messages'] if 'successfully' in msg or 'exported' in msg]
+                    if messages:
+                        self.signals.log_message.emit(f"Integration results exported: {'; '.join(messages)}")
+                    else:
+                        self.signals.log_message.emit("Integration results saved")
+                else:
+                    self.signals.log_message.emit("Failed to export integration results")
+                
+                return success
+            else:
+                # Fallback to old method
+                from logic.json_exporter import export_integration_results_to_json
+                
+                # Get detector name from app if available
+                detector = "Unknown"  # Default fallback
+                if hasattr(self.app, 'data_handler') and hasattr(self.app.data_handler, 'current_detector'):
+                    detector = self.app.data_handler.current_detector
+                
+                # Export using the new module
+                success = export_integration_results_to_json(
+                    integration_results.get('peaks', []),
+                    data_dir_path,
+                    detector
+                )
+            
+            if success:
+                self.signals.log_message.emit("Integration results saved to JSON")
+            
+            return success
+            
+        except Exception as e:
+            self.signals.log_message.emit(f"Error saving integration results: {str(e)}")
+            
+            # Fallback to original method if new one fails
+            try:
+                return self._save_integration_json_no_ui_fallback(integration_results, data_dir_path)
+            except Exception as e2:
+                self.signals.log_message.emit(f"Fallback method also failed: {str(e2)}")
+                return False
+
+    def _save_integration_json_no_ui_fallback(self, integration_results, data_dir_path):
+        """Fallback method for saving integration results to JSON."""
         try:
             # Similar to the original method but without StatusBar updates
             # Get the JSON data structure ready
@@ -553,8 +638,8 @@ class AutomationWorker(QRunnable):
                 'sample_id': os.path.basename(data_dir_path),
                 'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 'method': "Unknown",
-                'detector': "FID1A",
-                'signal': f"Signal: {os.path.basename(data_dir_path)}\\FID1A.ch",
+                'detector': "Unknown",
+                'signal': f"Signal: {os.path.basename(data_dir_path)}\\Unknown.ch",
                 'notebook': os.path.basename(data_dir_path),
                 'peaks': []
             }
