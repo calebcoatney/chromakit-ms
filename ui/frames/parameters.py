@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtCore import QRegularExpression
 import numpy as np
+import numpy as np
 
 class ParametersFrame(QWidget):
     """Frame containing integration parameters for chromatogram processing."""
@@ -48,6 +49,13 @@ class ParametersFrame(QWidget):
                 'min_prominence': 1e5,  # Changed from 0.5 to 1e5
                 'min_height': 0.0,
                 'min_width': 0.0
+            },
+            'shoulders': {
+                'enabled': False,
+                'window_length': 41,
+                'polyorder': 3,
+                'height_factor': 0.02,
+                'apex_distance': 10
             }
         }
         
@@ -73,6 +81,9 @@ class ParametersFrame(QWidget):
         
         # Add peaks group
         self._init_peaks_controls()
+        
+        # Add shoulder detection group
+        self._init_shoulder_controls()
         
         # Add stretch at the end to push everything to the top
         self.params_layout.addStretch()
@@ -282,6 +293,141 @@ class ParametersFrame(QWidget):
         # Add to parameters layout
         self.params_layout.addWidget(peaks_group)
     
+    def _init_shoulder_controls(self):
+        """Initialize shoulder detection controls"""
+        shoulder_group = QGroupBox("Shoulder Detection")
+        form_layout = QFormLayout(shoulder_group)
+        
+        # Enable/disable checkbox
+        self.shoulders_enabled = QCheckBox("Enable Shoulder Detection")
+        self.shoulders_enabled.setChecked(self.current_params['shoulders']['enabled'])
+        self.shoulders_enabled.stateChanged.connect(self._on_shoulders_toggled)
+        form_layout.addRow(self.shoulders_enabled)
+        
+        # Add explanation
+        shoulder_info = QLabel("Uses derivative analysis to detect shoulder peaks.\nRequires Peak Detection to be enabled.")
+        shoulder_info.setStyleSheet("color: #666666; font-size: 10px;")
+        form_layout.addRow("", shoulder_info)
+        
+        # Smoothing parameters for shoulder detection
+        smoothing_frame = QFrame()
+        smoothing_frame.setFrameStyle(QFrame.Box)
+        smoothing_layout = QFormLayout(smoothing_frame)
+        
+        # Window length for shoulder detection smoothing
+        window_container = QWidget()
+        window_layout = QHBoxLayout(window_container)
+        window_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.shoulder_window_slider = QSlider(Qt.Horizontal)
+        self.shoulder_window_slider.setMinimum(5)
+        self.shoulder_window_slider.setMaximum(101)
+        self.shoulder_window_slider.setValue(self.current_params['shoulders']['window_length'])
+        self.shoulder_window_slider.setSingleStep(2)
+        self.shoulder_window_slider.setTickPosition(QSlider.TicksBelow)
+        self.shoulder_window_slider.valueChanged.connect(self._on_shoulder_window_changed)
+        
+        self.shoulder_window_spinbox = QSpinBox()
+        self.shoulder_window_spinbox.setMinimum(5)
+        self.shoulder_window_spinbox.setMaximum(101)
+        self.shoulder_window_spinbox.setValue(self.current_params['shoulders']['window_length'])
+        self.shoulder_window_spinbox.setSingleStep(2)
+        self.shoulder_window_spinbox.valueChanged.connect(self.shoulder_window_slider.setValue)
+        
+        window_layout.addWidget(self.shoulder_window_slider, 3)
+        window_layout.addWidget(self.shoulder_window_spinbox, 1)
+        
+        smoothing_layout.addRow("Smoothing Window:", window_container)
+        
+        # Polynomial order
+        polyorder_container = QWidget()
+        polyorder_layout = QHBoxLayout(polyorder_container)
+        polyorder_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.shoulder_polyorder_slider = QSlider(Qt.Horizontal)
+        self.shoulder_polyorder_slider.setMinimum(1)
+        self.shoulder_polyorder_slider.setMaximum(5)
+        self.shoulder_polyorder_slider.setValue(self.current_params['shoulders']['polyorder'])
+        self.shoulder_polyorder_slider.setTickPosition(QSlider.TicksBelow)
+        self.shoulder_polyorder_slider.valueChanged.connect(self._on_shoulder_polyorder_changed)
+        
+        self.shoulder_polyorder_spinbox = QSpinBox()
+        self.shoulder_polyorder_spinbox.setMinimum(1)
+        self.shoulder_polyorder_spinbox.setMaximum(5)
+        self.shoulder_polyorder_spinbox.setValue(self.current_params['shoulders']['polyorder'])
+        self.shoulder_polyorder_spinbox.valueChanged.connect(self.shoulder_polyorder_slider.setValue)
+        
+        polyorder_layout.addWidget(self.shoulder_polyorder_slider, 3)
+        polyorder_layout.addWidget(self.shoulder_polyorder_spinbox, 1)
+        
+        smoothing_layout.addRow("Polynomial Order:", polyorder_container)
+        
+        form_layout.addRow("Smoothing for Detection:", smoothing_frame)
+        
+        # Shoulder detection parameters
+        detection_frame = QFrame()
+        detection_frame.setFrameStyle(QFrame.Box)
+        detection_layout = QFormLayout(detection_frame)
+        
+        # Shoulder height factor
+        height_container = QWidget()
+        height_layout = QHBoxLayout(height_container)
+        height_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.shoulder_height_slider = QSlider(Qt.Horizontal)
+        self.shoulder_height_slider.setMinimum(1)
+        self.shoulder_height_slider.setMaximum(10)
+        height_value = int(self.current_params['shoulders']['height_factor'] * 100)
+        self.shoulder_height_slider.setValue(height_value)
+        self.shoulder_height_slider.setTickPosition(QSlider.TicksBelow)
+        self.shoulder_height_slider.valueChanged.connect(self._on_shoulder_height_changed)
+        
+        self.shoulder_height_spinbox = QDoubleSpinBox()
+        self.shoulder_height_spinbox.setMinimum(0.01)
+        self.shoulder_height_spinbox.setMaximum(0.10)
+        self.shoulder_height_spinbox.setSingleStep(0.01)
+        self.shoulder_height_spinbox.setDecimals(2)
+        self.shoulder_height_spinbox.setValue(self.current_params['shoulders']['height_factor'])
+        self.shoulder_height_spinbox.valueChanged.connect(self._on_shoulder_height_spinbox_changed)
+        
+        height_container.setLayout(height_layout)
+        height_layout.addWidget(self.shoulder_height_slider, 3)
+        height_layout.addWidget(self.shoulder_height_spinbox, 1)
+        
+        detection_layout.addRow("Shoulder Sensitivity:", height_container)
+        
+        # Apex-shoulder distance
+        distance_container = QWidget()
+        distance_layout = QHBoxLayout(distance_container)
+        distance_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.shoulder_distance_slider = QSlider(Qt.Horizontal)
+        self.shoulder_distance_slider.setMinimum(5)
+        self.shoulder_distance_slider.setMaximum(30)
+        self.shoulder_distance_slider.setValue(self.current_params['shoulders']['apex_distance'])
+        self.shoulder_distance_slider.setTickPosition(QSlider.TicksBelow)
+        self.shoulder_distance_slider.valueChanged.connect(self._on_shoulder_distance_changed)
+        
+        self.shoulder_distance_spinbox = QSpinBox()
+        self.shoulder_distance_spinbox.setMinimum(5)
+        self.shoulder_distance_spinbox.setMaximum(30)
+        self.shoulder_distance_spinbox.setValue(self.current_params['shoulders']['apex_distance'])
+        self.shoulder_distance_spinbox.valueChanged.connect(self.shoulder_distance_slider.setValue)
+        
+        distance_container.setLayout(distance_layout)
+        distance_layout.addWidget(self.shoulder_distance_slider, 3)
+        distance_layout.addWidget(self.shoulder_distance_spinbox, 1)
+        
+        detection_layout.addRow("Min Apex-Shoulder Distance:", distance_container)
+        
+        form_layout.addRow("Detection Parameters:", detection_frame)
+        
+        # Enable/disable controls based on initial state
+        self._update_shoulder_controls_state()
+        
+        # Add to parameters layout
+        self.params_layout.addWidget(shoulder_group)
+
     def update_lam_visibility(self):
         """Show/hide lambda controls based on the current algorithm"""
         method = self.baseline_algorithm.currentData()
@@ -304,6 +450,27 @@ class ParametersFrame(QWidget):
         enabled = self.peaks_enabled.isChecked()
         self.prominence_entry.setEnabled(enabled)
     
+    def _update_shoulder_controls_state(self):
+        """Update enabled state of shoulder controls"""
+        shoulder_enabled = self.shoulders_enabled.isChecked()
+        peak_enabled = self.peaks_enabled.isChecked()
+        
+        # Shoulder detection requires peak detection to be enabled
+        overall_enabled = shoulder_enabled and peak_enabled
+        
+        # Enable shoulder checkbox only if peaks are enabled
+        self.shoulders_enabled.setEnabled(peak_enabled)
+        
+        # Enable/disable all shoulder detection controls
+        self.shoulder_window_slider.setEnabled(overall_enabled)
+        self.shoulder_window_spinbox.setEnabled(overall_enabled)
+        self.shoulder_polyorder_slider.setEnabled(overall_enabled)
+        self.shoulder_polyorder_spinbox.setEnabled(overall_enabled)
+        self.shoulder_height_slider.setEnabled(overall_enabled)
+        self.shoulder_height_spinbox.setEnabled(overall_enabled)
+        self.shoulder_distance_slider.setEnabled(overall_enabled)
+        self.shoulder_distance_spinbox.setEnabled(overall_enabled)
+
     def _on_smoothing_toggled(self, state):
         """Handle smoothing enable/disable toggle"""
         enabled = bool(state)
@@ -402,29 +569,15 @@ class ParametersFrame(QWidget):
         enabled = bool(state)
         self.current_params['peaks']['enabled'] = enabled
         self._update_peaks_controls_state()
+        self._update_shoulder_controls_state()  # Also update shoulder controls
         self.parameters_changed.emit(self.current_params)
     
-    def _on_prominence_entry_changed(self):
-        """Handle prominence entry change with validation"""
-        text = self.prominence_entry.text()
-        try:
-            # Try to convert the text to a float
-            value = float(text)
-            
-            # Update parameters
-            self.current_params['peaks']['min_prominence'] = value
-            
-            # Provide visual feedback
-            self.prominence_entry.setStyleSheet("background-color: #e6f2ff; border: 1px solid #99ccff;")
-            QTimer.singleShot(800, lambda: self.prominence_entry.setStyleSheet(""))
-            
-            # Emit signal for parameter change
-            self.parameters_changed.emit(self.current_params)
-            
-        except ValueError:
-            # Invalid input - show red feedback
-            self.prominence_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
-            QTimer.singleShot(800, lambda: self.prominence_entry.setStyleSheet(""))
+    def _on_shoulders_toggled(self, state):
+        """Handle shoulder detection enable/disable toggle"""
+        enabled = bool(state)
+        self.current_params['shoulders']['enabled'] = enabled
+        self._update_shoulder_controls_state()
+        self.parameters_changed.emit(self.current_params)
     
     def _on_ms_baseline_clicked(self):
         """Signal that MS baseline correction button was clicked."""
@@ -452,3 +605,70 @@ class ParametersFrame(QWidget):
             print("TIC alignment disabled")
         
         self.parameters_changed.emit(self.current_params)
+    
+    def _on_shoulders_toggled(self, state):
+        """Handle shoulder detection enable/disable toggle"""
+        enabled = bool(state)
+        self.current_params['shoulders']['enabled'] = enabled
+        self._update_shoulder_controls_state()
+        self.parameters_changed.emit(self.current_params)
+    
+    def _on_shoulder_window_changed(self, value):
+        """Handle shoulder detection window length change"""
+        # Ensure value is odd
+        if value % 2 == 0:
+            value += 1
+        self.shoulder_window_slider.setValue(value)
+        self.shoulder_window_spinbox.setValue(value)
+        self.current_params['shoulders']['window_length'] = value
+        self.parameters_changed.emit(self.current_params)
+    
+    def _on_shoulder_polyorder_changed(self, value):
+        """Handle shoulder detection polynomial order change"""
+        self.shoulder_polyorder_slider.setValue(value)
+        self.shoulder_polyorder_spinbox.setValue(value)
+        self.current_params['shoulders']['polyorder'] = value
+        self.parameters_changed.emit(self.current_params)
+    
+    def _on_shoulder_height_changed(self, value):
+        """Handle shoulder height factor slider change"""
+        height_factor = value / 100.0  # Convert to decimal
+        self.shoulder_height_spinbox.setValue(height_factor)
+        self.current_params['shoulders']['height_factor'] = height_factor
+        self.parameters_changed.emit(self.current_params)
+    
+    def _on_shoulder_height_spinbox_changed(self, value):
+        """Handle shoulder height factor spinbox change"""
+        slider_value = int(value * 100)
+        self.shoulder_height_slider.setValue(slider_value)
+        self.current_params['shoulders']['height_factor'] = value
+        self.parameters_changed.emit(self.current_params)
+    
+    def _on_shoulder_distance_changed(self, value):
+        """Handle shoulder apex-distance change"""
+        self.shoulder_distance_slider.setValue(value)
+        self.shoulder_distance_spinbox.setValue(value)
+        self.current_params['shoulders']['apex_distance'] = value
+        self.parameters_changed.emit(self.current_params)
+    
+    def _on_prominence_entry_changed(self):
+        """Handle prominence entry change with validation"""
+        text = self.prominence_entry.text()
+        try:
+            # Try to convert the text to a float
+            value = float(text)
+            
+            # Update parameters
+            self.current_params['peaks']['min_prominence'] = value
+            
+            # Provide visual feedback
+            self.prominence_entry.setStyleSheet("background-color: #e6f2ff; border: 1px solid #99ccff;")
+            QTimer.singleShot(800, lambda: self.prominence_entry.setStyleSheet(""))
+            
+            # Emit signal for parameter change
+            self.parameters_changed.emit(self.current_params)
+            
+        except ValueError:
+            # Invalid input - show red feedback
+            self.prominence_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
+            QTimer.singleShot(800, lambda: self.prominence_entry.setStyleSheet(""))

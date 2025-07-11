@@ -29,6 +29,9 @@ class Peak:
         self.is_convoluted = False
         self.quality_issues = []
         
+        # Add shoulder flag
+        self.is_shoulder = False
+        
         # Add saturation properties
         self.is_saturated = False
         self.saturation_level = None
@@ -63,7 +66,8 @@ class Peak:
             'asymmetry': self.asymmetry,
             'spectral_coherence': self.spectral_coherence,
             'is_saturated': self.is_saturated,
-            'saturation_level': self.saturation_level
+            'saturation_level': self.saturation_level,
+            'is_shoulder': getattr(self, 'is_shoulder', False)
         }
         
         # Add quality issues
@@ -138,6 +142,86 @@ class Integrator:
         return f"Unknown ({retention_time:.3f})"
     
     @staticmethod
+    def _calculate_derivatives(x, y, window_length=41, polyorder=3):
+        """Calculate first and second derivatives using Savitzky-Golay filter.
+        
+        Args:
+            x: Array of x values
+            y: Array of y values
+            window_length: Window length for Savitzky-Golay filter
+            polyorder: Polynomial order for Savitzky-Golay filter
+            
+        Returns:
+            tuple: (dy, d2y) first and second derivatives
+        """
+        from scipy.signal import savgol_filter
+        
+        # Ensure valid smoothing parameters
+        data_length = len(y)
+        if window_length >= data_length:
+            window_length = min(data_length - 1, 41)
+            if window_length % 2 == 0:
+                window_length -= 1
+        elif window_length % 2 == 0:
+            window_length += 1
+        if polyorder >= window_length:
+            polyorder = window_length - 1
+            
+        # Smooth signal for derivative calculation
+        y_smooth = savgol_filter(y, window_length, polyorder)
+        
+        # Calculate derivatives
+        dy = np.gradient(y_smooth, x)
+        d2y = np.gradient(dy, x)
+        
+        return dy, d2y
+    
+    @staticmethod
+    def _find_second_derivative_bounds(x, y, apex_idx, dy=None, d2y=None, window_length=41, polyorder=3):
+        """Find integration bounds using second derivative maxima.
+        
+        Args:
+            x: Array of x values
+            y: Array of y values
+            apex_idx: Index of the peak apex
+            dy: First derivative (optional, will calculate if not provided)
+            d2y: Second derivative (optional, will calculate if not provided)
+            window_length: Window length for Savitzky-Golay filter
+            polyorder: Polynomial order for Savitzky-Golay filter
+            
+        Returns:
+            tuple: (left_bound_idx, right_bound_idx)
+        """
+        from scipy.signal import find_peaks
+        
+        # Calculate derivatives if not provided
+        if dy is None or d2y is None:
+            dy, d2y = Integrator._calculate_derivatives(x, y, window_length, polyorder)
+        
+        # Find local maxima in second derivative (curvature change points)
+        maxima_indices, _ = find_peaks(d2y)
+        
+        # Find left bound: largest maxima index < apex_idx
+        left_bound = None
+        left_candidates = maxima_indices[maxima_indices < apex_idx]
+        if len(left_candidates) > 0:
+            left_bound = int(np.max(left_candidates))
+        
+        # Find right bound: smallest maxima index > apex_idx
+        right_bound = None
+        right_candidates = maxima_indices[maxima_indices > apex_idx]
+        if len(right_candidates) > 0:
+            right_bound = int(np.min(right_candidates))
+        
+        # Fallbacks if bounds not found
+        if left_bound is None:
+            left_bound = max(0, apex_idx - 20)  # Default to 20 points left
+        if right_bound is None:
+            right_bound = min(len(y) - 1, apex_idx + 20)  # Default to 20 points right
+        
+        return left_bound, right_bound
+    
+    @staticmethod
     def integrate(processed_data, rt_table=None, chemstation_area_factor=0.0784, verbose=True, ms_data=None, quality_options=None):
         """Integrate peaks in a chromatogram.
         
@@ -154,10 +238,21 @@ class Integrator:
         """
         # Extract relevant values from the processed data
         x = processed_data['x']
-        y = processed_data.get('smoothed_y', processed_data.get('original_y'))
+        y = processed_data.get('smoothed_y', processed_data.get('original_y', processed_data.get('corrected_y')))
         baseline_y = processed_data['baseline_y']
         peaks_x = processed_data['peaks_x']
         peaks_y = processed_data['peaks_y']
+        
+        # Check if we have peak metadata with shoulder information
+        has_shoulder_info = 'peak_metadata' in processed_data and processed_data['peak_metadata']
+        peak_metadata = processed_data.get('peak_metadata', [])
+        
+        # IMPORTANT: For integration, we need to use the baseline-corrected signal (corrected_y)
+        # regardless of what signal was used for peak detection
+        integration_signal = processed_data.get('corrected_y', y)
+        
+        # Calculate derivatives for bound detection using the integration signal
+        dy, d2y = Integrator._calculate_derivatives(x, integration_signal)
         
         # Integration criteria
         criteria = ['threshold', 'minimum']
@@ -171,103 +266,158 @@ class Integrator:
         y_peaks = []
         baseline_peaks = []
         
+        # First, identify shoulders and their bounds
+        shoulder_bounds = {}  # Index to (left_bound, right_bound)
+        shoulder_indices = []  # Indices of shoulders
+        
+        if has_shoulder_info:
+            for i, meta in enumerate(peak_metadata):
+                if meta.get('is_shoulder', False):
+                    idx = meta.get('index')
+                    shoulder_indices.append(idx)
+                    
+                    # Get pre-calculated bounds if available
+                    left_bound = meta.get('left_bound')
+                    right_bound = meta.get('right_bound')
+                    
+                    # If bounds not in metadata, calculate them using second derivative
+                    if left_bound is None or right_bound is None:
+                        left_bound, right_bound = Integrator._find_second_derivative_bounds(
+                            x, integration_signal, idx, dy, d2y
+                        )
+                    
+                    shoulder_bounds[idx] = (left_bound, right_bound)
+        
         # Iterate through each peak for integration
         for i, (apex_x, apex_y) in enumerate(zip(peaks_x, peaks_y)):
             # Find the index of the apex in x and y arrays
             peak_idx = np.where(x == apex_x)[0][0]
             baseline_at_apex = baseline_y[peak_idx]
             
-            # Initialize left and right bounds based on peak apex
-            left_bound = peak_idx
-            right_bound = peak_idx
+            # Check if this peak is a shoulder
+            is_shoulder = peak_idx in shoulder_indices
             
-            # Define the range for min_left and min_right calculations
-            if i > 0:  # If not the first peak
-                # Find the index of the previous peak's x value in the x array
-                start_idx = np.where(x == peaks_x[i - 1])[0][0] if np.any(x == peaks_x[i - 1]) else None
-                if start_idx is not None:
-                    min_left = start_idx + np.argmin(y[start_idx:peak_idx])
+            # Get bounds based on peak type
+            if is_shoulder and peak_idx in shoulder_bounds:
+                # If it's a shoulder, use the second derivative bounds
+                left_bound, right_bound = shoulder_bounds[peak_idx]
+            else:
+                # For regular peaks, use standard approach but with shoulder awareness
+                # Initialize left and right bounds based on peak apex
+                left_bound = peak_idx
+                right_bound = peak_idx
+                
+                # Define the range for min_left and min_right calculations
+                if i > 0:  # If not the first peak
+                    # Find the index of the previous peak's x value in the x array
+                    start_idx = np.where(x == peaks_x[i - 1])[0][0] if np.any(x == peaks_x[i - 1]) else None
+                    if start_idx is not None:
+                        min_left = start_idx + np.argmin(integration_signal[start_idx:peak_idx])
+                    else:
+                        min_left = 0
                 else:
                     min_left = 0
-            else:
-                min_left = 0
-            
-            if i < len(peaks_x) - 1:  # If not the last peak
-                # Find the index of the next peak's x value in the x array
-                end_idx = np.where(x == peaks_x[i + 1])[0][0] if np.any(x == peaks_x[i + 1]) else None
-                if end_idx is not None:
-                    min_right = peak_idx + np.argmin(y[peak_idx:end_idx])
+                
+                if i < len(peaks_x) - 1:  # If not the last peak
+                    # Find the index of the next peak's x value in the x array
+                    end_idx = np.where(x == peaks_x[i + 1])[0][0] if np.any(x == peaks_x[i + 1]) else None
+                    if end_idx is not None:
+                        min_right = peak_idx + np.argmin(integration_signal[peak_idx:end_idx])
+                    else:
+                        min_right = len(integration_signal) - 1
                 else:
-                    min_right = len(y) - 1
-            else:
-                min_right = len(y) - 1
-            
-            # Calculate vertical distance between apex and baseline
-            vertical_distance = apex_y - baseline_at_apex
-            threshold = vertical_distance * 0.0025  # 0.25% threshold for signal proximity to baseline
-            
-            dx = 25  # Step size for slope calculation
-            
-            # Calculate the left bound using the specified criteria
-            previous_slope = None
-            for j in range(peak_idx, 2, -1):
-                diff = y[j] - baseline_y[j]
+                    min_right = len(integration_signal) - 1
                 
-                # Central difference approximation
-                if j >= dx and j < len(y) - dx:
-                    slope = (y[j] - y[j - dx]) / (x[j] - x[j - dx])
-                else:
-                    # Edge case fallback to first-order difference
-                    slope = (y[j] - y[j - 1]) / (x[j] - x[j - 1])
+                # Calculate vertical distance between apex and baseline
+                vertical_distance = apex_y - baseline_at_apex
+                threshold = vertical_distance * 0.0025  # 0.25% threshold for signal proximity to baseline
                 
-                # Check based on provided criteria
-                if 'threshold' in criteria and diff <= threshold:
-                    left_bound = j
-                    break
+                dx = 25  # Step size for slope calculation
                 
-                if 'minimum' in criteria and j == min_left:
-                    left_bound = j
-                    break
+                # Check for shoulder to the left that would limit this peak's left bound
+                left_limit_by_shoulder = None
+                for s_idx, s_bounds in shoulder_bounds.items():
+                    # If shoulder apex is to the left of this peak and its right bound is after this peak's min_left
+                    if s_idx < peak_idx and s_bounds[1] > min_left:
+                        left_limit_by_shoulder = s_bounds[1]
                 
-                if 'slope' in criteria and previous_slope is not None and np.sign(slope) != np.sign(previous_slope):
-                    left_bound = j
-                    break
+                # Calculate the left bound using the specified criteria
+                previous_slope = None
+                for j in range(peak_idx, 2, -1):
+                    diff = integration_signal[j] - baseline_y[j]
+                    
+                    # If we've hit a shoulder's right bound, stop
+                    if left_limit_by_shoulder is not None and j <= left_limit_by_shoulder:
+                        left_bound = max(j, left_limit_by_shoulder)
+                        break
+                    
+                    # Central difference approximation
+                    if j >= dx and j < len(integration_signal) - dx:
+                        slope = (integration_signal[j] - integration_signal[j - dx]) / (x[j] - x[j - dx])
+                    else:
+                        # Edge case fallback to first-order difference
+                        slope = (integration_signal[j] - integration_signal[j - 1]) / (x[j] - x[j - 1])
+                    
+                    # Check based on provided criteria
+                    if 'threshold' in criteria and diff <= threshold:
+                        left_bound = j
+                        break
+                    
+                    if 'minimum' in criteria and j == min_left:
+                        left_bound = j
+                        break
+                    
+                    if 'slope' in criteria and previous_slope is not None and np.sign(slope) != np.sign(previous_slope):
+                        left_bound = j
+                        break
+                    
+                    previous_slope = slope
                 
-                previous_slope = slope
-            
-            # Calculate the right bound similarly
-            previous_slope = None
-            for j in range(peak_idx, len(y) - 3):
-                diff = y[j] - baseline_y[j]
+                # Check for shoulder to the right that would limit this peak's right bound
+                right_limit_by_shoulder = None
+                for s_idx, s_bounds in shoulder_bounds.items():
+                    # If shoulder apex is to the right of this peak and its left bound is before this peak's min_right
+                    if s_idx > peak_idx and s_bounds[0] < min_right:
+                        right_limit_by_shoulder = s_bounds[0]
                 
-                # Central difference approximation
-                if j >= dx and j < len(y) - dx:
-                    slope = (y[j + dx] - y[j]) / (x[j + dx] - x[j])
-                else:
-                    # Edge case fallback to first-order difference
-                    slope = (y[j + 1] - y[j]) / (x[j + 1] - x[j])
-                
-                # Check based on provided criteria
-                if 'threshold' in criteria and diff <= threshold:
-                    right_bound = j
-                    break
-                
-                if 'minimum' in criteria and j == min_right:
-                    right_bound = j
-                    break
-                
-                if 'slope' in criteria and previous_slope is not None and np.sign(slope) != np.sign(previous_slope):
-                    right_bound = j
-                    break
-                
-                previous_slope = slope
+                # Calculate the right bound similarly
+                previous_slope = None
+                for j in range(peak_idx, len(integration_signal) - 3):
+                    diff = integration_signal[j] - baseline_y[j]
+                    
+                    # If we've hit a shoulder's left bound, stop
+                    if right_limit_by_shoulder is not None and j >= right_limit_by_shoulder:
+                        right_bound = min(j, right_limit_by_shoulder)
+                        break
+                    
+                    # Central difference approximation
+                    if j >= dx and j < len(integration_signal) - dx:
+                        slope = (integration_signal[j + dx] - integration_signal[j]) / (x[j + dx] - x[j])
+                    else:
+                        # Edge case fallback to first-order difference
+                        slope = (integration_signal[j + 1] - integration_signal[j]) / (x[j + 1] - x[j])
+                    
+                    # Check based on provided criteria
+                    if 'threshold' in criteria and diff <= threshold:
+                        right_bound = j
+                        break
+                    
+                    if 'minimum' in criteria and j == min_right:
+                        right_bound = j
+                        break
+                    
+                    if 'slope' in criteria and previous_slope is not None and np.sign(slope) != np.sign(previous_slope):
+                        right_bound = j
+                        break
+                    
+                    previous_slope = slope
             
             # Append retention time at the peak (apex)
             ret_times.append(apex_x)
             
             # Extract data for integration
             x_peak = x[left_bound:right_bound + 1]
-            y_peak = y[left_bound:right_bound + 1]
+            y_peak = integration_signal[left_bound:right_bound + 1]
             baseline_peak = baseline_y[left_bound:right_bound + 1]
             
             x_peaks.append(x_peak)
@@ -299,9 +449,13 @@ class Integrator:
             peak = Peak(compound_id, peak_number, retention_time,
                         integrator, width, area, start_time, end_time)
             
+            # Add shoulder flag if applicable
+            if has_shoulder_info:
+                peak.is_shoulder = is_shoulder
+            
             # Assess peak quality if MS data is available and quality checks are enabled
             if ms_data is not None and quality_options and quality_options.get('quality_checks_enabled', False):
-                quality = assess_peak_quality(peak, x, y, ms_data, quality_options)
+                quality = assess_peak_quality(peak, x, integration_signal, ms_data, quality_options)
                 peak.asymmetry = quality['asymmetry']
                 peak.spectral_coherence = quality['spectral_coherence']
                 peak.is_convoluted = quality['is_convoluted']

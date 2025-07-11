@@ -184,6 +184,9 @@ class PlotFrame(QWidget):
         peaks_x = data['peaks_x']
         peaks_y = data['peaks_y']
         
+        # Get fitted curves if available
+        fitted_curves = data.get('fitted_curves', [])
+        
         # Choose which data to display based on show_corrected flag
         if show_corrected:
             # Show corrected signal (baseline will be at zero)
@@ -202,20 +205,29 @@ class PlotFrame(QWidget):
         # Plot baseline
         self.chromatogram_ax.plot(x, baseline_to_show, 'r--', linewidth=1, alpha=0.7, label='Baseline')
         
-        # Plot peaks if available
-        if len(peaks_x) > 0:
-            if not show_corrected:
-                # Adjust peak heights to be on the raw/smoothed data
-                peak_indices = np.searchsorted(x, peaks_x)
-                peak_baselines = baseline[peak_indices]
-                adjusted_peaks_y = peaks_y + peak_baselines
-                self.chromatogram_ax.plot(peaks_x, adjusted_peaks_y, '*', 
-                                     color='orange', markersize=6, alpha=0.8, 
-                                     label='Peaks')
-            else:
-                self.chromatogram_ax.plot(peaks_x, peaks_y, '*', 
-                                     color='orange', markersize=6, alpha=0.8, 
-                                     label='Peaks')
+        # Plot detected peaks and shoulders using metadata
+        if 'peak_metadata' in data and len(data['peak_metadata']) > 0:
+            for meta in data['peak_metadata']:
+                # FIXED: Adjust marker position based on current view mode
+                marker_x = meta['x']
+                marker_y = meta['y']  # Original detected peak height
+                
+                # If showing uncorrected signal, need to add baseline value at this position
+                if not show_corrected and 'baseline_y' in data:
+                    # Find nearest point in the baseline array
+                    idx = np.abs(data['x'] - marker_x).argmin()
+                    if idx < len(data['baseline_y']):
+                        # When showing uncorrected view, add baseline height to marker position
+                        marker_y += data['baseline_y'][idx]
+                
+                if meta['type'] == 'peak':
+                    self.chromatogram_ax.plot(marker_x, marker_y, marker='*', color='orange', 
+                                         markersize=8, alpha=0.9, 
+                                         label='Peak' if 'Peak' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
+                elif meta['type'] == 'shoulder':
+                    self.chromatogram_ax.plot(marker_x, marker_y, marker='^', color='red', 
+                                         markersize=8, alpha=0.9, 
+                                         label='Shoulder' if 'Shoulder' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
         
         # Set labels and add legend
         self.chromatogram_ax.set_xlabel('Time (min)')
@@ -403,8 +415,6 @@ class PlotFrame(QWidget):
                         ax.yaxis.label.set_color(colors['label'])
                     if ax.title:
                         ax.title.set_color(colors['text'])
-                    
-                    ax.grid(True, linestyle='--', alpha=0.7, color=colors['grid'])
             
             # Force complete redraw
             self.canvas.draw()
@@ -619,11 +629,24 @@ class PlotFrame(QWidget):
                         if hasattr(collection, 'peak_highlight') and collection.peak_highlight:
                             collection.remove()
                     
+                    # FIXED: Check if we're showing corrected or original signal
+                    showing_corrected = self.chromatogram_ax.get_title() == 'Baseline-Corrected Chromatogram'
+                    
+                    # Adjust the shading based on the current view mode
+                    if showing_corrected:
+                        # For corrected view: Use the stored y_peaks and zero baseline
+                        shade_y = self.y_peaks[i]
+                        shade_baseline = np.zeros_like(self.baseline_peaks[i])
+                    else:
+                        # For uncorrected view: Adjust y_peaks back to raw signal
+                        shade_y = self.y_peaks[i] + self.baseline_peaks[i] 
+                        shade_baseline = self.baseline_peaks[i]
+                    
                     # Add a new shaded area with higher alpha
                     collection = self.chromatogram_ax.fill_between(
                         self.x_peaks[i],
-                        self.y_peaks[i],
-                        self.baseline_peaks[i],
+                        shade_y,
+                        shade_baseline,
                         alpha=0.8,  # Higher alpha for highlight
                         color='green',
                         label=f'_highlight_peak_{peak.peak_number}'
@@ -663,10 +686,13 @@ class PlotFrame(QWidget):
         xlim = self.chromatogram_ax.get_xlim() if not self.chromatogram_ax.get_autoscalex_on() else None
         ylim = self.chromatogram_ax.get_ylim() if not self.chromatogram_ax.get_autoscaley_on() else None
         
-        # Clear previous plot - redraw without the peak markers
+        # Determine if we're showing corrected or original signal
+        showing_corrected = self.chromatogram_ax.get_title() == 'Baseline-Corrected Chromatogram'
+        
+        # Clear previous plot - redraw without the peak markers, PRESERVING view state
         self.chromatogram_data['peaks_x'] = np.array([])
         self.chromatogram_data['peaks_y'] = np.array([])
-        self.plot_chromatogram(self.chromatogram_data, show_corrected=False)
+        self.plot_chromatogram(self.chromatogram_data, show_corrected=showing_corrected, new_file=False)
         
         # Import matplotlib's cm and create a colormap with good differentiation
         import matplotlib.cm as cm
@@ -698,11 +724,20 @@ class PlotFrame(QWidget):
                 linewidth = 0
                 edgecolor = None
             
-            # Shade the peak area
+            # Shade the peak area - adjust shading based on view mode
+            if showing_corrected:
+                # For corrected view: Use the stored y_peaks and zero baseline 
+                shade_y = self.y_peaks[i]
+                shade_baseline = np.zeros_like(self.baseline_peaks[i])
+            else:
+                # For uncorrected view: Adjust y_peaks back to raw signal
+                shade_y = self.y_peaks[i] + self.baseline_peaks[i] 
+                shade_baseline = self.baseline_peaks[i]
+            
             collection = self.chromatogram_ax.fill_between(
                 self.x_peaks[i],
-                self.y_peaks[i],
-                self.baseline_peaks[i],
+                shade_y,
+                shade_baseline,
                 alpha=0.4,
                 color=color,
                 label=f'Peak {i+1}' if i < 10 else '_nolegend_',
@@ -712,12 +747,14 @@ class PlotFrame(QWidget):
             # Store peak number for later identification
             collection.peak_number = i + 1
             
-            # Add warning marker for saturated or convoluted peaks
+            # Add warning marker for saturated or convoluted peaks - adjust position to match view
+            marker_y = shade_y[len(shade_y)//2]  # Use middle point height
+            
             if is_saturated:
                 # Use diamond marker for saturation
                 self.chromatogram_ax.plot(
                     peak.retention_time,
-                    self.y_peaks[i][len(self.y_peaks[i])//2],  # Approximate apex height
+                    marker_y,  # Match the current view's peak height
                     marker='D',  # Diamond marker for saturation
                     markersize=12,
                     markerfacecolor='purple',
@@ -729,7 +766,7 @@ class PlotFrame(QWidget):
                 # Use triangle marker for convolution
                 self.chromatogram_ax.plot(
                     peak.retention_time,
-                    self.y_peaks[i][len(self.y_peaks[i])//2],  # Approximate apex height
+                    marker_y,  # Match the current view's peak height
                     marker='^',  # Triangle marker
                     markersize=12,
                     markerfacecolor='red',
