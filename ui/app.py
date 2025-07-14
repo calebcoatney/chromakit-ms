@@ -1548,13 +1548,20 @@ class ChromaKitApp(QMainWindow):
 
     def on_automation_finished(self):
         """Handle automation completion."""
-        self.status_bar.showMessage("Automation completed")
+        # Check if automation was cancelled
+        was_cancelled = False
+        if hasattr(self, 'automation_worker') and self.automation_worker.cancelled:
+            was_cancelled = True
+            self.status_bar.showMessage("Automation cancelled")
+        else:
+            self.status_bar.showMessage("Automation completed")
         
-        # Add a completion message to the dialog
+        # Add appropriate message to the dialog
         if hasattr(self, 'automation_dialog') and self.automation_dialog.isVisible():
-            self.automation_dialog.add_log_message("✅ Automation completed successfully")
-            self.automation_dialog.cancel_button.setText("Close")
-            self.automation_dialog.cancel_button.setEnabled(True)
+            if was_cancelled:
+                self.automation_dialog.mark_cancelled()
+            else:
+                self.automation_dialog.mark_completed(success=True)
 
     def on_automation_error(self, error_message):
         """Handle automation error."""
@@ -1562,9 +1569,7 @@ class ChromaKitApp(QMainWindow):
         
         # Add error message to the dialog
         if hasattr(self, 'automation_dialog') and self.automation_dialog.isVisible():
-            self.automation_dialog.add_log_message(f"❌ Error: {error_message}")
-            self.automation_dialog.cancel_button.setText("Close")
-            self.automation_dialog.cancel_button.setEnabled(True)
+            self.automation_dialog.mark_error(error_message)
 
     # Add this helper method to create batch search workers
     def _create_batch_search_worker(self):

@@ -381,8 +381,17 @@ class ChromatogramProcessor:
         
         # Use provided processed data or attempt to get it from the current state
         if processed_data is None:
-            # Fallback to default parameters
-            processed_data = self.process(np.array([]), np.array([]), self.default_params)
+            print("ERROR: No processed data provided to integrate_peaks method")
+            return {
+                'peaks': [],
+                'x_peaks': [],
+                'y_peaks': [],
+                'baseline_peaks': [],
+                'retention_times': [],
+                'integrated_areas': [],
+                'integration_bounds': [],
+                'peaks_list': []
+            }
         
         # Check if we have peak data and valid arrays
         if ('peaks_x' not in processed_data or 

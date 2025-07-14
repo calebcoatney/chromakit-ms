@@ -243,16 +243,34 @@ class Integrator:
         peaks_x = processed_data['peaks_x']
         peaks_y = processed_data['peaks_y']
         
+        # Debug: Check if we have peaks to integrate
+        if verbose:
+            print(f"Integration starting: Found {len(peaks_x)} peaks to integrate")
+            if len(peaks_x) == 0:
+                print("ERROR: No peaks found in processed_data!")
+                print(f"Available keys in processed_data: {list(processed_data.keys())}")
+                return {
+                    'peaks': [],
+                    'x_peaks': [],
+                    'y_peaks': [],
+                    'baseline_peaks': [],
+                    'retention_times': [],
+                    'integrated_areas': [],
+                    'integration_bounds': [],
+                    'peaks_list': []
+                }
+        
         # Check if we have peak metadata with shoulder information
         has_shoulder_info = 'peak_metadata' in processed_data and processed_data['peak_metadata']
         peak_metadata = processed_data.get('peak_metadata', [])
         
-        # IMPORTANT: For integration, we need to use the baseline-corrected signal (corrected_y)
-        # regardless of what signal was used for peak detection
-        integration_signal = processed_data.get('corrected_y', y)
+        # IMPORTANT: Use the original signal for bounds detection to avoid double baseline subtraction
+        # The corrected signal will be used only for final area calculation
+        bounds_detection_signal = processed_data.get('original_y', y)
+        integration_signal = processed_data.get('corrected_y', y)  # Keep for area calculation
         
-        # Calculate derivatives for bound detection using the integration signal
-        dy, d2y = Integrator._calculate_derivatives(x, integration_signal)
+        # Calculate derivatives for bound detection using the bounds detection signal
+        dy, d2y = Integrator._calculate_derivatives(x, bounds_detection_signal)
         
         # Integration criteria
         criteria = ['threshold', 'minimum']
@@ -283,16 +301,23 @@ class Integrator:
                     # If bounds not in metadata, calculate them using second derivative
                     if left_bound is None or right_bound is None:
                         left_bound, right_bound = Integrator._find_second_derivative_bounds(
-                            x, integration_signal, idx, dy, d2y
+                            x, bounds_detection_signal, idx, dy, d2y
                         )
                     
                     shoulder_bounds[idx] = (left_bound, right_bound)
         
         # Iterate through each peak for integration
-        for i, (apex_x, apex_y) in enumerate(zip(peaks_x, peaks_y)):
+        for i, (apex_x, detected_apex_y) in enumerate(zip(peaks_x, peaks_y)):
             # Find the index of the apex in x and y arrays
             peak_idx = np.where(x == apex_x)[0][0]
             baseline_at_apex = baseline_y[peak_idx]
+            
+            # IMPORTANT: Use the bounds detection signal value at apex for threshold calculation
+            # This ensures consistency between apex height calculation and integration bounds
+            apex_y = bounds_detection_signal[peak_idx]
+            
+            # Define peak number early for use in verbose output
+            peak_number = i + 1
             
             # Check if this peak is a shoulder
             is_shoulder = peak_idx in shoulder_indices
@@ -312,7 +337,7 @@ class Integrator:
                     # Find the index of the previous peak's x value in the x array
                     start_idx = np.where(x == peaks_x[i - 1])[0][0] if np.any(x == peaks_x[i - 1]) else None
                     if start_idx is not None:
-                        min_left = start_idx + np.argmin(integration_signal[start_idx:peak_idx])
+                        min_left = start_idx + np.argmin(bounds_detection_signal[start_idx:peak_idx])
                     else:
                         min_left = 0
                 else:
@@ -322,15 +347,21 @@ class Integrator:
                     # Find the index of the next peak's x value in the x array
                     end_idx = np.where(x == peaks_x[i + 1])[0][0] if np.any(x == peaks_x[i + 1]) else None
                     if end_idx is not None:
-                        min_right = peak_idx + np.argmin(integration_signal[peak_idx:end_idx])
+                        min_right = peak_idx + np.argmin(bounds_detection_signal[peak_idx:end_idx])
                     else:
-                        min_right = len(integration_signal) - 1
+                        min_right = len(bounds_detection_signal) - 1
                 else:
-                    min_right = len(integration_signal) - 1
+                    min_right = len(bounds_detection_signal) - 1
                 
-                # Calculate vertical distance between apex and baseline
-                vertical_distance = apex_y - baseline_at_apex
-                threshold = vertical_distance * 0.0025  # 0.25% threshold for signal proximity to baseline
+                # Calculate vertical distance between apex and baseline (peak height)
+                apex_vertical_distance = apex_y - baseline_at_apex
+                
+                # Handle negative peaks (shouldn't happen but just in case)
+                if apex_vertical_distance < 0:
+                    apex_vertical_distance = abs(apex_vertical_distance)
+                
+                # The threshold is 0.25% of the apex height
+                threshold = apex_vertical_distance * 0.0025
                 
                 dx = 25  # Step size for slope calculation
                 
@@ -343,32 +374,39 @@ class Integrator:
                 
                 # Calculate the left bound using the specified criteria
                 previous_slope = None
+                left_stop_reason = "no_criteria_met"
                 for j in range(peak_idx, 2, -1):
-                    diff = integration_signal[j] - baseline_y[j]
+                    diff = bounds_detection_signal[j] - baseline_y[j]
                     
                     # If we've hit a shoulder's right bound, stop
                     if left_limit_by_shoulder is not None and j <= left_limit_by_shoulder:
                         left_bound = max(j, left_limit_by_shoulder)
+                        left_stop_reason = "shoulder_limit"
                         break
                     
                     # Central difference approximation
-                    if j >= dx and j < len(integration_signal) - dx:
-                        slope = (integration_signal[j] - integration_signal[j - dx]) / (x[j] - x[j - dx])
+                    if j >= dx and j < len(bounds_detection_signal) - dx:
+                        slope = (bounds_detection_signal[j] - bounds_detection_signal[j - dx]) / (x[j] - x[j - dx])
                     else:
                         # Edge case fallback to first-order difference
-                        slope = (integration_signal[j] - integration_signal[j - 1]) / (x[j] - x[j - 1])
+                        slope = (bounds_detection_signal[j] - bounds_detection_signal[j - 1]) / (x[j] - x[j - 1])
                     
                     # Check based on provided criteria
-                    if 'threshold' in criteria and diff <= threshold:
-                        left_bound = j
-                        break
+                    if 'threshold' in criteria:
+                        # Now using original signal - normal thresholding should work
+                        if diff <= threshold:
+                            left_bound = j
+                            left_stop_reason = f"threshold (diff={diff:.6f} <= {threshold:.6f})"
+                            break
                     
                     if 'minimum' in criteria and j == min_left:
                         left_bound = j
+                        left_stop_reason = "minimum"
                         break
                     
                     if 'slope' in criteria and previous_slope is not None and np.sign(slope) != np.sign(previous_slope):
                         left_bound = j
+                        left_stop_reason = f"slope_change (slope={slope:.6f}, prev_slope={previous_slope:.6f})"
                         break
                     
                     previous_slope = slope
@@ -382,50 +420,78 @@ class Integrator:
                 
                 # Calculate the right bound similarly
                 previous_slope = None
-                for j in range(peak_idx, len(integration_signal) - 3):
-                    diff = integration_signal[j] - baseline_y[j]
+                right_stop_reason = "no_criteria_met"
+                for j in range(peak_idx, len(bounds_detection_signal) - 3):
+                    diff = bounds_detection_signal[j] - baseline_y[j]
                     
                     # If we've hit a shoulder's left bound, stop
                     if right_limit_by_shoulder is not None and j >= right_limit_by_shoulder:
                         right_bound = min(j, right_limit_by_shoulder)
+                        right_stop_reason = "shoulder_limit"
                         break
                     
                     # Central difference approximation
-                    if j >= dx and j < len(integration_signal) - dx:
-                        slope = (integration_signal[j + dx] - integration_signal[j]) / (x[j + dx] - x[j])
+                    if j >= dx and j < len(bounds_detection_signal) - dx:
+                        slope = (bounds_detection_signal[j + dx] - bounds_detection_signal[j]) / (x[j + dx] - x[j])
                     else:
                         # Edge case fallback to first-order difference
-                        slope = (integration_signal[j + 1] - integration_signal[j]) / (x[j + 1] - x[j])
+                        slope = (bounds_detection_signal[j + 1] - bounds_detection_signal[j]) / (x[j + 1] - x[j])
                     
                     # Check based on provided criteria
-                    if 'threshold' in criteria and diff <= threshold:
-                        right_bound = j
-                        break
+                    if 'threshold' in criteria:
+                        # Now using original signal - normal thresholding should work
+                        if diff <= threshold:
+                            right_bound = j
+                            right_stop_reason = f"threshold (diff={diff:.6f} <= {threshold:.6f})"
+                            break
                     
                     if 'minimum' in criteria and j == min_right:
                         right_bound = j
+                        right_stop_reason = "minimum"
                         break
                     
                     if 'slope' in criteria and previous_slope is not None and np.sign(slope) != np.sign(previous_slope):
                         right_bound = j
+                        right_stop_reason = f"slope_change (slope={slope:.6f}, prev_slope={previous_slope:.6f})"
                         break
                     
                     previous_slope = slope
             
+            # Check for problematic case: bounds too close to apex (indicating premature stop)
+            if left_bound == peak_idx and right_bound == peak_idx:
+                print(f"WARNING: Peak {peak_number} at RT={apex_x:.3f} has zero-width integration!")
+                print(f"  Left stop reason: {left_stop_reason}")
+                print(f"  Right stop reason: {right_stop_reason}")
+                print(f"  Apex signal: {bounds_detection_signal[peak_idx]:.3f}, Baseline: {baseline_y[peak_idx]:.3f}")
+                print(f"  Threshold: {threshold:.6f}, Apex height: {apex_vertical_distance:.3f}")
+            elif abs(left_bound - peak_idx) <= 2 or abs(right_bound - peak_idx) <= 2:
+                print(f"WARNING: Peak {peak_number} at RT={apex_x:.3f} has very narrow integration bounds")
+                print(f"  Left bound: {left_bound} (apex: {peak_idx}) - {left_stop_reason}")
+                print(f"  Right bound: {right_bound} (apex: {peak_idx}) - {right_stop_reason}")
+                print(f"  Integration width: {abs(right_bound - left_bound)} points")
+                print(f"  Threshold: {threshold:.6f}, Apex height: {apex_vertical_distance:.3f}")
+            
             # Append retention time at the peak (apex)
             ret_times.append(apex_x)
             
-            # Extract data for integration
+            # Extract data for integration using the corrected signal for area calculation
             x_peak = x[left_bound:right_bound + 1]
-            y_peak = integration_signal[left_bound:right_bound + 1]
+            y_peak = integration_signal[left_bound:right_bound + 1]  # Use corrected signal for area
             baseline_peak = baseline_y[left_bound:right_bound + 1]
             
             x_peaks.append(x_peak)
             y_peaks.append(y_peak)
             baseline_peaks.append(baseline_peak)
             
-            # Correct the signal by subtracting the baseline
-            y_peak_corrected = y_peak - baseline_peak
+            # Check if integration_signal is already baseline-corrected
+            # If integration_signal is 'corrected_y', it's already baseline-subtracted
+            # If integration_signal is 'original_y', we need to subtract baseline
+            if 'corrected_y' in processed_data and np.array_equal(integration_signal, processed_data['corrected_y']):
+                # Signal is already baseline-corrected, use directly
+                y_peak_corrected = y_peak
+            else:
+                # Signal is not baseline-corrected, subtract baseline
+                y_peak_corrected = y_peak - baseline_peak
             
             # Calculate the integrated area using Simpson's rule
             area = simpson(y_peak_corrected, x=x_peak)

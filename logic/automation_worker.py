@@ -93,6 +93,17 @@ class AutomationWorker(QRunnable):
                         self.signals.file_completed.emit(filename, False, "Failed to integrate")
                         continue
                     
+                    # Step 2.5: Save integration results to JSON - 50% of one file's progress
+                    self._update_directory_progress(filename, "Saving integration results", 50)
+                    if hasattr(self.app, 'integrated_peaks') and self.app.integrated_peaks:
+                        current_dir = self.app.data_handler.current_directory_path
+                        integration_results = {'peaks': self.app.integrated_peaks}
+                        json_saved = self._save_integration_json_no_ui(integration_results, current_dir)
+                        if json_saved:
+                            self.signals.log_message.emit(f"Integration results saved to JSON for {filename}")
+                        else:
+                            self.signals.log_message.emit(f"Warning: Failed to save JSON for {filename}")
+                    
                     # Step 3: MS Library Search (if enabled) - 40% of one file's progress
                     # Check if MS search is enabled in batch options
                     ms_search_enabled = True  # Default if not specified
@@ -100,7 +111,7 @@ class AutomationWorker(QRunnable):
                         ms_search_enabled = self.app.batch_options['ms_search']
                     
                     if ms_search_enabled:
-                        self._update_directory_progress(filename, "MS Library Search", 60)
+                        self._update_directory_progress(filename, "MS Library Search", 70)
                         success = self._run_ms_search()
                         
                         if not success or self.cancelled:

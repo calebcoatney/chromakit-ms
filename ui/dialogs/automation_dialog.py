@@ -121,11 +121,50 @@ class AutomationDialog(QDialog):
     
     def on_cancel(self):
         """Handle cancel button click."""
+        # Check if this is a "Close" button (job completed) before changing text
+        if self.cancel_button.text() == "Close":
+            self.close()
+            return
+        
+        # Otherwise, this is a cancel request during processing
         self.add_log_message("Cancelling... (this may take a moment)")
         self.cancel_button.setEnabled(False)
         self.cancel_button.setText("Cancelling...")
         self.cancelled.emit()
+    
+    def mark_completed(self, success=True):
+        """Mark the automation as completed and change button to Close.
         
-        # If the dialog was requested to be closed via the "Close" button after completion
-        if self.cancel_button.text() == "Close":
-            self.close()
+        Args:
+            success: Whether the automation completed successfully
+        """
+        if success:
+            self.add_log_message("✅ Automation completed successfully")
+        else:
+            self.add_log_message("❌ Automation completed with errors")
+        
+        self.cancel_button.setText("Close")
+        self.cancel_button.setEnabled(True)
+        
+        # Update progress to show completion
+        self.overall_progress.setValue(100)
+        self.file_progress.setValue(100)
+        self.file_label.setText("<b>Completed</b>")
+
+    def mark_error(self, error_message):
+        """Mark the automation as having an error and change button to Close.
+        
+        Args:
+            error_message: The error message to display
+        """
+        self.add_log_message(f"❌ Error: {error_message}")
+        self.cancel_button.setText("Close")
+        self.cancel_button.setEnabled(True)
+        self.file_label.setText("<b>Error occurred</b>")
+    
+    def mark_cancelled(self):
+        """Mark the automation as cancelled and change button to Close."""
+        self.add_log_message("🛑 Automation cancelled by user")
+        self.cancel_button.setText("Close")
+        self.cancel_button.setEnabled(True)
+        self.file_label.setText("<b>Cancelled</b>")
