@@ -227,6 +227,30 @@ class ChromatogramProcessor:
                 shoulder_params=params.get('shoulders', {'enabled': False}),
                 smoothed_y=smoothed_for_detection
             )
+            
+            # SOLVENT DELAY FILTERING: Filter peaks based on MS data range
+            if ms_range is not None and len(peaks_x) > 0:
+                ms_min, ms_max = ms_range
+                # Create mask for peaks within MS data range (where MS data is available)
+                ms_range_mask = (peaks_x >= ms_min) & (peaks_x <= ms_max)
+                
+                # Count peaks being filtered out
+                filtered_count = len(peaks_x) - np.sum(ms_range_mask)
+                if filtered_count > 0:
+                    print(f"Solvent delay filtering: Removing {filtered_count} peaks outside MS range ({ms_min:.2f}-{ms_max:.2f} min)")
+                
+                # Apply the filter
+                peaks_x = peaks_x[ms_range_mask]
+                peaks_y = peaks_y[ms_range_mask]
+                
+                # Filter peak metadata if it exists
+                if peak_metadata and len(peak_metadata) > 0:
+                    # Filter metadata using list comprehension since it's a list of dicts
+                    filtered_metadata = []
+                    for i, keep in enumerate(ms_range_mask):
+                        if keep and i < len(peak_metadata):
+                            filtered_metadata.append(peak_metadata[i])
+                    peak_metadata = filtered_metadata
         
         # Return processed data
         return {

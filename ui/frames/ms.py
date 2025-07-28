@@ -43,6 +43,7 @@ class MSFrame(QWidget):
         # Initialize default search options
         self.search_options = {
             'search_method': 'vector',
+            'hybrid_method': 'auto',  # Default hybrid method
             'extraction_method': 'apex',
             'range_points': 5,
             'range_time': 0.05,
@@ -511,26 +512,85 @@ class MSFrame(QWidget):
             options = self.search_options
             
             # Search based on selected method
-            if options['search_method'] == 'vector':
-                # Configure vector search parameters
-                vector_results = self.ms_toolkit.search_vector(
-                    query_spectrum, 
-                    top_n=options['top_n'],
-                    composite=(options['similarity'] == 'composite'),
-                    weighting_scheme=options['weighting'],
-                    unmatched_method=options['unmatched'],
-                    top_k_clusters=options.get('top_k_clusters', 1)  # This is included here
-                )
-                w2v_results = []  # No W2V results if vector search is selected
-            else:
-                # Configure Word2Vec search parameters
-                w2v_results = self.ms_toolkit.search_w2v(
-                    query_spectrum, 
-                    top_n=options['top_n'],
-                    intensity_power=options['intensity_power'],
-                    top_k_clusters=options.get('top_k_clusters', 1)  # This is included here
-                )
-                vector_results = []  # No vector results if W2V search is selected
+            try:
+                if options['search_method'] == 'vector':
+                    # Configure vector search parameters
+                    vector_results = self.ms_toolkit.search_vector(
+                        query_spectrum, 
+                        top_n=options['top_n'],
+                        composite=(options['similarity'] == 'composite'),
+                        weighting_scheme=options['weighting'],
+                        unmatched_method=options['unmatched'],
+                        top_k_clusters=options.get('top_k_clusters', 1)  # This is included here
+                    )
+                    w2v_results = []  # No W2V results if vector search is selected
+                elif options['search_method'] == 'hybrid':
+                    # Configure hybrid search parameters
+                    hybrid_results = self.ms_toolkit.search_hybrid(
+                        query_spectrum,
+                        method=options.get('hybrid_method', 'auto'),
+                        top_n=options['top_n'],
+                        intensity_power=options['intensity_power'],
+                        weighting_scheme=options['weighting'],
+                        composite=(options['similarity'] == 'composite'),
+                        unmatched_method=options['unmatched'],
+                        top_k_clusters=options.get('top_k_clusters', 1)
+                    )
+                    # For hybrid, show results as one group
+                    vector_results = hybrid_results
+                    w2v_results = []
+                else:
+                    # Configure Word2Vec search parameters
+                    w2v_results = self.ms_toolkit.search_w2v(
+                        query_spectrum, 
+                        top_n=options['top_n'],
+                        intensity_power=options['intensity_power'],
+                        top_k_clusters=options.get('top_k_clusters', 1)  # This is included here
+                    )
+                    vector_results = []  # No vector results if W2V search is selected
+                    
+            except RuntimeError as e:
+                if "Preselector must be loaded first" in str(e):
+                    # Handle missing preselector gracefully
+                    self.status_label.setText("No preselector loaded - searches will be slow")
+                    self.status_label.setStyleSheet("color: #FF6600;")  # Orange warning color
+                    
+                    # Show warning dialog with option to continue
+                    reply = QMessageBox.question(
+                        self, 
+                        "No Preselector Loaded",
+                        "No preselector model is loaded. This will make library searches extremely slow for large libraries.\n\n"
+                        "Would you like to:\n"
+                        "- Continue anyway (slow search)\n"
+                        "- Cancel and load a preselector first",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No
+                    )
+                    
+                    if reply == QMessageBox.No:
+                        self.status_label.setText("Search cancelled - please load a preselector")
+                        return
+                    
+                    # If user chooses to continue, show a different message
+                    self.status_label.setText("Searching entire library (this may take a while)...")
+                    QApplication.processEvents()
+                    
+                    # For now, we can't proceed without modifying ms-toolkit
+                    # So show an error message explaining the limitation
+                    QMessageBox.warning(
+                        self,
+                        "Search Not Possible",
+                        "Cannot perform search without a preselector model.\n\n"
+                        "Please:\n"
+                        "1. Train a preselector using the ms-toolkit API, or\n"
+                        "2. Select an existing preselector file when setting up the library"
+                    )
+                    self.status_label.setText("Search cancelled - preselector required")
+                    self.status_label.setStyleSheet("color: #990000;")
+                    return
+                else:
+                    # Re-raise other RuntimeErrors
+                    raise
             
             # Clear previous results
             self.ms_search_tree.clear()
@@ -842,16 +902,38 @@ class LibraryLoadThread(QThread):
             self.progress_update.emit("Vectorizing library...", 80)
             self.ms_toolkit.vectorize_library()
             
-            # Step 3: Load or train preselector
+            # Step 3: Load preselector
             self.progress_update.emit("Setting up preselector...", 90)
+            
+            # First, try user-selected preselector
             if self.preselector_path and os.path.exists(self.preselector_path):
                 self.ms_toolkit.load_preselector(self.preselector_path)
             else:
-                # Just create a simple preselector without training
-                # (we can add proper training later once this works)
+                # Try to find existing preselectors in library directory
                 preselector_dir = os.path.dirname(self.library_path)
-                default_preselector = os.path.join(preselector_dir, "preselector.pkl")
-                self.ms_toolkit.train_preselector(save_path=default_preselector)
+                possible_preselectors = [
+                    os.path.join(preselector_dir, "NIST14_GMM_optimized.pkl"),
+                    os.path.join(preselector_dir, "preselector.pkl"),
+                    os.path.join(preselector_dir, "NIST14_CHO_GMM_preselector.pkl"),
+                    os.path.join(preselector_dir, "NIST14_CHO_preselector.pkl")
+                ]
+                
+                preselector_loaded = False
+                for preselector_path in possible_preselectors:
+                    if os.path.exists(preselector_path):
+                        self.ms_toolkit.load_preselector(preselector_path)
+                        preselector_loaded = True
+                        break
+                
+                if not preselector_loaded:
+                    # No preselector found - warn user but continue
+                    import warnings
+                    warning_msg = (
+                        "No preselector model found! Library searches will be extremely slow. "
+                        "Please train a preselector using the ms-toolkit API or select an existing one."
+                    )
+                    warnings.warn(warning_msg, UserWarning)
+                    print(f"WARNING: {warning_msg}")
             
             # Step 4: Load or train Word2Vec model (simplified)
             self.progress_update.emit("Setting up Word2Vec model...", 95)
