@@ -63,8 +63,24 @@ class MSOptionsDialog(QDialog):
         
         # Search method
         self.search_method_combo = QComboBox()
-        self.search_method_combo.addItems(["Vector Search", "Word2Vec Search"])
+        self.search_method_combo.addItems(["Vector Search", "Word2Vec Search", "Hybrid Search"])
+        self.search_method_combo.currentTextChanged.connect(self._on_search_method_changed)
         layout.addRow("Search Method:", self.search_method_combo)
+        
+        # Hybrid search sub-options (initially hidden)
+        self.hybrid_method_combo = QComboBox()
+        self.hybrid_method_combo.addItems(["Auto", "Fast", "Ensemble"])
+        self.hybrid_method_combo.setToolTip("Auto: Automatic method selection based on spectrum complexity\n"
+                                           "Fast: Rule-based quick selection\n"
+                                           "Ensemble: Combine both vector and Word2Vec results")
+        
+        # Create label explicitly so we can control its visibility
+        self.hybrid_method_label = QLabel("Hybrid Method:")
+        layout.addRow(self.hybrid_method_label, self.hybrid_method_combo)
+        
+        # Initially hide hybrid options
+        self.hybrid_method_combo.hide()
+        self.hybrid_method_label.hide()
         
         # Add full MS baseline correction option
         self.full_ms_baseline_check = QCheckBox("Enable Full MS Baseline Correction")
@@ -343,11 +359,37 @@ class MSOptionsDialog(QDialog):
         # Add to tab widget
         self.tab_widget.addTab(tab, "Quality Checks")
     
+    def _on_search_method_changed(self, method_text):
+        """Handle search method combo box changes."""
+        # Show/hide hybrid method options based on selection
+        if method_text == "Hybrid Search":
+            self.hybrid_method_combo.show()
+            self.hybrid_method_label.show()
+        else:
+            self.hybrid_method_combo.hide()
+            self.hybrid_method_label.hide()
+    
+    def _get_search_method(self):
+        """Get the current search method as a string."""
+        method_index = self.search_method_combo.currentIndex()
+        if method_index == 0:
+            return 'vector'
+        elif method_index == 1:
+            return 'w2v'
+        elif method_index == 2:
+            return 'hybrid'
+        else:
+            return 'vector'  # Default fallback
+    
     def _load_settings(self):
         """Load settings from QSettings."""
         # General tab
         self.search_method_combo.setCurrentIndex(self.settings.value("ms_search/method", 0, int))
+        self.hybrid_method_combo.setCurrentIndex(self.settings.value("ms_search/hybrid_method", 0, int))  # Add hybrid method setting
         self.full_ms_baseline_check.setChecked(self.settings.value("ms_search/full_ms_baseline", False, bool))  # Load new setting
+        
+        # Trigger the visibility update for hybrid options
+        self._on_search_method_changed(self.search_method_combo.currentText())
         
         # Extraction tab
         extraction_method = self.settings.value("ms_search/extraction_method", "apex")
@@ -394,6 +436,7 @@ class MSOptionsDialog(QDialog):
         """Save settings to QSettings."""
         # General tab
         self.settings.setValue("ms_search/method", self.search_method_combo.currentIndex())
+        self.settings.setValue("ms_search/hybrid_method", self.hybrid_method_combo.currentIndex())  # Save hybrid method setting
         self.settings.setValue("ms_search/full_ms_baseline", self.full_ms_baseline_check.isChecked())  # Save new setting
         
         # Extraction tab
@@ -439,7 +482,11 @@ class MSOptionsDialog(QDialog):
         """Restore default values."""
         # General tab
         self.search_method_combo.setCurrentIndex(0)
+        self.hybrid_method_combo.setCurrentIndex(0)  # Reset to Auto
         self.full_ms_baseline_check.setChecked(False)  # Reset new setting
+        
+        # Trigger visibility update for hybrid options
+        self._on_search_method_changed(self.search_method_combo.currentText())
         
         # Extraction tab
         self.apex_radio.setChecked(True)
@@ -485,7 +532,8 @@ class MSOptionsDialog(QDialog):
         
         options = {
             # General options
-            'search_method': 'vector' if self.search_method_combo.currentIndex() == 0 else 'w2v',
+            'search_method': self._get_search_method(),
+            'hybrid_method': ['auto', 'fast', 'ensemble'][self.hybrid_method_combo.currentIndex()],
             'full_ms_baseline': self.full_ms_baseline_check.isChecked(),  # Add new option
             
             # Extraction options
