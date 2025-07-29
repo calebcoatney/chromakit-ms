@@ -1820,6 +1820,9 @@ class ChromaKitApp(QMainWindow):
         progress_dialog.setWindowModality(Qt.WindowModal)
         progress_dialog.setMinimumDuration(0)
         
+        # CRITICAL FIX: Connect cancel button to cancellation method
+        progress_dialog.canceled.connect(self._cancel_batch_search)
+        
         # Connect signals
         worker.signals.started.connect(lambda total: 
             self.status_bar.showMessage(f"Starting batch search on {total} peaks..."))
@@ -1847,6 +1850,9 @@ class ChromaKitApp(QMainWindow):
             # Set a cancel flag in the worker
             self.batch_search_worker.cancelled = True
             self.status_bar.showMessage("Batch search cancelled by user")
+            
+            # The finished signal will still be emitted by the worker, which will close the dialog
+            # This ensures proper cleanup even when cancelled
 
     def _update_batch_search_progress(self, index, compound_name, results, dialog):
         """Update batch search progress."""
