@@ -9,16 +9,6 @@ from matplotlib.backends.backend_qt5agg import (
 )
 
 class PlotFrame(QWidget):
-    def clear_tic(self):
-        """Clear the TIC plot and redraw the canvas."""
-        self.tic_ax.clear()
-        self.tic_ax.set_title('Total Ion Chromatogram (TIC)')
-        self.tic_ax.set_xlabel('Time (min)')
-        self.tic_ax.set_ylabel('Intensity')
-        self.tic_ax.grid(True, linestyle='--', alpha=0.7)
-        self.figure.tight_layout()
-        self.canvas.draw_idle()
-
     """Frame for displaying chromatogram and TIC plots."""
     
     # Signal to notify when a point has been selected on the plot
@@ -107,6 +97,60 @@ class PlotFrame(QWidget):
                 ax.grid(True, linestyle='--', alpha=0.7, color=colors['grid'])
 
         self.canvas.draw_idle()
+
+    def clear_tic(self):
+        """Clear the TIC plot and redraw the canvas."""
+        try:
+            if hasattr(self, 'tic_ax') and self.tic_ax is not None:
+                # Check if the axis is still valid and part of the figure
+                if self.tic_ax in self.figure.axes:
+                    self.tic_ax.clear()
+                    self.tic_ax.set_title('Total Ion Chromatogram (TIC)')
+                    self.tic_ax.set_xlabel('Time (min)')
+                    self.tic_ax.set_ylabel('Intensity')
+                    self.tic_ax.grid(True, linestyle='--', alpha=0.7)
+                    self.figure.tight_layout()
+                    self.canvas.draw_idle()
+                else:
+                    # Axis is stale - recreate it
+                    print("TIC axis is stale, recreating...")
+                    self._recreate_tic_axis()
+            else:
+                # No valid TIC axis exists
+                print("No valid TIC axis found in clear_tic")
+                
+        except Exception as e:
+            print(f"Error in clear_tic: {type(e).__name__}: {e}")
+            # Try to recreate the axis structure
+            try:
+                self._recreate_tic_axis()
+            except Exception as recreate_error:
+                print(f"Failed to recreate TIC axis in clear_tic: {recreate_error}")
+    
+    def _recreate_tic_axis(self):
+        """Helper method to recreate the TIC axis safely."""
+        try:
+            # Clear figure and recreate both axes
+            self.figure.clear()
+            self.tic_ax = self.figure.add_subplot(211)  # Top plot for TIC
+            self.chromatogram_ax = self.figure.add_subplot(212, sharex=self.tic_ax)  # Bottom plot
+            
+            # Set basic TIC properties
+            self.tic_ax.set_title('Total Ion Chromatogram (TIC)')
+            self.tic_ax.set_xlabel('Time (min)')
+            self.tic_ax.set_ylabel('Intensity')
+            self.tic_ax.grid(True, linestyle='--', alpha=0.7)
+            
+            # Restore chromatogram data if available
+            if hasattr(self, 'chromatogram_data') and self.chromatogram_data is not None:
+                self.plot_chromatogram(self.chromatogram_data, new_file=False)
+            
+            self.figure.tight_layout()
+            self.canvas.draw_idle()
+            print("Successfully recreated TIC axis structure")
+            
+        except Exception as e:
+            print(f"Failed to recreate TIC axis: {e}")
 
     def _setup_empty_plots(self):
         """Set up initial empty plots."""
@@ -313,10 +357,6 @@ class PlotFrame(QWidget):
         self.canvas.draw()
 
     def plot_tic(self, x, y, show_baseline=False, baseline_x=None, baseline_y=None, new_file=True):
-        # Robustly handle empty or missing data
-        if x is None or y is None or len(x) == 0 or len(y) == 0:
-            self.clear_tic()
-            return
         """
         Plot the Total Ion Chromatogram (TIC) data.
         
@@ -326,6 +366,10 @@ class PlotFrame(QWidget):
             baseline_x, baseline_y: Baseline data arrays
             new_file: Whether this is a new file (True) or just parameter updates (False)
         """
+        # Robustly handle empty or missing data
+        if x is None or y is None or len(x) == 0 or len(y) == 0:
+            self.clear_tic()
+            return
         # Get theme colors if available from the main app
         colors = None
         if hasattr(self.parent(), 'matplotlib_theme_colors'):
@@ -821,46 +865,84 @@ class PlotFrame(QWidget):
         Args:
             visible (bool): Whether to show the TIC plot
         """
-        # Store current axis limits to preserve them
-        chromatogram_xlim = self.chromatogram_ax.get_xlim()
-        chromatogram_ylim = self.chromatogram_ax.get_ylim()
-        
-        # Set visibility of the TIC axis
-        self.tic_ax.set_visible(visible)
-        
-        # When hiding TIC, make chromatogram plot take full height
-        if not visible:
-            # Remove the top plot and make the bottom plot take full height
-            self.figure.delaxes(self.tic_ax)
-            self.chromatogram_ax = self.figure.add_subplot(111)  # Full figure
+        try:
+            # Store current axis limits to preserve them
+            chromatogram_xlim = self.chromatogram_ax.get_xlim()
+            chromatogram_ylim = self.chromatogram_ax.get_ylim()
             
-            # Restore the original data
-            if self.chromatogram_data is not None:
-                self.plot_chromatogram(self.chromatogram_data, new_file=False)
+            # Set visibility of the TIC axis
+            self.tic_ax.set_visible(visible)
             
-            # Restore original view limits
-            self.chromatogram_ax.set_xlim(chromatogram_xlim)
-            self.chromatogram_ax.set_ylim(chromatogram_ylim)
-        else:
-            # If we're restoring visibility, we need to reset the subplot layout
-            if not self.tic_ax in self.figure.axes:
-                # Clear the figure
+            # When hiding TIC, make chromatogram plot take full height
+            if not visible:
+                # Store reference to old TIC axis before deleting
+                old_tic_ax = self.tic_ax
+                
+                # Clear the figure completely to avoid axis corruption
                 self.figure.clear()
                 
-                # Set up the axes again
-                self.tic_ax = self.figure.add_subplot(211)  # Top plot for TIC
-                self.chromatogram_ax = self.figure.add_subplot(212, sharex=self.tic_ax)  # Bottom plot with shared x axis
+                # Explicitly set the TIC axis to None to avoid stale references
+                self.tic_ax = None
                 
-                # Restore the plots
+                # Create new chromatogram axis taking full space
+                self.chromatogram_ax = self.figure.add_subplot(111)  # Full figure
+                
+                # Restore the original data
                 if self.chromatogram_data is not None:
                     self.plot_chromatogram(self.chromatogram_data, new_file=False)
-                if self.tic_data is not None and len(self.tic_data['x']) > 0:
-                    self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
-        
-        # Apply theme and refresh
-        self.apply_theme()
-        self.figure.tight_layout()
-        self.canvas.draw_idle()
+                
+                # Restore original view limits
+                self.chromatogram_ax.set_xlim(chromatogram_xlim)
+                self.chromatogram_ax.set_ylim(chromatogram_ylim)
+            else:
+                # If we're restoring visibility, we need to reset the subplot layout
+                # Use a safer check to see if we need to recreate the TIC axis
+                tic_ax_exists = False
+                try:
+                    # Check if the axis still exists and is valid
+                    tic_ax_exists = (hasattr(self, 'tic_ax') and 
+                                   self.tic_ax is not None and 
+                                   self.tic_ax in self.figure.axes)
+                except (AttributeError, TypeError, ValueError):
+                    # If any error occurs during the check, assume axis doesn't exist
+                    tic_ax_exists = False
+                    
+                if not tic_ax_exists:
+                    # Clear the figure completely to start fresh
+                    self.figure.clear()
+                    
+                    # Set up the axes again
+                    self.tic_ax = self.figure.add_subplot(211)  # Top plot for TIC
+                    self.chromatogram_ax = self.figure.add_subplot(212, sharex=self.tic_ax)  # Bottom plot with shared x axis
+                    
+                    # Restore the plots
+                    if self.chromatogram_data is not None:
+                        self.plot_chromatogram(self.chromatogram_data, new_file=False)
+                    if self.tic_data is not None and len(self.tic_data['x']) > 0:
+                        self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
+            
+            # Apply theme and refresh
+            self.apply_theme()
+            self.figure.tight_layout()
+            self.canvas.draw_idle()
+            
+        except Exception as e:
+            print(f"Error in set_tic_visible: {type(e).__name__}: {e}")
+            # Fallback: try to recreate everything from scratch
+            try:
+                self.figure.clear()
+                self.tic_ax = self.figure.add_subplot(211)
+                self.chromatogram_ax = self.figure.add_subplot(212, sharex=self.tic_ax)
+                self.canvas.draw_idle()
+            except Exception as fallback_error:
+                print(f"Fallback failed in set_tic_visible: {fallback_error}")
+                # Last resort: just hide the problematic axis if possible
+                try:
+                    if hasattr(self, 'tic_ax') and self.tic_ax is not None:
+                        self.tic_ax.set_visible(False)
+                        self.canvas.draw_idle()
+                except:
+                    pass
     
     def _show_peak_context_menu(self, peak_index, event):
         """Show context menu for a peak."""
