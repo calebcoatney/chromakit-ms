@@ -177,7 +177,7 @@ class RTTableFrame(QWidget):
         # File selection controls
         file_controls = QHBoxLayout()
         
-        self.load_button = QPushButton("Load CSV File...")
+        self.load_button = QPushButton("Load RT Table...")
         self.load_button.clicked.connect(self._load_rt_table)
         file_controls.addWidget(self.load_button)
         
@@ -191,12 +191,12 @@ class RTTableFrame(QWidget):
         # Save/Export controls
         save_controls = QHBoxLayout()
         
-        self.save_button = QPushButton("Save...")
+        self.save_button = QPushButton("Save (CSV+JSON)")
         self.save_button.clicked.connect(self._save_rt_table)
         self.save_button.setEnabled(False)
         save_controls.addWidget(self.save_button)
         
-        self.export_button = QPushButton("Export As...")
+        self.export_button = QPushButton("Save As...")
         self.export_button.clicked.connect(self._export_rt_table)
         self.export_button.setEnabled(False)
         save_controls.addWidget(self.export_button)
@@ -405,81 +405,25 @@ class RTTableFrame(QWidget):
         self._on_settings_changed()
     
     def _load_rt_table(self):
-        """Load RT table from CSV file."""
+        """Load RT table from CSV or JSON file."""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Load RT Table", "", "CSV Files (*.csv);;All Files (*)"
+            self, "Load RT Table", "", 
+            "RT Table Files (*.csv *.json);;CSV Files (*.csv);;JSON Files (*.json);;All Files (*)"
         )
         
         if not file_path:
             return
         
         try:
-            # Read CSV file
-            df = pd.read_csv(file_path)
-            
-            # Check for legacy format (without Apex RT column)
-            legacy_format = False
-            required_columns_legacy = ['Compound', 'Start', 'End']
-            required_columns_new = ['Compound', 'Start', 'Apex', 'End']
-            
-            # Check if this is the new format with Apex column
-            if all(col in df.columns for col in required_columns_new):
-                # New format with Apex RT
-                pass
-            elif all(col in df.columns for col in required_columns_legacy):
-                # Legacy format - need to add Apex column
-                legacy_format = True
-                df['Apex'] = (df['Start'] + df['End']) / 2.0
-                # Reorder columns to put Apex between Start and End
-                df = df[['Compound', 'Start', 'Apex', 'End']]
-                
-                # Show user notification about automatic apex calculation
-                QMessageBox.information(
-                    self, "Legacy RT Table Format Detected", 
-                    "This RT table uses the legacy format without an 'Apex RT' column.\n\n"
-                    "Apex RT values have been automatically calculated by averaging Start and End RT values.\n"
-                    "You may want to review and manually adjust these apex values for better accuracy."
-                )
+            # Determine file format and load accordingly
+            if file_path.lower().endswith('.json'):
+                df = self._load_from_json(file_path)
             else:
-                QMessageBox.warning(
-                    self, "Invalid Format", 
-                    f"CSV file must contain columns: {', '.join(required_columns_new)}\n"
-                    f"Or legacy format: {', '.join(required_columns_legacy)}\n"
-                    f"Found columns: {', '.join(df.columns)}"
-                )
-                return
+                # Default to CSV loading (handles .csv and unknown extensions)
+                df = self._load_from_csv(file_path)
             
-            # Validate data types
-            try:
-                df['Start'] = pd.to_numeric(df['Start'])
-                df['Apex'] = pd.to_numeric(df['Apex'])
-                df['End'] = pd.to_numeric(df['End'])
-            except ValueError as e:
-                QMessageBox.warning(
-                    self, "Invalid Data", 
-                    f"Start, Apex, and End columns must contain numeric values.\nError: {str(e)}"
-                )
-                return
-            
-            # Validate RT windows and apex positions
-            invalid_windows = df[df['Start'] >= df['End']]
-            if not invalid_windows.empty:
-                QMessageBox.warning(
-                    self, "Invalid RT Windows", 
-                    f"Found {len(invalid_windows)} compounds where Start RT >= End RT.\n"
-                    "Please fix these entries in the CSV file."
-                )
-                return
-            
-            # Validate apex positions (should be between start and end)
-            invalid_apex = df[(df['Apex'] < df['Start']) | (df['Apex'] > df['End'])]
-            if not invalid_apex.empty:
-                QMessageBox.warning(
-                    self, "Invalid Apex Positions", 
-                    f"Found {len(invalid_apex)} compounds where Apex RT is outside the Start-End window.\n"
-                    "Apex RT should be between Start RT and End RT."
-                )
-                return
+            if df is None:
+                return  # Error already shown in load method
             
             # Store the data
             self.rt_table_data = df
@@ -487,7 +431,7 @@ class RTTableFrame(QWidget):
             
             # Initialize change tracking
             self.original_data = df.copy()
-            self.is_modified = legacy_format  # Mark as modified if we auto-calculated apex values
+            self.is_modified = False
             
             # Update UI
             self._populate_table()
@@ -497,14 +441,14 @@ class RTTableFrame(QWidget):
             
             # Enable buttons
             self.clear_button.setEnabled(True)
-            self.save_button.setEnabled(self.is_modified)  # Enable save if modified
+            self.save_button.setEnabled(False)  # Not modified yet
             self.export_button.setEnabled(True)
             
             # Show success message
-            apex_note = " (with auto-calculated apex values)" if legacy_format else ""
+            file_format = "JSON" if file_path.lower().endswith('.json') else "CSV"
             QMessageBox.information(
                 self, "RT Table Loaded", 
-                f"Successfully loaded {len(df)} compounds from RT table{apex_note}."
+                f"Successfully loaded {len(df)} compounds from {file_format} RT table."
             )
             
         except Exception as e:
@@ -513,6 +457,143 @@ class RTTableFrame(QWidget):
                 f"Failed to load RT table:\n{str(e)}"
             )
     
+    def _load_from_csv(self, file_path):
+        """Load RT table from CSV file with legacy format support."""
+        # Read CSV file
+        df = pd.read_csv(file_path)
+        
+        # Check for legacy format (without Apex RT column)
+        legacy_format = False
+        required_columns_legacy = ['Compound', 'Start', 'End']
+        required_columns_new = ['Compound', 'Start', 'Apex', 'End']
+        
+        # Check if this is the new format with Apex column
+        if all(col in df.columns for col in required_columns_new):
+            # New format with Apex RT
+            pass
+        elif all(col in df.columns for col in required_columns_legacy):
+            # Legacy format - need to add Apex column
+            legacy_format = True
+            df['Apex'] = (df['Start'] + df['End']) / 2.0
+            # Reorder columns to put Apex between Start and End
+            df = df[['Compound', 'Start', 'Apex', 'End']]
+            
+            # Show user notification about automatic apex calculation
+            QMessageBox.information(
+                self, "Legacy RT Table Format Detected", 
+                "This RT table uses the legacy format without an 'Apex RT' column.\n\n"
+                "Apex RT values have been automatically calculated by averaging Start and End RT values.\n"
+                "You may want to review and manually adjust these apex values for better accuracy."
+            )
+        else:
+            QMessageBox.warning(
+                self, "Invalid Format", 
+                f"CSV file must contain columns: {', '.join(required_columns_new)}\n"
+                f"Or legacy format: {', '.join(required_columns_legacy)}\n"
+                f"Found columns: {', '.join(df.columns)}"
+            )
+            return None
+        
+        # Validate and process the data
+        return self._validate_rt_data(df, legacy_format)
+    
+    def _load_from_json(self, file_path):
+        """Load RT table from JSON file."""
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        
+        # Validate JSON structure
+        if not isinstance(data, dict) or 'compounds' not in data:
+            QMessageBox.warning(
+                self, "Invalid JSON Format", 
+                "JSON file must contain a 'compounds' array with RT table data."
+            )
+            return None
+        
+        compounds = data['compounds']
+        if not isinstance(compounds, list):
+            QMessageBox.warning(
+                self, "Invalid JSON Format", 
+                "The 'compounds' field must be an array."
+            )
+            return None
+        
+        # Convert JSON to DataFrame
+        rows = []
+        for compound in compounds:
+            if not isinstance(compound, dict):
+                continue
+                
+            # Support both old and new field names
+            name = compound.get('name') or compound.get('compound')
+            start_rt = compound.get('start_rt') or compound.get('start')
+            apex_rt = compound.get('apex_rt') or compound.get('apex')
+            end_rt = compound.get('end_rt') or compound.get('end')
+            
+            if name and start_rt is not None and end_rt is not None:
+                # If apex is missing, calculate it
+                if apex_rt is None:
+                    apex_rt = (start_rt + end_rt) / 2.0
+                
+                rows.append({
+                    'Compound': name,
+                    'Start': float(start_rt),
+                    'Apex': float(apex_rt),
+                    'End': float(end_rt)
+                })
+        
+        if not rows:
+            QMessageBox.warning(
+                self, "No Valid Data", 
+                "No valid compound data found in JSON file."
+            )
+            return None
+        
+        df = pd.DataFrame(rows)
+        
+        # Validate and process the data
+        return self._validate_rt_data(df, False)
+    
+    def _validate_rt_data(self, df, legacy_format):
+        """Validate RT table data and return processed DataFrame."""
+        # Validate data types
+        try:
+            df['Start'] = pd.to_numeric(df['Start'])
+            df['Apex'] = pd.to_numeric(df['Apex'])
+            df['End'] = pd.to_numeric(df['End'])
+        except ValueError as e:
+            QMessageBox.warning(
+                self, "Invalid Data", 
+                f"Start, Apex, and End columns must contain numeric values.\nError: {str(e)}"
+            )
+            return None
+        
+        # Validate RT windows and apex positions
+        invalid_windows = df[df['Start'] >= df['End']]
+        if not invalid_windows.empty:
+            QMessageBox.warning(
+                self, "Invalid RT Windows", 
+                f"Found {len(invalid_windows)} compounds where Start RT >= End RT.\n"
+                "Please fix these entries in the file."
+            )
+            return None
+        
+        # Validate apex positions (should be between start and end)
+        invalid_apex = df[(df['Apex'] < df['Start']) | (df['Apex'] > df['End'])]
+        if not invalid_apex.empty:
+            QMessageBox.warning(
+                self, "Invalid Apex Positions", 
+                f"Found {len(invalid_apex)} compounds where Apex RT is outside the Start-End window.\n"
+                "Apex RT should be between Start RT and End RT."
+            )
+            return None
+        
+        # Mark as modified if we had to do legacy format conversion
+        if legacy_format:
+            self.is_modified = True
+        
+        return df
+
     def _clear_rt_table(self):
         """Clear the loaded RT table."""
         self.rt_table_data = None
@@ -538,17 +619,34 @@ class RTTableFrame(QWidget):
         self._on_settings_changed()
     
     def _save_rt_table(self):
-        """Save the current RT table to its original file or prompt for new location."""
+        """Save the current RT table in dual format (CSV + JSON) or to original file."""
         if self.rt_table_data is None or len(self.rt_table_data) == 0:
             QMessageBox.warning(self, "No Data", "No RT table data to save.")
             return
         
-        # If we have an original file, save there, otherwise prompt for location
+        # If we have an original file, save there and also create complementary format
         if self.rt_table_file:
             try:
-                self.rt_table_data.to_csv(self.rt_table_file, index=False)
+                # Save to original format
+                if self.rt_table_file.lower().endswith('.json'):
+                    self._export_as_json(self.rt_table_file)
+                    # Also create CSV version
+                    csv_file = self.rt_table_file.rsplit('.', 1)[0] + '.csv'
+                    self._export_as_csv(csv_file)
+                    complementary_note = f"\nAlso saved CSV version: {csv_file}"
+                else:
+                    # Assume CSV
+                    self._export_as_csv(self.rt_table_file)
+                    # Also create JSON version
+                    json_file = self.rt_table_file.rsplit('.', 1)[0] + '.json'
+                    self._export_as_json(json_file)
+                    complementary_note = f"\nAlso saved JSON version: {json_file}"
+                
                 self._mark_as_saved()
-                QMessageBox.information(self, "Saved", f"RT table saved to:\n{self.rt_table_file}")
+                QMessageBox.information(
+                    self, "Saved", 
+                    f"RT table saved to:\n{self.rt_table_file}{complementary_note}"
+                )
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", f"Failed to save RT table:\n{str(e)}")
         else:
@@ -577,13 +675,24 @@ class RTTableFrame(QWidget):
             
             try:
                 if "JSON" in selected_filter or file_path.lower().endswith('.json'):
-                    # Export as JSON
+                    # Export as JSON primary format
                     self._export_as_json(file_path)
+                    # Also create CSV version
+                    csv_file = file_path.rsplit('.', 1)[0] + '.csv'
+                    self._export_as_csv(csv_file)
+                    complementary_note = f"\nAlso saved CSV version: {csv_file}"
                 else:
-                    # Export as CSV (default)
+                    # Export as CSV primary format (default)
                     self._export_as_csv(file_path)
+                    # Also create JSON version
+                    json_file = file_path.rsplit('.', 1)[0] + '.json'
+                    self._export_as_json(json_file)
+                    complementary_note = f"\nAlso saved JSON version: {json_file}"
                     
-                QMessageBox.information(self, "Exported", f"RT table exported to:\n{file_path}")
+                QMessageBox.information(
+                    self, "Exported", 
+                    f"RT table exported to:\n{file_path}{complementary_note}"
+                )
                 
                 # If this is the first save and we don't have an original file, set it as the current file
                 if not self.rt_table_file:
@@ -824,12 +933,33 @@ class RTTableFrame(QWidget):
         return self.rt_table_data.loc[closest_idx, 'Compound']
     
     def _lookup_weighted_distance(self, retention_time):
-        """Weighted distance-based matching using start, apex, and end RTs."""
+        """Weighted distance-based matching using start, apex, and end RTs with boundary validation."""
         if not hasattr(self, 'normalized_weights'):
             # Fallback to default weights if not initialized
             self.normalized_weights = {'start': 0.25, 'apex': 0.50, 'end': 0.25}
         
         weights = self.normalized_weights
+        
+        # First, do a reasonable boundary check to prevent obviously bad matches
+        rt_range = self.rt_table_data['End'].max() - self.rt_table_data['Start'].min()
+        table_left_bound = self.rt_table_data['Start'].min()
+        table_right_bound = self.rt_table_data['End'].max()
+        
+        # Calculate window analysis for more reasonable boundary checking
+        compound_windows = self.rt_table_data['End'] - self.rt_table_data['Start']
+        avg_window_width = compound_windows.mean()
+        
+        # More reasonable boundary tolerance - prevent peaks way outside the table
+        # Use larger of: average window width or 5% of total range, but cap at 1.0 min
+        boundary_tolerance = min(
+            max(avg_window_width, rt_range * 0.05),  # Reasonable extension
+            1.0                                       # But not more than 1 minute
+        )
+        
+        # Only reject peaks that are way outside the reasonable range
+        if (retention_time < (table_left_bound - boundary_tolerance) or 
+            retention_time > (table_right_bound + boundary_tolerance)):
+            return None  # Peak is way outside the RT table range
         
         # Calculate weighted distances for each compound
         distances = []
@@ -847,14 +977,28 @@ class RTTableFrame(QWidget):
         # Find the compound with minimum weighted distance
         min_dist_idx = np.argmin(distances)
         min_distance = distances[min_dist_idx]
+        best_match = self.rt_table_data.iloc[min_dist_idx]
         
-        # Only return a match if the weighted distance is reasonable
-        # Use a dynamic threshold based on the RT range in the table
-        rt_range = self.rt_table_data['End'].max() - self.rt_table_data['Start'].min()
-        max_reasonable_distance = rt_range * 0.05  # 5% of total RT range
+        # More reasonable final threshold - based on compound's own characteristics
+        compound_window_width = best_match['End'] - best_match['Start']
         
-        if min_distance <= max_reasonable_distance:
-            return self.rt_table_data.iloc[min_dist_idx]['Compound']
+        # Check if peak is at least close to the compound's RT range
+        # Allow some reasonable distance outside the compound window
+        max_distance_from_window = compound_window_width * 0.75  # 75% of window width
+        
+        # Calculate distance from the compound's RT window
+        distance_from_window = 0
+        if retention_time < best_match['Start']:
+            distance_from_window = best_match['Start'] - retention_time
+        elif retention_time > best_match['End']:
+            distance_from_window = retention_time - best_match['End']
+        # If inside the window, distance_from_window remains 0
+        
+        # Accept the match if:
+        # 1. The peak is inside the compound window, OR
+        # 2. The peak is close enough outside the window (within 75% of window width)
+        if distance_from_window <= max_distance_from_window:
+            return best_match['Compound']
         
         return None
     
