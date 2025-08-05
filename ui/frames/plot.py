@@ -29,6 +29,9 @@ class PlotFrame(QWidget):
     # Signal for RT table assignment requests
     rt_assignment_requested = Signal(int)  # Peak index for RT assignment
     
+    # Signal for adding peaks to RT table
+    add_to_rt_table_requested = Signal(int)  # Peak index for adding to RT table
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         
@@ -981,6 +984,10 @@ class PlotFrame(QWidget):
         rt_assign_action = menu.addAction("Assign from RT Table")
         rt_assign_action.triggered.connect(lambda: self._request_rt_assignment(peak_index))
         
+        # Add "Add to RT Table" action
+        add_to_rt_action = menu.addAction("Add to RT Table...")
+        add_to_rt_action.triggered.connect(lambda: self._add_peak_to_rt_table(peak_index))
+        
         menu.addSeparator()
         
         # Add reassignment options submenu
@@ -1052,3 +1059,8 @@ class PlotFrame(QWidget):
         """Open dialog to edit peak compound assignment."""
         # Emit signal to request edit dialog
         self.edit_assignment_requested.emit(peak_index)
+    
+    def _add_peak_to_rt_table(self, peak_index):
+        """Add a peak to the RT table."""
+        # Emit signal to request adding peak to RT table
+        self.add_to_rt_table_requested.emit(peak_index)

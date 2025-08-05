@@ -136,6 +136,9 @@ class ChromaKitApp(QMainWindow):
         
         # Add connection for RT assignment requests
         self.plot_frame.rt_assignment_requested.connect(self.on_rt_assignment_requested)
+        
+        # Connect add to RT table signal
+        self.plot_frame.add_to_rt_table_requested.connect(self.on_add_to_rt_table_requested)
 
         # Connect MS baseline correction button
         self.parameters_frame.ms_baseline_clicked.connect(self.perform_ms_baseline_correction)
@@ -890,6 +893,32 @@ class ChromaKitApp(QMainWindow):
             # Update integration results file
             if hasattr(self, 'integration_results'):
                 self._auto_update_json_with_assignment(peak)
+
+    def on_add_to_rt_table_requested(self, peak_index):
+        """Handle request to add peak to RT table."""
+        # Check if we have the required components
+        if not hasattr(self, 'integrated_peaks') or peak_index >= len(self.integrated_peaks):
+            self.status_bar.showMessage("No peak available at this position")
+            return
+        
+        # Get the peak
+        peak = self.integrated_peaks[peak_index]
+        
+        # Create peak data dictionary for the RT table
+        peak_data = {
+            'retention_time': peak.retention_time,
+            'start_time': getattr(peak, 'start_time', peak.retention_time - 0.05),
+            'end_time': getattr(peak, 'end_time', peak.retention_time + 0.05),
+            'peak_number': peak.peak_number
+        }
+        
+        # Call the RT table frame's add_peak_to_rt_table method
+        success = self.rt_table_frame.add_peak_to_rt_table(peak_data)
+        
+        if success:
+            self.status_bar.showMessage(f"Peak {peak.peak_number} successfully added to RT table")
+        else:
+            self.status_bar.showMessage(f"Failed to add Peak {peak.peak_number} to RT table")
 
     @Slot(str, float, float, object)
     def apply_assignment_to_files(self, compound_name, retention_time, tolerance, spectrum):
