@@ -35,6 +35,9 @@ class PlotFrame(QWidget):
     
     # Signal for edit assignment requests
     edit_assignment_requested = Signal(int)  # Peak index for assignment editing
+
+    # Signal for RT table assignment requests
+    rt_assignment_requested = Signal(int)  # Peak index for RT assignment
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -584,11 +587,21 @@ class PlotFrame(QWidget):
             # Create a more detailed annotation that includes compound ID if available
             annotation_text = f"Peak {peak.peak_number}\nRT: {peak.retention_time:.3f}"
             
-            # Add compound ID if MS search has been performed
+            # Add compound ID with source information
             if hasattr(peak, 'compound_id') and peak.compound_id and peak.compound_id != f"Unknown ({peak.retention_time:.3f})":
                 annotation_text += f"\n{peak.compound_id}"
-                if hasattr(peak, 'Qual') and peak.Qual is not None:
-                    annotation_text += f" ({peak.Qual:.3f})"
+
+                # Show assignment source and confidence
+                if hasattr(peak, 'rt_assignment') and peak.rt_assignment:
+                    # RT Table assignment
+                    source = getattr(peak, 'rt_assignment_source', 'RT')
+                    annotation_text += f" [{source}]"
+                elif hasattr(peak, 'Qual') and peak.Qual is not None:
+                    # MS library assignment
+                    annotation_text += f" [MS: {peak.Qual:.3f}]"
+                else:
+                    # Manual or other assignment
+                    annotation_text += " [Manual]"
             
             # Add saturation warning if detected
             if hasattr(peak, 'is_saturated') and peak.is_saturated:
@@ -881,8 +894,31 @@ class PlotFrame(QWidget):
         # Add search action if the peak has an MS spectrum
         search_ms_action = menu.addAction("Search MS Library")
         search_ms_action.triggered.connect(lambda: self._request_ms_search(peak_index))
+
+        # Add RT assignment action
+        rt_assign_action = menu.addAction("Assign from RT Table")
+        rt_assign_action.triggered.connect(lambda: self._request_rt_assignment(peak_index))
         
-        # Add edit assignment action
+        menu.addSeparator()
+        
+        # Add reassignment options submenu
+        reassign_menu = menu.addMenu("Reassign Compound")
+        
+        # Reassign from MS library
+        reassign_ms_action = reassign_menu.addAction("From MS Library Search")
+        reassign_ms_action.triggered.connect(lambda: self._request_ms_search(peak_index))
+        
+        # Reassign from RT table
+        reassign_rt_action = reassign_menu.addAction("From RT Table")
+        reassign_rt_action.triggered.connect(lambda: self._request_rt_assignment(peak_index))
+        
+        # Manual reassignment
+        reassign_manual_action = reassign_menu.addAction("Manual Assignment...")
+        reassign_manual_action.triggered.connect(lambda: self._edit_peak_assignment(peak_index))
+        
+        menu.addSeparator()
+        
+        # Add edit assignment action (moved to separate section)
         edit_assignment_action = menu.addAction("Edit Compound Assignment...")
         edit_assignment_action.triggered.connect(lambda: self._edit_peak_assignment(peak_index))
         
@@ -924,6 +960,11 @@ class PlotFrame(QWidget):
         
         # We'll implement a signal for MS search in the app class
         self.ms_search_requested.emit(peak_index)
+
+    def _request_rt_assignment(self, peak_index):
+        """Request RT table assignment for a peak."""
+        # Emit signal to request RT assignment
+        self.rt_assignment_requested.emit(peak_index)
     
     def _edit_peak_assignment(self, peak_index):
         """Open dialog to edit peak compound assignment."""

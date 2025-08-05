@@ -11,6 +11,7 @@ from ui.frames.tree import FileTreeFrame
 from ui.frames.plot import PlotFrame
 from ui.frames.parameters import ParametersFrame
 from ui.frames.ms import MSFrame
+from ui.frames.rt_table import RTTableFrame
 from ui.frames.buttons import ButtonFrame
 from ui.dialogs.automation_dialog import AutomationDialog
 from ui.dialogs.export_settings_dialog import ExportSettingsDialog
@@ -83,11 +84,15 @@ class ChromaKitApp(QMainWindow):
         
         # Create and add MS frame to the far right
         self.ms_frame = MSFrame()
+
+        # Create RT Table frame
+        self.rt_table_frame = RTTableFrame()
         
         # Create a tab widget for the right-side panels
         self.right_tabs = QTabWidget()
         self.right_tabs.addTab(self.parameters_frame, "Parameters")
         self.right_tabs.addTab(self.ms_frame, "Mass Spectrometry")
+        self.right_tabs.addTab(self.rt_table_frame, "RT Table")
         self.right_tabs.setMinimumWidth(350) # Ensure the tab widget has a reasonable minimum width
         
         # Add the tab widget to the main layout
@@ -109,6 +114,9 @@ class ChromaKitApp(QMainWindow):
         self.button_frame.integrate_clicked.connect(self.on_integrate)
         self.button_frame.automation_clicked.connect(self.on_automation_clicked)
         self.button_frame.batch_search_clicked.connect(self.run_batch_ms_search)
+
+        # Connect RT table signals
+        self.rt_table_frame.rt_table_changed.connect(self.on_rt_table_changed)
         
         # Add this new connection for MS spectrum viewing
         self.plot_frame.ms_spectrum_requested.connect(self.on_ms_spectrum_requested)
@@ -125,6 +133,9 @@ class ChromaKitApp(QMainWindow):
         
         # Add this new connection for edit assignment requests
         self.plot_frame.edit_assignment_requested.connect(self.on_edit_assignment_requested)
+        
+        # Add connection for RT assignment requests
+        self.plot_frame.rt_assignment_requested.connect(self.on_rt_assignment_requested)
 
         # Connect MS baseline correction button
         self.parameters_frame.ms_baseline_clicked.connect(self.perform_ms_baseline_correction)
@@ -799,6 +810,70 @@ class ChromaKitApp(QMainWindow):
                 # Add to the override database
                 self._add_to_override_database(peak.retention_time, new_compound, spectrum)
 
+    def on_rt_assignment_requested(self, peak_index):
+        """Handle request to assign peak from RT table."""
+        # Check if we have the required components
+        if not hasattr(self, 'integrated_peaks') or peak_index >= len(self.integrated_peaks):
+            self.status_bar.showMessage("No peak available at this position")
+            return
+        
+        # Check if RT table is available and enabled
+        if not hasattr(self, 'rt_settings') or not self.rt_settings.get('enabled', False):
+            self.status_bar.showMessage("RT Table is not enabled. Please load an RT table first.")
+            return
+        
+        # Get the peak
+        peak = self.integrated_peaks[peak_index]
+        
+        # Look up compound from RT table
+        rt_compound = self.rt_table_frame.lookup_compound_by_rt(peak.retention_time)
+        
+        if not rt_compound:
+            self.status_bar.showMessage(f"No compound found in RT table for retention time {peak.retention_time:.3f} min")
+            return
+        
+        # Show confirmation dialog
+        from PySide6.QtWidgets import QMessageBox
+        msg = QMessageBox(self)
+        msg.setWindowTitle("RT Table Assignment")
+        msg.setText(f"Assign peak at {peak.retention_time:.3f} min to:")
+        msg.setInformativeText(f"Compound: {rt_compound}\n(from RT table using strict window matching)")
+        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        msg.setDefaultButton(QMessageBox.Ok)
+        
+        if msg.exec() == QMessageBox.Ok:
+            # Store old assignment for status message
+            old_compound = getattr(peak, 'compound_id', 'Unknown')
+
+            # Apply RT assignment
+            peak.compound_id = rt_compound
+            if hasattr(peak, 'Compound_ID'):
+                peak.Compound_ID = rt_compound
+
+            # Mark as RT assignment
+            peak.rt_assignment = True
+            peak.rt_assignment_source = "RT (manual)"
+
+            # Clear MS search fields since this is an RT assignment
+            peak.Qual = None
+            if hasattr(peak, 'casno'):
+                peak.casno = None
+            if hasattr(peak, 'CAS_Number'):
+                peak.CAS_Number = None
+
+            # Update the plot to show the new assignment
+            self.plot_frame.update_annotations()
+
+            # Update status bar
+            self.status_bar.showMessage(f"RT assignment: Peak {peak.peak_number} assigned to '{rt_compound}'")
+
+            # Update any results views
+            self.update_results_view()
+
+            # Update integration results file
+            if hasattr(self, 'integration_results'):
+                self._auto_update_json_with_assignment(peak)
+
     @Slot(str, float, float, object)
     def apply_assignment_to_files(self, compound_name, retention_time, tolerance, spectrum):
         """Apply a compound assignment to peaks in other files based on RT and spectral similarity."""
@@ -1248,7 +1323,10 @@ class ChromaKitApp(QMainWindow):
             # Check if integration was successful
             if not integration_results['peaks']:
                 return None
-            
+
+            # Apply RT matching to peaks if enabled
+            self._apply_rt_matching_to_peaks(integration_results['peaks'])
+
             # Store integration results
             self.integration_results = integration_results
             
@@ -1260,6 +1338,57 @@ class ChromaKitApp(QMainWindow):
         except Exception as e:
             print(f"Error in integrate_peaks_no_ui: {str(e)}")
             return None
+    
+    def _apply_rt_matching_to_peaks(self, peaks):
+        """Apply RT table matching to integrated peaks."""
+        if not hasattr(self, 'rt_settings') or not self.rt_settings.get('enabled', False):
+            return
+        
+        rt_table_frame = self.rt_table_frame
+        high_priority = self.rt_settings.get('high_priority', False)
+        
+        for peak in peaks:
+            # Look up compound by retention time
+            rt_compound = rt_table_frame.lookup_compound_by_rt(peak.retention_time)
+
+            if rt_compound:
+                # Check if we should apply the RT assignment
+                should_apply = False
+
+                if high_priority:
+                    # High priority: always override
+                    should_apply = True
+                    assignment_source = "RT (priority)"
+                else:
+                    # Low priority: only assign if no existing assignment or unknown
+                    current_compound = getattr(peak, 'compound_id', 'Unknown')
+                    if current_compound in ['Unknown', f"Unknown ({peak.retention_time:.3f})", None]:
+                        should_apply = True
+                        assignment_source = "RT"
+                    else:
+                        assignment_source = None
+
+                if should_apply:
+                    # Apply RT assignment
+                    peak.compound_id = rt_compound
+                    if hasattr(peak, 'Compound_ID'):
+                        peak.Compound_ID = rt_compound
+
+                    # Mark as RT assignment and clear MS search info
+                    peak.rt_assignment = True
+                    peak.rt_assignment_source = assignment_source
+                    peak.Qual = None  # Clear MS match score
+
+                    # Clear MS-related fields since this is an RT assignment
+                    if hasattr(peak, 'casno'):
+                        peak.casno = None
+                    if hasattr(peak, 'CAS_Number'):
+                        peak.CAS_Number = None
+
+                    print(f"RT matching: Peak {peak.peak_number} at {peak.retention_time:.3f} min assigned to '{rt_compound}' ({assignment_source})")
+                else:
+                    # Mark that RT matching was available but not used
+                    peak.rt_match_available = rt_compound
 
     def _show_integration_results(self, integration_results):
         """Show integration results in a dialog."""
@@ -1628,6 +1757,18 @@ class ChromaKitApp(QMainWindow):
         
         return worker
 
+
+    @Slot(dict)
+    def on_rt_table_changed(self, rt_settings):
+        """Handle RT table settings changes."""
+        # Store RT settings for use during integration
+        self.rt_settings = rt_settings
+        
+        if rt_settings['enabled']:
+            count = len(rt_settings['rt_table']) if rt_settings['rt_table'] is not None else 0
+            self.status_bar.showMessage(f"RT matching enabled with {count} compounds")
+        else:
+            self.status_bar.showMessage("RT matching disabled")
 
     @Slot(dict)
     def on_parameters_changed(self, params):
