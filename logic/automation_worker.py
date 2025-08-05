@@ -192,7 +192,17 @@ class AutomationWorker(QRunnable):
                     # Update our log via signals (thread-safe)
                     self.signals.log_message.emit(f"Successfully loaded {os.path.basename(file_path)}")
                 except Exception as e:
-                    self.signals.log_message.emit(f"Error loading file: {str(e)}")
+                    # Debug: Check what type of object we caught
+                    print(f"AUTOMATION DEBUG: Exception type: {type(e)}")
+                    print(f"AUTOMATION DEBUG: Exception repr: {repr(e)}")
+                    
+                    if not isinstance(e, BaseException):
+                        print(f"AUTOMATION WARNING: Caught non-exception object: {type(e)}")
+                        error_msg = f"Error loading file: Unexpected object: {str(e)}"
+                    else:
+                        error_msg = f"Error loading file: {str(e)}"
+                    
+                    self.signals.log_message.emit(error_msg)
                 finally:
                     # Set our completion flag regardless of success/failure
                     self.load_completed = True

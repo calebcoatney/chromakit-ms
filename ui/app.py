@@ -497,7 +497,12 @@ class ChromaKitApp(QMainWindow):
             has_ms_data = self.data_handler.has_ms_data
             
             # Show or hide TIC plot based on MS data availability
-            self.plot_frame.set_tic_visible(has_ms_data)
+            try:
+                self.plot_frame.set_tic_visible(has_ms_data)
+            except Exception as tic_error:
+                print(f"Error setting TIC visibility: {type(tic_error).__name__}: {tic_error}")
+                # Try to continue without TIC functionality
+                has_ms_data = False
             
             # Enable or disable MS tab
             ms_tab_index = self.right_tabs.indexOf(self.ms_frame)
@@ -511,13 +516,14 @@ class ChromaKitApp(QMainWindow):
                     # If TIC plotting fails, just log it and continue
                     print(f"Warning: Failed to plot TIC data: {plot_error}")
                     has_ms_data = False  # Treat as no MS data if plotting fails
-            
-            if not has_ms_data:
-                # Explicitly clear or hide the TIC plot if no MS data
-                if hasattr(self.plot_frame, 'clear_tic'):
-                    self.plot_frame.clear_tic()
-                if hasattr(self.plot_frame, 'tic_canvas'):
-                    self.plot_frame.tic_canvas.setVisible(False)
+            else:
+                # Explicitly clear the TIC plot if no MS data
+                try:
+                    if hasattr(self.plot_frame, 'clear_tic'):
+                        self.plot_frame.clear_tic()
+                except Exception as clear_error:
+                    print(f"Warning: Failed to clear TIC plot: {clear_error}")
+                    # Continue anyway since this is not critical
             
             # Update status bar with success message
             sample_name = os.path.basename(file_path)
@@ -538,7 +544,18 @@ class ChromaKitApp(QMainWindow):
             
         except Exception as e:
             # Handle any errors during loading
-            error_msg = f"Error loading file: {str(e)}"
+            # Debug: print type and details of the exception
+            print(f"DEBUG: Exception type: {type(e)}")
+            print(f"DEBUG: Exception repr: {repr(e)}")
+            print(f"DEBUG: Exception str: {str(e)}")
+            
+            # Check if this is actually an exception or something else
+            if not isinstance(e, BaseException):
+                print(f"WARNING: Caught object that is not an exception: {type(e)}")
+                error_msg = f"Error loading file: Unexpected object caught: {str(e)}"
+            else:
+                error_msg = f"Error loading file: {str(e)}"
+            
             self.status_bar.showMessage(error_msg)
             
             # Only show error dialog if not in batch mode
