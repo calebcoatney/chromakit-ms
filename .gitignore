@@ -219,6 +219,9 @@ PublishScripts/
 *.nuget.props
 *.nuget.targets
 
+# Python egg info
+*.egg-info/
+
 # Microsoft Azure Build Output
 csx/
 *.build.csdef

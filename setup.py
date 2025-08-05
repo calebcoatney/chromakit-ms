@@ -20,14 +20,12 @@ setup(
         ],
     },
     install_requires=[
-        "PySide6>=6.0.0",
+        "PySide6==6.9.0",
         "numpy",
         "scipy",
         "matplotlib",
-        "scipy",
         "pybaselines",
         "rainbow-api",
-        "pybaselines",
     ],
     extras_require={
         "ms": ["ms-toolkit-nrel"],
