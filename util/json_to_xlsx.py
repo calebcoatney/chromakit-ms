@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-ChromaKit-MS JSON to Excel Converter
+ChromaKit-MS JSON ↔ Excel Converter
 
-A utility to compile integration results from multiple .D directories
-into a single Excel summary file.
+A utility to convert between ChromaKit-MS integration results and Excel format:
+- JSON → Excel: Compile integration results from multiple .D directories into a single Excel summary
+- Excel → JSON: Update JSON files with compound IDs from manually annotated Excel files
 
 Created on Thu Dec  5 11:28:40 2024
 Updated on Jul 28, 2025 - Converted to PySide6 GUI and added compound ID support
+Updated on Aug  6, 2025 - Added bidirectional functionality for updating JSON from Excel
 
 @author: ccoatney
 """
@@ -14,12 +16,12 @@ Updated on Jul 28, 2025 - Converted to PySide6 GUI and added compound ID support
 import os
 import sys
 import json
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
     QPushButton, QLabel, QFileDialog, QTextEdit, QProgressBar,
-    QMessageBox, QGroupBox, QCheckBox
+    QMessageBox, QGroupBox, QCheckBox, QTabWidget
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont
@@ -216,17 +218,136 @@ class ProcessingThread(QThread):
             return False
 
 
+class UpdateJsonThread(QThread):
+    """Thread for updating JSON files from Excel compound IDs."""
+    
+    progress_update = Signal(str)  # Progress message
+    finished = Signal(bool, str)   # Success, message
+    
+    def __init__(self, excel_file, json_directory):
+        super().__init__()
+        self.excel_file = excel_file
+        self.json_directory = json_directory
+    
+    def run(self):
+        """Update JSON files with compound IDs from Excel in background thread."""
+        try:
+            self.progress_update.emit("Reading Excel file...")
+            success, files_updated = self.update_json_from_excel(self.excel_file, self.json_directory)
+            
+            if success:
+                self.finished.emit(True, f"Successfully updated {files_updated} JSON files with compound IDs")
+            else:
+                self.finished.emit(False, "No JSON files were updated. Check file formats and data structure.")
+                
+        except Exception as e:
+            self.finished.emit(False, f"Error during update: {str(e)}")
+
+    def update_json_from_excel(self, excel_file, json_directory):
+        """Update JSON files with compound IDs from Excel file."""
+        try:
+            # Load the Excel workbook
+            wb = load_workbook(excel_file)
+            ws = wb.active
+            
+            # Parse the Excel file to extract compound ID mappings
+            compound_mappings = {}  # {sample_id: {peak_number: compound_id}}
+            current_sample_id = None
+            
+            self.progress_update.emit("Parsing Excel data...")
+            
+            for row in ws.iter_rows(values_only=True):
+                if not any(row):  # Skip empty rows
+                    continue
+                
+                # Check if this row contains sample ID
+                if row[0] == "Sample ID:":
+                    current_sample_id = row[1] if len(row) > 1 else None
+                    if current_sample_id:
+                        compound_mappings[current_sample_id] = {}
+                    continue
+                
+                # Check if this is a peaks data row (has Compound ID in first column)
+                if (current_sample_id and len(row) >= 3 and 
+                    isinstance(row[1], (int, float)) and  # Peak number
+                    isinstance(row[2], (int, float))):    # Retention time
+                    
+                    compound_id = row[0] if row[0] not in [None, "Compound ID"] else "Unknown"
+                    peak_number = int(row[1])
+                    
+                    compound_mappings[current_sample_id][peak_number] = compound_id
+            
+            if not compound_mappings:
+                self.progress_update.emit("No compound ID mappings found in Excel file")
+                return False, 0
+            
+            self.progress_update.emit(f"Found mappings for {len(compound_mappings)} samples")
+            
+            # Update JSON files
+            files_updated = 0
+            
+            for root, _, files in os.walk(json_directory):
+                json_files = [f for f in files if f.endswith('.json')]
+                
+                for file in json_files:
+                    json_path = os.path.join(root, file)
+                    
+                    try:
+                        with open(json_path, 'r', encoding='utf-8') as f:
+                            json_data = json.load(f)
+                        
+                        sample_id = json_data.get("sample_id")
+                        if not sample_id or sample_id not in compound_mappings:
+                            continue
+                        
+                        self.progress_update.emit(f"Updating {file}...")
+                        
+                        # Update compound IDs for each peak
+                        updated = False
+                        sample_mappings = compound_mappings[sample_id]
+                        
+                        for peak in json_data.get("peaks", []):
+                            peak_number = peak.get("peak_number")
+                            if peak_number in sample_mappings:
+                                old_compound_id = peak.get("Compound ID", "Unknown")
+                                new_compound_id = sample_mappings[peak_number]
+                                
+                                if old_compound_id != new_compound_id:
+                                    peak["Compound ID"] = new_compound_id
+                                    updated = True
+                        
+                        # Save the updated JSON file
+                        if updated:
+                            with open(json_path, 'w', encoding='utf-8') as f:
+                                json.dump(json_data, f, indent=2, ensure_ascii=False)
+                            files_updated += 1
+                    
+                    except Exception as e:
+                        self.progress_update.emit(f"Error updating {json_path}: {e}")
+                        continue
+            
+            return files_updated > 0, files_updated
+            
+        except Exception as e:
+            self.progress_update.emit(f"Error reading Excel file: {e}")
+            return False, 0
+
+
 class JsonToExcelConverter(QMainWindow):
     """Main application window for JSON to Excel conversion."""
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ChromaKit-MS: JSON to Excel Converter")
-        self.setGeometry(100, 100, 600, 500)
+        self.setWindowTitle("ChromaKit-MS: JSON ↔ Excel Converter")
+        self.setGeometry(100, 100, 700, 600)
         
-        # Initialize variables
+        # Initialize variables for JSON to Excel
         self.input_directory = ""
         self.output_file = ""
+        
+        # Initialize variables for Excel to JSON
+        self.excel_input_file = ""
+        self.json_directory = ""
         
         self.init_ui()
     
@@ -238,7 +359,7 @@ class JsonToExcelConverter(QMainWindow):
         layout = QVBoxLayout(central_widget)
         
         # Title
-        title_label = QLabel("ChromaKit-MS JSON to Excel Converter")
+        title_label = QLabel("ChromaKit-MS JSON ↔ Excel Converter")
         title_font = QFont()
         title_font.setPointSize(16)
         title_font.setBold(True)
@@ -248,14 +369,48 @@ class JsonToExcelConverter(QMainWindow):
         
         # Description
         desc_label = QLabel(
-            "Convert ChromaKit-MS integration results from multiple .D directories "
-            "into a single Excel summary file."
+            "Convert between ChromaKit-MS JSON files and Excel format, "
+            "including compound ID management."
         )
         desc_label.setWordWrap(True)
         desc_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(desc_label)
         
-        layout.addSpacing(20)
+        layout.addSpacing(10)
+        
+        # Create tabbed interface
+        self.tab_widget = QTabWidget()
+        
+        # JSON to Excel tab
+        self.json_to_excel_tab = self.create_json_to_excel_tab()
+        self.tab_widget.addTab(self.json_to_excel_tab, "JSON → Excel")
+        
+        # Excel to JSON tab
+        self.excel_to_json_tab = self.create_excel_to_json_tab()
+        self.tab_widget.addTab(self.excel_to_json_tab, "Excel → JSON")
+        
+        layout.addWidget(self.tab_widget)
+        
+        # Shared progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+        
+        # Shared log output
+        log_group = QGroupBox("Processing Log")
+        log_layout = QVBoxLayout(log_group)
+        
+        self.log_text = QTextEdit()
+        self.log_text.setMaximumHeight(150)
+        self.log_text.setReadOnly(True)
+        log_layout.addWidget(self.log_text)
+        
+        layout.addWidget(log_group)
+    
+    def create_json_to_excel_tab(self):
+        """Create the JSON to Excel conversion tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
         
         # Input directory selection
         input_group = QGroupBox("Input Directory")
@@ -306,23 +461,65 @@ class JsonToExcelConverter(QMainWindow):
         self.process_btn.setEnabled(False)
         layout.addWidget(self.process_btn)
         
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
+        layout.addStretch()
+        return tab
+    
+    def create_excel_to_json_tab(self):
+        """Create the Excel to JSON update tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
         
-        # Log output
-        log_group = QGroupBox("Processing Log")
-        log_layout = QVBoxLayout(log_group)
+        # Description
+        desc_label = QLabel(
+            "Update JSON files with compound IDs from an Excel file that was "
+            "previously exported and manually annotated with compound identifications."
+        )
+        desc_label.setWordWrap(True)
+        layout.addWidget(desc_label)
         
-        self.log_text = QTextEdit()
-        self.log_text.setMaximumHeight(150)
-        self.log_text.setReadOnly(True)
-        log_layout.addWidget(self.log_text)
+        layout.addSpacing(10)
         
-        layout.addWidget(log_group)
+        # Excel input file selection
+        excel_input_group = QGroupBox("Input Excel File")
+        excel_input_layout = QVBoxLayout(excel_input_group)
+        
+        excel_input_button_layout = QHBoxLayout()
+        self.excel_input_label = QLabel("No Excel file selected")
+        self.excel_input_label.setStyleSheet("QLabel { background-color: #f0f0f0; padding: 5px; border: 1px solid #ccc; }")
+        self.select_excel_input_btn = QPushButton("Select Excel File")
+        self.select_excel_input_btn.clicked.connect(self.select_excel_input_file)
+        
+        excel_input_button_layout.addWidget(self.excel_input_label, 1)
+        excel_input_button_layout.addWidget(self.select_excel_input_btn)
+        excel_input_layout.addLayout(excel_input_button_layout)
+        
+        layout.addWidget(excel_input_group)
+        
+        # JSON directory selection
+        json_dir_group = QGroupBox("JSON Files Directory")
+        json_dir_layout = QVBoxLayout(json_dir_group)
+        
+        json_dir_button_layout = QHBoxLayout()
+        self.json_dir_label = QLabel("No directory selected")
+        self.json_dir_label.setStyleSheet("QLabel { background-color: #f0f0f0; padding: 5px; border: 1px solid #ccc; }")
+        self.select_json_dir_btn = QPushButton("Select Directory")
+        self.select_json_dir_btn.clicked.connect(self.select_json_directory)
+        
+        json_dir_button_layout.addWidget(self.json_dir_label, 1)
+        json_dir_button_layout.addWidget(self.select_json_dir_btn)
+        json_dir_layout.addLayout(json_dir_button_layout)
+        
+        layout.addWidget(json_dir_group)
+        
+        # Update button
+        self.update_json_btn = QPushButton("Update JSON Files")
+        self.update_json_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; padding: 10px; }")
+        self.update_json_btn.clicked.connect(self.start_json_update)
+        self.update_json_btn.setEnabled(False)
+        layout.addWidget(self.update_json_btn)
         
         layout.addStretch()
+        return tab
     
     def select_input_directory(self):
         """Select input directory containing .D folders with JSON files."""
@@ -413,6 +610,85 @@ class JsonToExcelConverter(QMainWindow):
             QMessageBox.information(self, "Success", message)
         else:
             QMessageBox.warning(self, "Warning", message)
+    
+    def select_excel_input_file(self):
+        """Select Excel input file for updating JSON files."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Excel File",
+            "",
+            "Excel Files (*.xlsx);;All Files (*)"
+        )
+        
+        if file_path:
+            self.excel_input_file = file_path
+            self.excel_input_label.setText(file_path)
+            self.log_text.append(f"Selected Excel input file: {file_path}")
+            self.update_json_update_button()
+    
+    def select_json_directory(self):
+        """Select directory containing JSON files to update."""
+        directory = QFileDialog.getExistingDirectory(
+            self, 
+            "Select Directory Containing JSON Files",
+            ""
+        )
+        
+        if directory:
+            self.json_directory = directory
+            self.json_dir_label.setText(directory)
+            self.log_text.append(f"Selected JSON directory: {directory}")
+            self.update_json_update_button()
+    
+    def update_json_update_button(self):
+        """Enable JSON update button if both Excel file and JSON directory are selected."""
+        self.update_json_btn.setEnabled(bool(self.excel_input_file and self.json_directory))
+    
+    def start_json_update(self):
+        """Start the Excel to JSON update process."""
+        if not self.excel_input_file or not self.json_directory:
+            QMessageBox.warning(self, "Error", "Please select both Excel file and JSON directory.")
+            return
+        
+        # Disable UI during processing
+        self.update_json_btn.setEnabled(False)
+        self.select_excel_input_btn.setEnabled(False)
+        self.select_json_dir_btn.setEnabled(False)
+        
+        # Show progress bar
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        
+        # Clear log
+        self.log_text.clear()
+        self.log_text.append("Starting JSON update process...")
+        
+        # Start update thread
+        self.update_thread = UpdateJsonThread(
+            self.excel_input_file,
+            self.json_directory
+        )
+        self.update_thread.progress_update.connect(self.update_progress)
+        self.update_thread.finished.connect(self.json_update_finished)
+        self.update_thread.start()
+    
+    def json_update_finished(self, success, message):
+        """Handle JSON update completion."""
+        # Re-enable UI
+        self.update_json_btn.setEnabled(True)
+        self.select_excel_input_btn.setEnabled(True)
+        self.select_json_dir_btn.setEnabled(True)
+        
+        # Hide progress bar
+        self.progress_bar.setVisible(False)
+        
+        # Show completion message
+        self.log_text.append(f"JSON update completed: {message}")
+        
+        if success:
+            QMessageBox.information(self, "Success", message)
+        else:
+            QMessageBox.warning(self, "Warning", message)
 
 
 def main():
@@ -420,8 +696,8 @@ def main():
     app = QApplication(sys.argv)
     
     # Set application properties
-    app.setApplicationName("ChromaKit-MS JSON to Excel Converter")
-    app.setApplicationVersion("1.1.0")
+    app.setApplicationName("ChromaKit-MS JSON ↔ Excel Converter")
+    app.setApplicationVersion("2.0.0")
     
     # Create and show main window
     window = JsonToExcelConverter()

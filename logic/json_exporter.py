@@ -118,7 +118,7 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
         }
         
         # Add peaks data
-        for peak in peaks:
+        for i, peak in enumerate(peaks):
             peak_data = {
                 'Compound ID': getattr(peak, 'compound_id', 'Unknown'),
                 'peak_number': getattr(peak, 'peak_number', 0),
@@ -130,15 +130,29 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
                 'end_time': float(getattr(peak, 'end_time', 0.0))
             }
             
+            # DEBUG: Check what fields are available on this peak
+            print(f"JSON Export DEBUG - Peak {i}: compound_id={getattr(peak, 'compound_id', 'MISSING')}, "
+                  f"Compound_ID={getattr(peak, 'Compound_ID', 'MISSING')}, "
+                  f"Qual={getattr(peak, 'Qual', 'MISSING')}")
+            
             # Add MS search results if available
             if hasattr(peak, 'Compound_ID') and peak.Compound_ID:
                 peak_data['Compound ID'] = peak.Compound_ID
+                print(f"  -> Using Compound_ID: {peak.Compound_ID}")
+            else:
+                print(f"  -> Using default compound_id: {getattr(peak, 'compound_id', 'Unknown')}")
             
             if hasattr(peak, 'Qual') and peak.Qual is not None:
                 peak_data['Qual'] = float(peak.Qual)
+                print(f"  -> Adding Qual: {peak.Qual}")
+            else:
+                print(f"  -> No Qual field found")
                 
             if hasattr(peak, 'casno') and peak.casno:
                 peak_data['casno'] = peak.casno
+                print(f"  -> Adding casno: {peak.casno}")
+            else:
+                print(f"  -> No casno field found")
             
             # Add quality indicators
             if hasattr(peak, 'is_saturated') and peak.is_saturated:
@@ -207,7 +221,8 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
         
         # Update peaks with MS search results
         updated_peaks = []
-        for peak in peaks:
+        print(f"\n=== JSON UPDATE DEBUG: Processing {len(peaks)} peaks ===")
+        for i, peak in enumerate(peaks):
             peak_data = {
                 'Compound ID': getattr(peak, 'compound_id', 'Unknown'),
                 'peak_number': getattr(peak, 'peak_number', 0),
@@ -219,15 +234,29 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
                 'end_time': float(getattr(peak, 'end_time', 0.0))
             }
             
+            # DEBUG: Check what fields are available on this peak
+            print(f"Update Peak {i}: compound_id={getattr(peak, 'compound_id', 'MISSING')}, "
+                  f"Compound_ID={getattr(peak, 'Compound_ID', 'MISSING')}, "
+                  f"Qual={getattr(peak, 'Qual', 'MISSING')}")
+            
             # Add MS search results if available
             if hasattr(peak, 'Compound_ID') and peak.Compound_ID:
                 peak_data['Compound ID'] = peak.Compound_ID
+                print(f"  -> Using Compound_ID: {peak.Compound_ID}")
+            else:
+                print(f"  -> Using default compound_id: {getattr(peak, 'compound_id', 'Unknown')}")
             
             if hasattr(peak, 'Qual') and peak.Qual is not None:
                 peak_data['Qual'] = float(peak.Qual)
+                print(f"  -> Adding Qual: {peak.Qual}")
+            else:
+                print(f"  -> No Qual field found")
                 
             if hasattr(peak, 'casno') and peak.casno:
                 peak_data['casno'] = peak.casno
+                print(f"  -> Adding casno: {peak.casno}")
+            else:
+                print(f"  -> No casno field found")
             
             # Add quality indicators
             if hasattr(peak, 'is_saturated') and peak.is_saturated:

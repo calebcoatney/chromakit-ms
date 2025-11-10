@@ -24,8 +24,10 @@ setup(
         "numpy",
         "scipy",
         "matplotlib",
+        "scipy",
         "pybaselines",
         "rainbow-api",
+        "pybaselines",
     ],
     extras_require={
         "ms": ["ms-toolkit-nrel"],

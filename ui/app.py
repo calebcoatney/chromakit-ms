@@ -2049,8 +2049,38 @@ class ChromaKitApp(QMainWindow):
         # Update status bar
         self.status_bar.showMessage(f"Processing peak {index + 1}/{dialog.maximum()}: {compound_name}")
 
+        # CRITICAL FIX: Explicitly update the peak object in the main thread
+        # to ensure MS search results are properly synchronized
+        if hasattr(self, 'integrated_peaks') and index < len(self.integrated_peaks) and results:
+            peak = self.integrated_peaks[index]
+            best_match = results[0]
+            
+            # Update the peak with MS search results in main thread
+            peak.compound_id = best_match[0]
+            peak.Compound_ID = best_match[0]  # Notebook-style field name
+            peak.Qual = best_match[1]  # Match score
+            
+            # Get CAS number if available
+            try:
+                if hasattr(self.ms_frame, 'ms_toolkit') and hasattr(self.ms_frame.ms_toolkit, 'library'):
+                    library = self.ms_frame.ms_toolkit.library
+                    if best_match[0] in library:
+                        compound = library[best_match[0]]
+                        if hasattr(compound, 'casno'):
+                            # Format CAS number (inline implementation to avoid import issues)
+                            casno = compound.casno
+                            if casno and isinstance(casno, str):
+                                padded_casno = casno.zfill(9)
+                                peak.casno = padded_casno[:-3] + '-' + padded_casno[-3:-1] + '-' + padded_casno[-1:]
+                            else:
+                                peak.casno = ""
+            except Exception as e:
+                print(f"Error getting CAS number in main thread: {e}")
+            
+            print(f"MAIN THREAD UPDATE: Peak {index} updated with {best_match[0]}, Qual={best_match[1]}")
+
         # Also update the peak in the results table if it exists
-        self._update_peak_match_in_results(index, compound_name, results[0][1])
+        self._update_peak_match_in_results(index, compound_name, results[0][1] if results else 0)
 
         # Process events to keep UI responsive
         QApplication.processEvents()
@@ -2058,6 +2088,15 @@ class ChromaKitApp(QMainWindow):
     def _on_batch_search_finished(self, dialog):
         """Handle batch search completion."""
         dialog.close()
+        
+        # DEBUG: Check what fields are actually set on peaks after MS search
+        print("\n=== DEBUG: Checking peak fields after batch MS search ===")
+        for i, peak in enumerate(self.integrated_peaks):
+            print(f"Peak {i}: compound_id={getattr(peak, 'compound_id', 'MISSING')}, "
+                  f"Compound_ID={getattr(peak, 'Compound_ID', 'MISSING')}, "
+                  f"Qual={getattr(peak, 'Qual', 'MISSING')}, "
+                  f"casno={getattr(peak, 'casno', 'MISSING')}")
+        print("=" * 60)
         
         # Count successful matches
         match_count = sum(1 for peak in self.integrated_peaks 
@@ -2352,11 +2391,19 @@ class ChromaKitApp(QMainWindow):
                 csv_writer.writerow(headers)
                 
                 # Write peak data
-                for peak in self.integrated_peaks:
+                print(f"\n=== CSV EXPORT DEBUG: Processing {len(self.integrated_peaks)} peaks ===")
+                for i, peak in enumerate(self.integrated_peaks):
                     # Use the exact field names from the notebook
                     compound_id = getattr(peak, 'Compound_ID', None) or getattr(peak, 'compound_id', "Unknown")
                     casno = getattr(peak, 'casno', "")
                     qual = getattr(peak, 'Qual', "")
+                    
+                    # DEBUG: Show what we found
+                    print(f"CSV Peak {i}: Compound_ID={getattr(peak, 'Compound_ID', 'MISSING')}, "
+                          f"compound_id={getattr(peak, 'compound_id', 'MISSING')}, "
+                          f"Qual={getattr(peak, 'Qual', 'MISSING')}, "
+                          f"casno={getattr(peak, 'casno', 'MISSING')}")
+                    print(f"  -> Using compound_id: {compound_id}, qual: {qual}, casno: {casno}")
                     
                     # Format qual as a float with 4 decimal places if it's a number
                     if isinstance(qual, (int, float)):

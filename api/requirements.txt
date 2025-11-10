@@ -1,0 +1,17 @@
+# FastAPI Backend Requirements
+# Install with: pip install -r api/requirements.txt
+
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+
+# CORS support
+python-multipart>=0.0.6
+
+# Core ChromaKit-MS dependencies (already installed, but listed for reference)
+numpy>=1.24.0
+scipy>=1.11.0
+pandas>=2.0.0
+pybaselines>=1.0.0
+rainbow-api>=1.0.0

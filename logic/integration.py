@@ -7,7 +7,8 @@ class Peak:
     """Represents a chromatographic peak with its properties."""
     
     def __init__(self, compound_id, peak_number, retention_time, 
-                 integrator, width, area, start_time, end_time):
+                 integrator, width, area, start_time, end_time,
+                 start_index=None, end_index=None):
         """Initialize a Peak object."""
         self.compound_id = compound_id
         self.peak_number = peak_number
@@ -17,6 +18,8 @@ class Peak:
         self.area = area
         self.start_time = start_time
         self.end_time = end_time
+        self.start_index = start_index
+        self.end_index = end_index
         
         # Add MS match properties
         self.compound_name = None
@@ -62,6 +65,8 @@ class Peak:
             'area': self.area,
             'start_time': self.start_time,
             'end_time': self.end_time,
+            'start_index': self.start_index,
+            'end_index': self.end_index,
             'is_convoluted': self.is_convoluted,
             'asymmetry': self.asymmetry,
             'spectral_coherence': self.spectral_coherence,
@@ -261,7 +266,7 @@ class Integrator:
                 }
         
         # Check if we have peak metadata with shoulder information
-        has_shoulder_info = 'peak_metadata' in processed_data and processed_data['peak_metadata']
+        has_shoulder_info = 'peak_metadata' in processed_data and len(processed_data.get('peak_metadata', [])) > 0
         peak_metadata = processed_data.get('peak_metadata', [])
         
         # IMPORTANT: Use the original signal for bounds detection to avoid double baseline subtraction
@@ -513,7 +518,8 @@ class Integrator:
             width = end_time - start_time
             
             peak = Peak(compound_id, peak_number, retention_time,
-                        integrator, width, area, start_time, end_time)
+                        integrator, width, area, start_time, end_time,
+                        start_index=left_bound, end_index=right_bound)
             
             # Add shoulder flag if applicable
             if has_shoulder_info:

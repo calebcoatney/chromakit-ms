@@ -294,7 +294,12 @@ class PlotFrame(QWidget):
                 x_full_range = [x_min - x_padding, x_max + x_padding]
                 
                 y_min = np.min(baseline_to_show)
-                y_max = np.max(main_y) * 1.1  # Add 10% padding at the top
+                y_max_raw = np.max(main_y)
+                # Add 10% padding at the top - handle negative values correctly
+                if y_max_raw >= 0:
+                    y_max = y_max_raw * 1.1  # Positive: multiply to increase
+                else:
+                    y_max = y_max_raw * 0.9  # Negative: multiply by 0.9 to make less negative
                 
                 # Only apply MS range adjustment for new files
                 if new_file and self.tic_data is not None and 'x' in self.tic_data:
@@ -306,7 +311,11 @@ class PlotFrame(QWidget):
                         mask = (x >= ms_x_min) & (x <= ms_x_max)
                         if np.any(mask):
                             y_max_in_ms_range = np.max(main_y[mask])
-                            y_max = y_max_in_ms_range * 1.1  # 10% padding
+                            # 10% padding - handle negative values correctly
+                            if y_max_in_ms_range >= 0:
+                                y_max = y_max_in_ms_range * 1.1
+                            else:
+                                y_max = y_max_in_ms_range * 0.9  # Negative: make less negative
                             print(f"Solvent delay detected at {ms_x_min:.2f} minutes, rescaling FID ylim to {y_max:.2f}")
                 
                 # Apply the calculated limits
@@ -422,7 +431,12 @@ class PlotFrame(QWidget):
                     y_min = np.min(baseline_y)
                 else:
                     y_min = 0
-                y_max = np.max(y) * 1.1  # Add 10% padding at the top
+                y_max_raw = np.max(y)
+                # Add 10% padding at the top - handle negative values correctly
+                if y_max_raw >= 0:
+                    y_max = y_max_raw * 1.1  # Positive: multiply to increase
+                else:
+                    y_max = y_max_raw * 0.9  # Negative: multiply by 0.9 to make less negative
                 
                 # Apply the calculated limits
                 self.tic_ax.set_xlim(x_full_range)
