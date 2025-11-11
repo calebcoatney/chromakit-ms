@@ -70,7 +70,8 @@ class ExportManager:
         return False
         
     def export_results(self, peaks: List[Any], d_path: str, trigger_type: str, 
-                      detector: Optional[str] = None, is_update: bool = False) -> dict:
+                      detector: Optional[str] = None, is_update: bool = False,
+                      quantitation_settings: Optional[dict] = None) -> dict:
         """Export results in the configured formats based on trigger type and settings.
         
         Args:
@@ -79,6 +80,7 @@ class ExportManager:
             trigger_type: Type of trigger ('integration', 'ms_search', 'assignment', 'batch')
             detector: Detector name (if None, will get from app.data_handler)
             is_update: True if this is an update to existing results, False for new export
+            quantitation_settings: Optional quantitation settings to include in export
             
         Returns:
             dict: Status of exports {'json': bool, 'csv': bool, 'messages': list}
@@ -96,10 +98,10 @@ class ExportManager:
             try:
                 if is_update:
                     from logic.json_exporter import update_json_with_ms_search_results
-                    success = update_json_with_ms_search_results(peaks, d_path, detector)
+                    success = update_json_with_ms_search_results(peaks, d_path, detector, quantitation_settings)
                 else:
                     from logic.json_exporter import export_integration_results_to_json
-                    success = export_integration_results_to_json(peaks, d_path, detector)
+                    success = export_integration_results_to_json(peaks, d_path, detector, quantitation_settings)
                 
                 result['json'] = success
                 if success:
@@ -131,21 +133,29 @@ class ExportManager:
         
         return result
     
-    def export_after_integration(self, peaks: List[Any], d_path: str, detector: str = None) -> dict:
+    def export_after_integration(self, peaks: List[Any], d_path: str, detector: str = None, 
+                                quantitation_settings: dict = None) -> dict:
         """Export results after peak integration."""
-        return self.export_results(peaks, d_path, 'integration', detector, is_update=False)
+        return self.export_results(peaks, d_path, 'integration', detector, is_update=False, 
+                                  quantitation_settings=quantitation_settings)
     
-    def export_after_ms_search(self, peaks: List[Any], d_path: str, detector: str = None) -> dict:
+    def export_after_ms_search(self, peaks: List[Any], d_path: str, detector: str = None,
+                              quantitation_settings: dict = None) -> dict:
         """Export results after MS library search."""
-        return self.export_results(peaks, d_path, 'ms_search', detector, is_update=True)
+        return self.export_results(peaks, d_path, 'ms_search', detector, is_update=True,
+                                  quantitation_settings=quantitation_settings)
     
-    def export_after_assignment(self, peaks: List[Any], d_path: str, detector: str = None) -> dict:
+    def export_after_assignment(self, peaks: List[Any], d_path: str, detector: str = None,
+                               quantitation_settings: dict = None) -> dict:
         """Export results after manual peak assignment."""
-        return self.export_results(peaks, d_path, 'assignment', detector, is_update=True)
+        return self.export_results(peaks, d_path, 'assignment', detector, is_update=True,
+                                  quantitation_settings=quantitation_settings)
     
-    def export_during_batch(self, peaks: List[Any], d_path: str, detector: str = None) -> dict:
+    def export_during_batch(self, peaks: List[Any], d_path: str, detector: str = None,
+                           quantitation_settings: dict = None) -> dict:
         """Export results during batch processing."""
-        return self.export_results(peaks, d_path, 'batch', detector, is_update=False)
+        return self.export_results(peaks, d_path, 'batch', detector, is_update=False,
+                                  quantitation_settings=quantitation_settings)
     
     def get_export_summary(self) -> str:
         """Get a summary of current export settings.

@@ -12,6 +12,7 @@ from ui.frames.plot import PlotFrame
 from ui.frames.parameters import ParametersFrame
 from ui.frames.ms import MSFrame
 from ui.frames.rt_table import RTTableFrame
+from ui.frames.quantitation import QuantitationFrame
 from ui.frames.buttons import ButtonFrame
 from ui.dialogs.automation_dialog import AutomationDialog
 from ui.dialogs.export_settings_dialog import ExportSettingsDialog
@@ -88,11 +89,15 @@ class ChromaKitApp(QMainWindow):
         # Create RT Table frame
         self.rt_table_frame = RTTableFrame()
         
+        # Create Quantitation frame
+        self.quantitation_frame = QuantitationFrame()
+        
         # Create a tab widget for the right-side panels
         self.right_tabs = QTabWidget()
         self.right_tabs.addTab(self.parameters_frame, "Parameters")
         self.right_tabs.addTab(self.ms_frame, "Mass Spectrometry")
         self.right_tabs.addTab(self.rt_table_frame, "RT Table")
+        self.right_tabs.addTab(self.quantitation_frame, "Quantitation")
         self.right_tabs.setMinimumWidth(350) # Ensure the tab widget has a reasonable minimum width
         
         # Add the tab widget to the main layout
@@ -117,6 +122,10 @@ class ChromaKitApp(QMainWindow):
 
         # Connect RT table signals
         self.rt_table_frame.rt_table_changed.connect(self.on_rt_table_changed)
+        
+        # Connect quantitation signals
+        self.quantitation_frame.quantitation_changed.connect(self.on_quantitation_changed)
+        self.quantitation_frame.requantitate_requested.connect(self._perform_quantitation)
         
         # Add this new connection for MS spectrum viewing
         self.plot_frame.ms_spectrum_requested.connect(self.on_ms_spectrum_requested)
@@ -726,6 +735,11 @@ class ChromaKitApp(QMainWindow):
     def on_ms_search_completed(self):
         """Handle MS search completion."""
         self.status_bar.showMessage("MS library search complete")
+        
+        # Also set the ms_toolkit reference in the quantitation frame
+        if hasattr(self, 'quantitation_frame') and hasattr(self.ms_frame, 'ms_toolkit'):
+            self.quantitation_frame.ms_toolkit = self.ms_frame.ms_toolkit
+            print("MS toolkit reference set in quantitation frame")
     
     def on_edit_assignment_requested(self, peak_index):
         """Handle request to edit peak compound assignment."""
@@ -1815,6 +1829,17 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage(f"RT matching enabled with {count} compounds")
         else:
             self.status_bar.showMessage("RT matching disabled")
+    
+    @Slot()
+    def on_quantitation_changed(self):
+        """Handle quantitation settings changes."""
+        settings = self.quantitation_frame.get_settings()
+        
+        if settings and settings['enabled']:
+            compound = settings['internal_standard'].get('compound', 'Unknown')
+            self.status_bar.showMessage(f"Quantitation enabled with IS: {compound}")
+        else:
+            self.status_bar.showMessage("Quantitation disabled")
 
     @Slot(dict)
     def on_parameters_changed(self, params):
@@ -2110,6 +2135,10 @@ class ChromaKitApp(QMainWindow):
         else:
             self.status_bar.showMessage(f"Batch MS search completed: {match_count}/{total_peaks} peaks identified")
         
+        # Perform quantitation if enabled
+        if self.quantitation_frame.is_enabled() and match_count > 0:
+            self._perform_quantitation()
+        
         # Update results view
         self.update_results_view()
         
@@ -2134,14 +2163,47 @@ class ChromaKitApp(QMainWindow):
         """Handle saving and exporting results on the main thread."""
         current_dir = self.data_handler.current_directory_path
         
+        # Get quantitation settings if enabled
+        quantitation_settings = None
+        if hasattr(self, 'quantitation_frame') and self.quantitation_frame.is_enabled():
+            quant_settings = self.quantitation_frame.get_settings()
+            if quant_settings:
+                # Get RF and carbon balance from UI
+                rf_text = self.quantitation_frame.rf_label.text()
+                c_balance_text = self.quantitation_frame.c_balance_label.text()
+                
+                # Build export-friendly quantitation metadata
+                quantitation_settings = {
+                    'enabled': True,
+                    'method': quant_settings['method'],
+                    'internal_standard': quant_settings['internal_standard'],
+                    'sample': quant_settings['sample']
+                }
+                
+                # Add RF if calculated
+                if rf_text and rf_text != "—":
+                    try:
+                        quantitation_settings['response_factor'] = float(rf_text)
+                    except:
+                        pass
+                
+                # Add carbon balance if calculated
+                if c_balance_text and c_balance_text != "—":
+                    try:
+                        c_balance_str = c_balance_text.rstrip('%')
+                        quantitation_settings['carbon_balance'] = float(c_balance_str)
+                    except:
+                        pass
+        
         # Use export manager for consistent export behavior
         try:
             detector = self.data_handler.current_detector if hasattr(self.data_handler, 'current_detector') else 'Unknown'
-            # Export using export manager
+            # Export using export manager with quantitation settings
             export_result = self.export_manager.export_after_ms_search(
                 self.integrated_peaks, 
                 current_dir, 
-                detector
+                detector,
+                quantitation_settings=quantitation_settings
             )
             
             # Show appropriate status message
@@ -2224,6 +2286,205 @@ class ChromaKitApp(QMainWindow):
         dialog.close()
         self.status_bar.showMessage("Error in batch MS search")
         QMessageBox.critical(self, "Batch Search Error", error_message)
+    
+    def _perform_quantitation(self):
+        """Perform quantitation on integrated peaks using Polyarc + IS method."""
+        from logic.quantitation import QuantitationCalculator
+        
+        # Get quantitation settings
+        settings = self.quantitation_frame.get_settings()
+        if not settings or not settings['enabled']:
+            return
+        
+        # Get calculator
+        calculator = self.quantitation_frame.calculator
+        
+        # Get IS compound name
+        is_compound = settings['internal_standard']['compound']
+        if not is_compound:
+            QMessageBox.warning(self, "Quantitation Error", 
+                              "Internal standard compound name is required")
+            return
+        
+        # Find IS peak by compound name
+        is_peak = None
+        for peak in self.integrated_peaks:
+            compound_id = getattr(peak, 'Compound_ID', None) or getattr(peak, 'compound_id', None)
+            if compound_id and compound_id.strip().lower() == is_compound.strip().lower():
+                is_peak = peak
+                break
+        
+        if not is_peak:
+            QMessageBox.warning(self, "Quantitation Error", 
+                              f"Internal standard '{is_compound}' not found in detected peaks.\n\n"
+                              "Make sure the IS was detected and identified by MS search.")
+            return
+        
+        # Calculate mol C of IS
+        mol_C_IS = settings['internal_standard'].get('mol_C')
+        if not mol_C_IS:
+            QMessageBox.warning(self, "Quantitation Error", 
+                              "Could not calculate mol C of internal standard.\n\n"
+                              "Check that all IS parameters are entered correctly.")
+            return
+        
+        # Calculate response factor
+        rf = calculator.calculate_response_factor(is_peak.area, mol_C_IS)
+        if not rf:
+            QMessageBox.warning(self, "Quantitation Error", 
+                              "Could not calculate response factor")
+            return
+        
+        # Display RF in UI
+        self.quantitation_frame.set_response_factor(rf)
+        
+        print(f"\n=== Quantitation ===")
+        print(f"Internal Standard: {is_compound}")
+        print(f"IS Area: {is_peak.area:.2f}")
+        print(f"IS mol C: {mol_C_IS:.6e}")
+        print(f"Response Factor: {rf:.2e}")
+        
+        # Quantitate each peak
+        peaks_quantitated = 0
+        peaks_data = []
+        
+        for peak in self.integrated_peaks:
+            # Get compound info
+            compound_id = getattr(peak, 'Compound_ID', None) or getattr(peak, 'compound_id', None)
+            
+            if not compound_id:
+                continue
+            
+            # Check if this is the internal standard - we'll mark it but exclude from composition
+            is_internal_standard = (compound_id.strip().lower() == is_compound.strip().lower())
+            
+            # Get formula and MW from MS library (need to implement library lookup)
+            # For now, we'll need to add this functionality
+            formula = self._get_compound_formula(compound_id)
+            mw = self._get_compound_mw(compound_id)
+            
+            if not formula or not mw:
+                print(f"Skipping {compound_id}: missing formula or MW")
+                continue
+            
+            # Quantitate the peak
+            quant_result = calculator.quantitate_peak(peak.area, rf, formula, mw)
+            
+            if quant_result:
+                # Store in peak object
+                peak.mol_C = quant_result['mol_C']
+                peak.num_carbons = quant_result['num_carbons']
+                peak.mol = quant_result['mol']
+                peak.mass_mg = quant_result['mass_mg']
+                
+                # Mark if this is the internal standard
+                quant_result['is_internal_standard'] = is_internal_standard
+                
+                # Only add to peaks_data if NOT the internal standard
+                if not is_internal_standard:
+                    peaks_data.append(quant_result)
+                
+                peaks_quantitated += 1
+                
+                is_marker = " (IS)" if is_internal_standard else ""
+                print(f"{compound_id}{is_marker}: {quant_result['mol_C']:.6e} mol C, "
+                      f"{quant_result['mass_mg']:.4f} mg")
+        
+        if peaks_quantitated == 0:
+            QMessageBox.warning(self, "Quantitation Warning", 
+                              "No peaks could be quantitated.\n\n"
+                              "This may be because formula/MW information is not available "
+                              "in the MS library.")
+            return
+        
+        # Calculate composition percentages (excluding IS)
+        calculator.calculate_composition(peaks_data)
+        
+        # Update peak objects with percentages
+        # Need to match peaks_data (excluding IS) to integrated_peaks
+        peaks_data_idx = 0
+        for peak in self.integrated_peaks:
+            compound_id = getattr(peak, 'Compound_ID', None) or getattr(peak, 'compound_id', None)
+            
+            # Check if this peak was quantitated
+            if hasattr(peak, 'mol') and peak.mol is not None:
+                # Check if this is the IS
+                is_internal_standard = (compound_id and compound_id.strip().lower() == is_compound.strip().lower())
+                
+                if is_internal_standard:
+                    # IS gets None for composition percentages
+                    peak.mol_C_percent = None
+                    peak.mol_percent = None
+                    peak.wt_percent = None
+                else:
+                    # Analyte gets calculated percentages
+                    if peaks_data_idx < len(peaks_data):
+                        peak.mol_C_percent = peaks_data[peaks_data_idx].get('mol_C_percent')
+                        peak.mol_percent = peaks_data[peaks_data_idx].get('mol_percent')
+                        peak.wt_percent = peaks_data[peaks_data_idx].get('wt_percent')
+                        peaks_data_idx += 1
+        
+        # Calculate carbon balance if sample volume and density provided
+        # Carbon balance = sum(mass of analytes, excluding IS) / sample_mass
+        sample_volume_uL = settings['sample'].get('volume_uL')
+        sample_density = settings['sample'].get('density')
+        
+        if sample_volume_uL and sample_density:
+            # Calculate sample mass (excluding IS volume if applicable)
+            sample_mass = calculator.calculate_sample_mass(sample_volume_uL, sample_density)
+            
+            # Total mass of analytes (excluding IS)
+            total_analyte_mass = sum(p['mass_mg'] for p in peaks_data)
+            
+            c_balance = calculator.calculate_carbon_balance(total_analyte_mass, sample_mass)
+            self.quantitation_frame.set_carbon_balance(c_balance)
+            print(f"Total analyte mass (excluding IS): {total_analyte_mass:.4f} mg")
+            print(f"Sample mass: {sample_mass:.4f} mg")
+            print(f"Carbon balance: {c_balance:.1f}%")
+        else:
+            print("Carbon balance not calculated (sample density not provided)")
+        
+        analyte_count = len(peaks_data)
+        self.status_bar.showMessage(f"Quantitation complete: {analyte_count} analytes quantitated (excluding IS)")
+        print(f"\nQuantitation complete: {analyte_count} analytes (+ 1 IS) = {peaks_quantitated} total peaks\n")
+
+        # Overwrite results if requested
+        if settings.get('overwrite_results'):
+            d_path = getattr(self.data_handler, 'current_directory_path', None)
+            if d_path:
+                # Export both JSON and CSV (force overwrite)
+                export_result = self.export_manager.export_after_ms_search(
+                    self.integrated_peaks, d_path, quantitation_settings=settings
+                )
+                # Optionally show a message
+                if export_result.get('json'):
+                    print("[Quantitation] JSON results overwritten.")
+                if export_result.get('csv'):
+                    print("[Quantitation] CSV results overwritten.")
+    
+    def _get_compound_formula(self, compound_name):
+        """Get molecular formula for a compound from MS library."""
+        try:
+            if hasattr(self.ms_frame, 'ms_toolkit') and self.ms_frame.ms_toolkit:
+                if hasattr(self.ms_frame.ms_toolkit, 'library') and compound_name in self.ms_frame.ms_toolkit.library:
+                    compound = self.ms_frame.ms_toolkit.library[compound_name]
+                    if hasattr(compound, 'formula'):
+                        return compound.formula
+        except Exception as e:
+            print(f"Error getting formula for {compound_name}: {e}")
+        return None
+    
+    def _get_compound_mw(self, compound_name):
+        """Get molecular weight for a compound from MS library."""
+        try:
+            if hasattr(self.ms_frame, 'ms_toolkit') and self.ms_frame.ms_toolkit:
+                if hasattr(self.ms_frame.ms_toolkit, 'library') and compound_name in self.ms_frame.ms_toolkit.library:
+                    compound = self.ms_frame.ms_toolkit.library[compound_name]
+                    if hasattr(compound, 'mw'):
+                        return compound.mw
+        except Exception as e:
+            print(f"Error getting MW for {compound_name}: {e}")
+        return None
 
     def _update_peak_match_in_results(self, peak_index, compound_name, match_score):
         """Update peak match in results table."""
@@ -2386,8 +2647,18 @@ class ChromaKitApp(QMainWindow):
                 for _ in range(9):
                     csv_writer.writerow([])
                 
-                # Write headers - exactly as in notebook
-                headers = ['Library/ID', 'CAS', 'Qual', 'FID R.T.', 'FID Area']
+                # Check if quantitation is enabled
+                has_quantitation = (hasattr(self, 'quantitation_frame') and 
+                                   self.quantitation_frame.is_enabled() and
+                                   any(hasattr(p, 'mol_C') and p.mol_C is not None 
+                                       for p in self.integrated_peaks))
+                
+                # Write headers - add quantitation columns if enabled
+                if has_quantitation:
+                    headers = ['Library/ID', 'CAS', 'Qual', 'FID R.T.', 'FID Area', 
+                              'mol C', 'mol', 'mass (mg)', 'mol %', 'wt %']
+                else:
+                    headers = ['Library/ID', 'CAS', 'Qual', 'FID R.T.', 'FID Area']
                 csv_writer.writerow(headers)
                 
                 # Write peak data
@@ -2416,6 +2687,24 @@ class ChromaKitApp(QMainWindow):
                         f"{peak.retention_time:.3f}",
                         f"{peak.area:.1f}"
                     ]
+                    
+                    # Add quantitation columns if enabled
+                    if has_quantitation:
+                        mol_c = getattr(peak, 'mol_C', '')
+                        mol = getattr(peak, 'mol', '')
+                        mass_mg = getattr(peak, 'mass_mg', '')
+                        mol_pct = getattr(peak, 'mol_percent', '')
+                        wt_pct = getattr(peak, 'wt_percent', '')
+                        
+                        # Format numeric values
+                        if mol_c: mol_c = f"{mol_c:.6e}"
+                        if mol: mol = f"{mol:.6e}"
+                        if mass_mg: mass_mg = f"{mass_mg:.4f}"
+                        if mol_pct: mol_pct = f"{mol_pct:.2f}"
+                        if wt_pct: wt_pct = f"{wt_pct:.2f}"
+                        
+                        row.extend([mol_c, mol, mass_mg, mol_pct, wt_pct])
+                    
                     csv_writer.writerow(row)
             
             self.status_bar.showMessage(f"Results exported to {filepath}")

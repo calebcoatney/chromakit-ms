@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QPushButton, QFrame, QTreeWidget, QTreeWidgetItem, QProgressBar,
     QFileDialog, QMessageBox, QApplication, QDialog
 )
-from PySide6.QtCore import Qt, Signal, QThread, Slot
+from PySide6.QtCore import Qt, Signal, QThread, Slot, QSettings, QTimer
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 import numpy as np
@@ -31,6 +31,9 @@ class MSFrame(QWidget):
         
         # Create main layout
         self.layout = QVBoxLayout(self)
+        
+        # Initialize QSettings for persistent storage
+        self.settings = QSettings("CalebCoatney", "ChromaKit")
         
         # Create MS tools
         self._create_ms_tools()
@@ -62,6 +65,8 @@ class MSFrame(QWidget):
         # Add initial library load message
         if HAS_MSTOOLKIT:
             self._init_mstoolkit()
+            # Schedule auto-load after UI is fully initialized (non-blocking)
+            QTimer.singleShot(100, self._try_autoload_library)
         else:
             self._show_toolkit_missing_message()
         
@@ -794,9 +799,70 @@ class MSFrame(QWidget):
             # Update status
             self.status_label.setText(f"Loading library from {os.path.basename(library_path)}...")
             
+            # Save paths to settings for next time
+            self.settings.setValue("ms/library_path", library_path)
+            self.settings.setValue("ms/preselector_path", preselector_path)
+            self.settings.setValue("ms/w2v_path", w2v_path)
+            
         except Exception as e:
             error_message = f"Error setting up library: {str(e)}"
             self._show_toolkit_error(error_message)
+    
+    def _try_autoload_library(self):
+        """Try to automatically load library using saved paths."""
+        try:
+            # Get saved paths from settings
+            library_path = self.settings.value("ms/library_path", None)
+            preselector_path = self.settings.value("ms/preselector_path", None)
+            w2v_path = self.settings.value("ms/w2v_path", None)
+            
+            # Check if all paths exist
+            if not all([library_path, preselector_path, w2v_path]):
+                return  # No saved paths
+            
+            if not all([os.path.exists(library_path), 
+                       os.path.exists(preselector_path), 
+                       os.path.exists(w2v_path)]):
+                print("Saved library paths no longer exist, skipping auto-load")
+                return  # Files don't exist anymore
+            
+            print(f"Auto-loading MS library from saved paths...")
+            print(f"  Library: {library_path}")
+            print(f"  Preselector: {preselector_path}")
+            print(f"  Word2Vec: {w2v_path}")
+            
+            # Show progress frame
+            if hasattr(self, 'progress_frame'):
+                self.progress_frame.show()
+            
+            self.progress_bar.setValue(0)
+            
+            # Create cache directory if it doesn't exist
+            cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'cache')
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            # Create a thread to load the library
+            self.load_thread = LibraryLoadThread(
+                self.ms_toolkit, 
+                library_path, 
+                cache_path=cache_dir,
+                preselector_path=preselector_path,
+                w2v_path=w2v_path
+            )
+            
+            # Connect signals
+            self.load_thread.progress_update.connect(self._update_progress)
+            self.load_thread.finished.connect(self._on_library_load_finished)
+            
+            # Start the thread
+            self.load_thread.start()
+            
+            # Update status
+            self.status_label.setText(f"Auto-loading library from {os.path.basename(library_path)}...")
+            
+        except Exception as e:
+            print(f"Error auto-loading library: {str(e)}")
+            # Don't show error dialog for auto-load failures, just log it
     
     def _update_progress(self, message, value):
         """Update progress bar and message."""

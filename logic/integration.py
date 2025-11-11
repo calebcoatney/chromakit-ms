@@ -38,6 +38,15 @@ class Peak:
         # Add saturation properties
         self.is_saturated = False
         self.saturation_level = None
+        
+        # Add quantitation properties (Polyarc + IS method)
+        self.mol_C = None  # Moles of carbon
+        self.mol_C_percent = None  # Mole percent of carbon
+        self.num_carbons = None  # Number of carbons in molecule
+        self.mol = None  # Moles of compound
+        self.mass_mg = None  # Mass in milligrams
+        self.mol_percent = None  # Mole percentage
+        self.wt_percent = None  # Weight percentage
     
     @property
     def as_row(self):
@@ -88,6 +97,25 @@ class Peak:
             
         if hasattr(self, 'casno'):
             result['casno'] = self.casno
+        
+        # Add quantitation fields
+        if hasattr(self, 'mol_C') and self.mol_C is not None:
+            result['mol_C'] = self.mol_C
+            
+        if hasattr(self, 'num_carbons') and self.num_carbons is not None:
+            result['num_carbons'] = self.num_carbons
+            
+        if hasattr(self, 'mol') and self.mol is not None:
+            result['mol'] = self.mol
+            
+        if hasattr(self, 'mass_mg') and self.mass_mg is not None:
+            result['mass_mg'] = self.mass_mg
+            
+        if hasattr(self, 'mol_percent') and self.mol_percent is not None:
+            result['mol_percent'] = self.mol_percent
+            
+        if hasattr(self, 'wt_percent') and self.wt_percent is not None:
+            result['wt_percent'] = self.wt_percent
             
         return result
     
