@@ -28,6 +28,10 @@ setup(
         "pybaselines",
         "rainbow-api",
         "pybaselines",
+        "customtkinter",
+        "uvicorn",
+        "fastapi",
+        "pydantic"
     ],
     extras_require={
         "ms": ["ms-toolkit-nrel"],

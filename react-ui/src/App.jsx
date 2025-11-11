@@ -158,54 +158,47 @@ function App() {
             </div>
           )}
 
-          {/* Main visualization area with plot and controls side-by-side */}
-          <div style={{ display: 'flex', gap: '1rem' }}>
-            {/* Chromatogram Plot and Results - takes up most space */}
-            <div style={{ flex: 1 }}>
-              <ChromatogramPlot
-                data={fileData?.chromatogram}
-                processedData={processedData}
-                integrationResults={integrationResults}
-                showCorrectedSignal={currentParams?.baseline?.show_corrected || false}
-                showBaseline={true}
-              />
+          {/* Processing Controls */}
+          {fileData && (
+            <ProcessingControls
+              onParametersChange={handleParametersChange}
+              disabled={processing}
+            />
+          )}
 
-              {/* Integrate Peaks Button */}
-              {processedData && processedData.peaks_x && processedData.peaks_x.length > 0 && !integrationResults && (
-                <div className="card">
-                  <div className="card-body">
-                    <button
-                      className="btn btn-success"
-                      onClick={handleIntegrate}
-                      disabled={loading}
-                      style={{ width: '100%', fontSize: '1rem', padding: '1rem' }}
-                    >
-                      {loading ? '⏳ Integrating...' : '📈 Integrate Peaks'}
-                    </button>
-                  </div>
-                </div>
-              )}
+          {/* Chromatogram Plot */}
+          <ChromatogramPlot
+            data={fileData?.chromatogram}
+            processedData={processedData}
+            integrationResults={integrationResults}
+            showCorrectedSignal={currentParams?.baseline?.show_corrected || false}
+            showBaseline={true}
+          />
 
-              {/* Peak Integration Table */}
-              {integrationResults && (
-                <PeakTable
-                  integrationResults={integrationResults}
-                  onIntegrate={handleIntegrate}
+          {/* Integrate Peaks Button */}
+          {processedData && processedData.peaks_x && processedData.peaks_x.length > 0 && !integrationResults && (
+            <div className="card">
+              <div className="card-body">
+                <button
+                  className="btn btn-success"
+                  onClick={handleIntegrate}
                   disabled={loading}
-                />
-              )}
-            </div>
-
-            {/* Processing Controls - on the right */}
-            {fileData && (
-              <div style={{ width: '450px', flexShrink: 0 }}>
-                <ProcessingControls
-                  onParametersChange={handleParametersChange}
-                  disabled={processing}
-                />
+                  style={{ width: '100%', fontSize: '1rem', padding: '1rem' }}
+                >
+                  {loading ? '⏳ Integrating...' : '📈 Integrate Peaks'}
+                </button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* Peak Integration Table */}
+          {integrationResults && (
+            <PeakTable
+              integrationResults={integrationResults}
+              onIntegrate={handleIntegrate}
+              disabled={loading}
+            />
+          )}
 
           {/* No Data Message */}
           {!selectedFile && !loading && (
