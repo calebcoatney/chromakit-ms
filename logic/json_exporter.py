@@ -90,7 +90,8 @@ def scrape_metadata_from_d_directory(d_path: str, detector: str = "FID1A") -> Di
 
 
 def export_integration_results_to_json(peaks: List[Any], d_path: str, 
-                                      detector: str = "FID1A") -> bool:
+                                      detector: str = "FID1A",
+                                      quantitation_settings: Optional[Dict] = None) -> bool:
     """
     Export integration results to JSON file with metadata.
     
@@ -98,6 +99,7 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
         peaks: List of Peak objects from integration
         d_path: Path to the .D directory
         detector: Detector name (usually auto-detected, fallback "FID1A")
+        quantitation_settings: Optional dict with quantitation settings and results
         
     Returns:
         True if successful, False otherwise
@@ -116,6 +118,10 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
             'notebook': metadata['notebook'],
             'peaks': []
         }
+        
+        # Add quantitation settings if provided
+        if quantitation_settings:
+            result_data['quantitation'] = quantitation_settings
         
         # Add peaks data
         for i, peak in enumerate(peaks):
@@ -166,6 +172,28 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
             if hasattr(peak, 'quality_issues') and peak.quality_issues:
                 peak_data['quality_issues'] = peak.quality_issues
             
+            # Add quantitation results if available
+            if hasattr(peak, 'mol_C') and peak.mol_C is not None:
+                peak_data['mol_C'] = float(peak.mol_C)
+            
+            if hasattr(peak, 'mol_C_percent') and peak.mol_C_percent is not None:
+                peak_data['mol_C_percent'] = float(peak.mol_C_percent)
+            
+            if hasattr(peak, 'num_carbons') and peak.num_carbons is not None:
+                peak_data['num_carbons'] = int(peak.num_carbons)
+            
+            if hasattr(peak, 'mol') and peak.mol is not None:
+                peak_data['mol'] = float(peak.mol)
+            
+            if hasattr(peak, 'mass_mg') and peak.mass_mg is not None:
+                peak_data['mass_mg'] = float(peak.mass_mg)
+            
+            if hasattr(peak, 'mol_percent') and peak.mol_percent is not None:
+                peak_data['mol_percent'] = float(peak.mol_percent)
+            
+            if hasattr(peak, 'wt_percent') and peak.wt_percent is not None:
+                peak_data['wt_percent'] = float(peak.wt_percent)
+            
             result_data['peaks'].append(peak_data)
         
         # Generate filename and save
@@ -185,7 +213,8 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
 
 
 def update_json_with_ms_search_results(peaks: List[Any], d_path: str, 
-                                     detector: str = "FID1A") -> bool:
+                                     detector: str = "FID1A",
+                                     quantitation_settings: Optional[Dict] = None) -> bool:
     """
     Update existing JSON file with MS search results.
     
@@ -193,6 +222,7 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
         peaks: List of Peak objects with MS search results
         d_path: Path to the .D directory
         detector: Detector name (usually auto-detected, fallback "FID1A")
+        quantitation_settings: Optional quantitation settings to include in export
         
     Returns:
         True if successful, False otherwise
@@ -270,10 +300,36 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
             if hasattr(peak, 'quality_issues') and peak.quality_issues:
                 peak_data['quality_issues'] = peak.quality_issues
             
+            # Add quantitation results if available
+            if hasattr(peak, 'mol_C') and peak.mol_C is not None:
+                peak_data['mol_C'] = float(peak.mol_C)
+            
+            if hasattr(peak, 'mol_C_percent') and peak.mol_C_percent is not None:
+                peak_data['mol_C_percent'] = float(peak.mol_C_percent)
+            
+            if hasattr(peak, 'num_carbons') and peak.num_carbons is not None:
+                peak_data['num_carbons'] = int(peak.num_carbons)
+            
+            if hasattr(peak, 'mol') and peak.mol is not None:
+                peak_data['mol'] = float(peak.mol)
+            
+            if hasattr(peak, 'mass_mg') and peak.mass_mg is not None:
+                peak_data['mass_mg'] = float(peak.mass_mg)
+            
+            if hasattr(peak, 'mol_percent') and peak.mol_percent is not None:
+                peak_data['mol_percent'] = float(peak.mol_percent)
+            
+            if hasattr(peak, 'wt_percent') and peak.wt_percent is not None:
+                peak_data['wt_percent'] = float(peak.wt_percent)
+            
             updated_peaks.append(peak_data)
         
         # Update the peaks data
         result_data['peaks'] = updated_peaks
+        
+        # Add or update quantitation settings if provided
+        if quantitation_settings:
+            result_data['quantitation'] = quantitation_settings
         
         # Write updated JSON file
         with open(result_file_path, 'w') as f:
