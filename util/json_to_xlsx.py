@@ -19,7 +19,7 @@ import json
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QWidget,
     QPushButton, QLabel, QFileDialog, QTextEdit, QProgressBar,
     QMessageBox, QGroupBox, QCheckBox, QTabWidget
 )
@@ -333,30 +333,36 @@ class UpdateJsonThread(QThread):
             return False, 0
 
 
-class JsonToExcelConverter(QMainWindow):
-    """Main application window for JSON to Excel conversion."""
+class JsonToExcelConverter(QDialog):
+    """Dialog for JSON to Excel conversion."""
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None, initial_directory=None):
+        super().__init__(parent)
         self.setWindowTitle("ChromaKit-MS: JSON ↔ Excel Converter")
-        self.setGeometry(100, 100, 700, 600)
+        self.setModal(True)
+        self.resize(700, 600)
         
         # Initialize variables for JSON to Excel
-        self.input_directory = ""
+        self.input_directory = initial_directory or ""
         self.output_file = ""
         
         # Initialize variables for Excel to JSON
         self.excel_input_file = ""
-        self.json_directory = ""
+        self.json_directory = initial_directory or ""
         
         self.init_ui()
+        
+        # Pre-populate directory labels if initial_directory was provided
+        if initial_directory:
+            self.input_label.setText(initial_directory)
+            self.json_dir_label.setText(initial_directory)
+            self.log_text.append(f"Pre-loaded directory: {initial_directory}")
+            self.update_process_button()
+            self.update_json_update_button()
     
     def init_ui(self):
         """Initialize the user interface."""
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        layout = QVBoxLayout(central_widget)
+        layout = QVBoxLayout(self)
         
         # Title
         title_label = QLabel("ChromaKit-MS JSON ↔ Excel Converter")

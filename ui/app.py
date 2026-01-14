@@ -173,6 +173,13 @@ class ChromaKitApp(QMainWindow):
         export_settings_action = settings_menu.addAction("Export Settings...")
         export_settings_action.triggered.connect(self.show_export_settings_dialog)
         
+        # Add a Tools menu
+        tools_menu = self.menuBar().addMenu("Tools")
+        
+        # Add JSON ↔ Excel Converter
+        self.converter_action = tools_menu.addAction("JSON ↔ Excel Converter...")
+        self.converter_action.triggered.connect(self.show_json_excel_converter)
+        
         # Theme state
         self.current_theme = 'light'
         self.matplotlib_theme_colors = None
@@ -2754,6 +2761,26 @@ class ChromaKitApp(QMainWindow):
         # Use a single-shot timer to ensure this runs on the main thread
         QTimer.singleShot(0, lambda: self.status_bar.showMessage(message))
 
+    def show_json_excel_converter(self):
+        """Show the JSON ↔ Excel Converter dialog."""
+        from util.json_to_xlsx import JsonToExcelConverter
+        
+        # Get the current directory if data is loaded
+        initial_directory = None
+        if hasattr(self, 'current_file') and self.current_file:
+            # Get parent directory of the .D file
+            initial_directory = os.path.dirname(self.current_file)
+        
+        # Create and show the converter dialog
+        converter_dialog = JsonToExcelConverter(parent=self, initial_directory=initial_directory)
+        
+        # Apply current theme to the dialog
+        converter_dialog.setProperty("theme", self.current_theme)
+        converter_dialog.setStyleSheet(self.styleSheet())
+        
+        # Show as modal dialog
+        converter_dialog.exec()
+    
     def show_batch_queue_dialog(self):
         """Show the batch job setup dialog before the progress dialog."""
         from ui.dialogs.batch_job_dialog import BatchJobDialog
