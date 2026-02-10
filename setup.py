@@ -31,7 +31,8 @@ setup(
         "customtkinter",
         "uvicorn",
         "fastapi",
-        "pydantic"
+        "pydantic",
+        "openpyxl",
     ],
     extras_require={
         "ms": ["ms-toolkit-nrel"],

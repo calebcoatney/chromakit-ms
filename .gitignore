@@ -416,3 +416,11 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Python build output
+__pycache__/
+*.pyc
+__pypackages__/ 
+build/
+.DS_Store
+.github/copilot-instructions.md

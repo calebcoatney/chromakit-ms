@@ -23,7 +23,7 @@ class ParametersFrame(QWidget):
         self.setMinimumWidth(300)
         
         # Track which methods use lambda
-        self.lam_methods = {"asls", "airpls", "arpls"}
+        self.lam_methods = {"asls", "airpls", "arpls", "mixture_model", "irsqr"}
         
         # Current parameters dictionary - update the baseline section
         self.current_params = {
@@ -42,7 +42,11 @@ class ParametersFrame(QWidget):
                 'method': 'arpls',  # Changed from 'asls' to 'arpls'
                 'lambda': 1e4,      # Changed from 1e6 to 1e4
                 'asymmetry': 0.01,
-                'align_tic': False  # Add alignment option
+                'align_tic': False,  # Add alignment option
+                'fastchrom': {
+                    'half_window': None,
+                    'smooth_half_window': None,
+                }
             },
             'peaks': {
                 'enabled': False,
@@ -189,6 +193,9 @@ class ParametersFrame(QWidget):
         self.baseline_algorithm.addItem("snip - Statistics-sensitive Non-linear", "snip")
         self.baseline_algorithm.addItem("airpls - Adaptive Iteratively Reweighted", "airpls")
         self.baseline_algorithm.addItem("arpls - Asymmetrically Reweighted", "arpls")
+        self.baseline_algorithm.addItem("mixture_model - Mixture Model", "mixture_model")
+        self.baseline_algorithm.addItem("irsqr - Spline Quantile Regression", "irsqr")
+        self.baseline_algorithm.addItem("fastchrom - FastChrom's Baseline", "fastchrom")
         
         # Set current method
         index = self.baseline_algorithm.findData(self.current_params['baseline']['method'])
@@ -229,7 +236,31 @@ class ParametersFrame(QWidget):
         form_layout.addRow("Lambda (λ):", self.lam_container)
         form_layout.addRow("", self.lam_label)
         
-        # Update lambda control visibility based on method
+        # FastChrom-specific parameters
+        self.fastchrom_container = QWidget()
+        fc_layout = QFormLayout(self.fastchrom_container)
+        fc_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.fc_half_window = QSpinBox()
+        self.fc_half_window.setMinimum(0)
+        self.fc_half_window.setMaximum(500)
+        self.fc_half_window.setSpecialValueText("Auto")
+        self.fc_half_window.setValue(0)
+        self.fc_half_window.setToolTip("Half-window for rolling std dev (~FWHM of peaks). 0 = Auto.")
+        self.fc_half_window.valueChanged.connect(self._on_fastchrom_param_changed)
+        fc_layout.addRow("Half Window:", self.fc_half_window)
+        
+        self.fc_smooth_half_window = QSpinBox()
+        self.fc_smooth_half_window.setMinimum(0)
+        self.fc_smooth_half_window.setMaximum(500)
+        self.fc_smooth_half_window.setSpecialValueText("Auto")
+        self.fc_smooth_half_window.setValue(0)
+        self.fc_smooth_half_window.setToolTip("Half-window for smoothing the interpolated baseline. 0 = Auto.")
+        self.fc_smooth_half_window.valueChanged.connect(self._on_fastchrom_param_changed)
+        fc_layout.addRow("Smooth Half Window:", self.fc_smooth_half_window)
+        
+        form_layout.addRow("", self.fastchrom_container)
+        # Update lambda and fastchrom control visibility based on method
         self.update_lam_visibility()
         
         # Add MS baseline correction button
@@ -429,13 +460,16 @@ class ParametersFrame(QWidget):
         self.params_layout.addWidget(shoulder_group)
 
     def update_lam_visibility(self):
-        """Show/hide lambda controls based on the current algorithm"""
+        """Show/hide lambda and fastchrom controls based on the current algorithm"""
         method = self.baseline_algorithm.currentData()
         
         # Only show lambda controls for methods that use it
         uses_lambda = method in self.lam_methods
         self.lam_container.setVisible(uses_lambda)
         self.lam_label.setVisible(uses_lambda)
+        
+        # Only show fastchrom controls for fastchrom
+        self.fastchrom_container.setVisible(method == "fastchrom")
     
     def _update_smoothing_controls_state(self):
         """Update enabled state of smoothing controls"""
@@ -537,6 +571,16 @@ class ParametersFrame(QWidget):
         method = self.baseline_algorithm.currentData()
         self.current_params['baseline']['method'] = method
         self.update_lam_visibility()
+        self.parameters_changed.emit(self.current_params)
+    
+    def _on_fastchrom_param_changed(self, value):
+        """Handle fastchrom parameter change"""
+        hw = self.fc_half_window.value()
+        shw = self.fc_smooth_half_window.value()
+        self.current_params['baseline']['fastchrom'] = {
+            'half_window': hw if hw > 0 else None,
+            'smooth_half_window': shw if shw > 0 else None,
+        }
         self.parameters_changed.emit(self.current_params)
     
     def _on_lambda_changed(self, value):

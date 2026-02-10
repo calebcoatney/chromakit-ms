@@ -207,7 +207,8 @@ class ChromatogramProcessor:
         baseline_y, baseline_corrected_y = self._apply_baseline_correction(
             x_values, smoothed_y,
             method=params['baseline']['method'],
-            lam=params['baseline']['lambda']
+            lam=params['baseline']['lambda'],
+            fastchrom_params=params['baseline'].get('fastchrom')
         )
         
         # STEP 3: Find peaks and shoulders using derivative method
@@ -317,7 +318,7 @@ class ChromatogramProcessor:
             print(f"Smoothing failed: {str(e)}")
             return y  # Return original data if smoothing fails
     
-    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6):
+    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None):
         """Apply baseline correction using the specified method."""
         # Re-initialize the baseline fitter each time to avoid length mismatch issues
         self.baseline_fitter = Baseline()
@@ -330,6 +331,9 @@ class ChromatogramProcessor:
             "snip": self.baseline_fitter.snip,           # Statistics-sensitive Non-linear
             "airpls": self.baseline_fitter.airpls,       # Adaptive Iteratively Reweighted
             "arpls": self.baseline_fitter.arpls,         # Asymmetrically Reweighted
+            "mixture_model": self.baseline_fitter.mixture_model,  # Mixture Model (spline-based)
+            "irsqr": self.baseline_fitter.irsqr,                  # Iterative Reweighted Spline Quantile Regression
+            "fastchrom": self.baseline_fitter.fastchrom,           # FastChrom's Baseline Method
         }
         
         # Validate input data
@@ -350,7 +354,7 @@ class ChromatogramProcessor:
             method = "asls"
         
         # Methods that use the lam parameter
-        lam_methods = {"asls", "airpls", "arpls"}
+        lam_methods = {"asls", "airpls", "arpls", "mixture_model", "irsqr"}
         
         try:
             # Apply the selected baseline correction method
@@ -359,6 +363,15 @@ class ChromatogramProcessor:
                 # Use a reasonable lambda based on data length
                 scaled_lam = lam
                 baseline, params = methods[method](y, lam=scaled_lam)
+            elif method == "fastchrom":
+                fc = fastchrom_params or {}
+                kwargs = {}
+                if fc.get('half_window') is not None:
+                    kwargs['half_window'] = fc['half_window']
+                if fc.get('smooth_half_window') is not None:
+                    kwargs['smooth_half_window'] = fc['smooth_half_window']
+                print(f"Using fastchrom with params: {kwargs}")
+                baseline, params = methods[method](y, **kwargs)
             else:
                 print(f"Method {method} does not use lambda")
                 baseline, params = methods[method](y)
