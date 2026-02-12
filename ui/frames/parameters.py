@@ -54,6 +54,10 @@ class ParametersFrame(QWidget):
                 'min_height': 0.0,
                 'min_width': 0.0
             },
+            'negative_peaks': {
+                'enabled': False,
+                'min_prominence': 1e5,
+            },
             'shoulders': {
                 'enabled': False,
                 'window_length': 41,
@@ -85,7 +89,10 @@ class ParametersFrame(QWidget):
         
         # Add peaks group
         self._init_peaks_controls()
-        
+
+        # Add negative peaks group
+        self._init_negative_peaks_controls()
+
         # Add shoulder detection group
         self._init_shoulder_controls()
         
@@ -324,6 +331,67 @@ class ParametersFrame(QWidget):
         # Add to parameters layout
         self.params_layout.addWidget(peaks_group)
     
+    def _init_negative_peaks_controls(self):
+        """Initialize negative peak detection controls"""
+        neg_peaks_group = QGroupBox("Negative Peak Detection")
+        form_layout = QFormLayout(neg_peaks_group)
+
+        # Enable/disable checkbox
+        self.neg_peaks_enabled = QCheckBox("Enable Negative Peak Detection")
+        self.neg_peaks_enabled.setChecked(self.current_params['negative_peaks']['enabled'])
+        self.neg_peaks_enabled.stateChanged.connect(self._on_neg_peaks_toggled)
+        form_layout.addRow(self.neg_peaks_enabled)
+
+        # Direct entry box for prominence with validation
+        self.neg_prominence_entry = QLineEdit()
+        self.neg_prominence_entry.setText(str(self.current_params['negative_peaks']['min_prominence']))
+
+        # Set up validator for decimal and scientific notation
+        validator = QRegularExpressionValidator(QRegularExpression(r'^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$'))
+        self.neg_prominence_entry.setValidator(validator)
+
+        self.neg_prominence_entry.editingFinished.connect(self._on_neg_prominence_entry_changed)
+        form_layout.addRow("Min Prominence:", self.neg_prominence_entry)
+
+        # Add help label
+        neg_help = QLabel("Detects peaks below the baseline (e.g. H2 on He carrier in TCD).\nEnter a number or scientific notation (e.g. 1e5).")
+        neg_help.setStyleSheet("color: #666666; font-size: 10px;")
+        form_layout.addRow("", neg_help)
+
+        # Enable/disable controls based on initial state
+        self._update_neg_peaks_controls_state()
+
+        # Add to parameters layout
+        self.params_layout.addWidget(neg_peaks_group)
+
+    def _on_neg_peaks_toggled(self, state):
+        """Handle negative peaks enable/disable toggle"""
+        enabled = bool(state)
+        self.current_params['negative_peaks']['enabled'] = enabled
+        self._update_neg_peaks_controls_state()
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_neg_prominence_entry_changed(self):
+        """Handle negative peak prominence entry change with validation"""
+        text = self.neg_prominence_entry.text()
+        try:
+            value = float(text)
+            self.current_params['negative_peaks']['min_prominence'] = value
+
+            # Provide visual feedback
+            self.neg_prominence_entry.setStyleSheet("background-color: #e6f2ff; border: 1px solid #99ccff;")
+            QTimer.singleShot(800, lambda: self.neg_prominence_entry.setStyleSheet(""))
+
+            self.parameters_changed.emit(self.current_params)
+        except ValueError:
+            self.neg_prominence_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
+            QTimer.singleShot(800, lambda: self.neg_prominence_entry.setStyleSheet(""))
+
+    def _update_neg_peaks_controls_state(self):
+        """Update enabled state of negative peaks controls"""
+        enabled = self.neg_peaks_enabled.isChecked()
+        self.neg_prominence_entry.setEnabled(enabled)
+
     def _init_shoulder_controls(self):
         """Initialize shoulder detection controls"""
         shoulder_group = QGroupBox("Shoulder Detection")

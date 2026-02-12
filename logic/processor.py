@@ -252,7 +252,45 @@ class ChromatogramProcessor:
                         if keep and i < len(peak_metadata):
                             filtered_metadata.append(peak_metadata[i])
                     peak_metadata = filtered_metadata
-        
+
+        # STEP 4: Detect negative peaks if enabled
+        if params.get('negative_peaks', {}).get('enabled', False):
+            smoothed_for_neg = smoothed_y if params['smoothing']['enabled'] else None
+            neg_peaks_x, neg_peaks_y, neg_peak_metadata = self._detect_negative_peaks(
+                x_values, baseline_corrected_y,
+                neg_peak_params=params['negative_peaks'],
+                smoothed_y=smoothed_for_neg
+            )
+
+            # Apply same solvent delay filtering as positive peaks
+            if ms_range is not None and len(neg_peaks_x) > 0:
+                ms_min, ms_max = ms_range
+                neg_mask = (neg_peaks_x >= ms_min) & (neg_peaks_x <= ms_max)
+                filtered_count = len(neg_peaks_x) - np.sum(neg_mask)
+                if filtered_count > 0:
+                    print(f"Solvent delay filtering: Removing {filtered_count} negative peaks outside MS range")
+                neg_peaks_x = neg_peaks_x[neg_mask]
+                neg_peaks_y = neg_peaks_y[neg_mask]
+                if neg_peak_metadata:
+                    neg_peak_metadata = [m for i, m in enumerate(neg_peak_metadata) if i < len(neg_mask) and neg_mask[i]]
+
+            # Merge negative peaks into the main peak arrays
+            if len(neg_peaks_x) > 0:
+                if len(peaks_x) > 0:
+                    merged_x = np.concatenate([peaks_x, neg_peaks_x])
+                    merged_y = np.concatenate([peaks_y, neg_peaks_y])
+                    merged_meta = peak_metadata + neg_peak_metadata
+                else:
+                    merged_x = neg_peaks_x
+                    merged_y = neg_peaks_y
+                    merged_meta = neg_peak_metadata
+
+                # Sort by retention time
+                sort_order = np.argsort(merged_x)
+                peaks_x = merged_x[sort_order]
+                peaks_y = merged_y[sort_order]
+                peak_metadata = [merged_meta[i] for i in sort_order]
+
         # Return processed data
         return {
             'x': x_values,
@@ -1098,3 +1136,55 @@ class ChromatogramProcessor:
             shoulder_bounds[int(shoulder_idx)] = bounds
             
         return shoulder_bounds
+
+    def _detect_negative_peaks(self, x, y, neg_peak_params, smoothed_y=None):
+        """
+        Detect negative peaks by running find_peaks on the negated signal.
+
+        Args:
+            x: Retention time array
+            y: Signal intensity array (baseline-corrected)
+            neg_peak_params: Negative peak detection parameters from UI
+            smoothed_y: Pre-smoothed signal (if smoothing was enabled), otherwise None
+
+        Returns:
+            tuple: (neg_peaks_x, neg_peaks_y, neg_peak_metadata)
+        """
+        from scipy.signal import find_peaks
+        import numpy as np
+
+        neg_prominence = neg_peak_params.get('min_prominence', 1e5)
+
+        # Use the smoothed signal for detection if available
+        signal_for_detection = smoothed_y if smoothed_y is not None else y
+
+        # Negate the signal so that negative peaks become positive peaks
+        negated = -signal_for_detection
+
+        # Calculate effective prominence
+        signal_range = np.max(negated) - np.min(negated)
+        effective_prominence = neg_prominence if neg_prominence > 1 else neg_prominence * signal_range
+
+        # Find peaks on the negated signal
+        peak_indices, peak_props = find_peaks(negated, prominence=effective_prominence)
+
+        if len(peak_indices) == 0:
+            return np.array([]), np.array([]), []
+
+        neg_peaks_x = x[peak_indices]
+        # Use original corrected signal values (not negated) for the peak y-values
+        neg_peaks_y = y[peak_indices]
+
+        neg_peak_metadata = []
+        for i, idx in enumerate(peak_indices):
+            metadata = {
+                'index': int(idx),
+                'x': float(neg_peaks_x[i]),
+                'y': float(neg_peaks_y[i]),
+                'is_shoulder': False,
+                'is_negative': True,
+                'type': 'negative_peak'
+            }
+            neg_peak_metadata.append(metadata)
+
+        return neg_peaks_x, neg_peaks_y, neg_peak_metadata

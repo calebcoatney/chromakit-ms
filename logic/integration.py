@@ -34,7 +34,10 @@ class Peak:
         
         # Add shoulder flag
         self.is_shoulder = False
-        
+
+        # Add negative peak flag
+        self.is_negative = False
+
         # Add saturation properties
         self.is_saturated = False
         self.saturation_level = None
@@ -81,7 +84,8 @@ class Peak:
             'spectral_coherence': self.spectral_coherence,
             'is_saturated': self.is_saturated,
             'saturation_level': self.saturation_level,
-            'is_shoulder': getattr(self, 'is_shoulder', False)
+            'is_shoulder': getattr(self, 'is_shoulder', False),
+            'is_negative': getattr(self, 'is_negative', False)
         }
         
         # Add quality issues
@@ -354,7 +358,12 @@ class Integrator:
             
             # Check if this peak is a shoulder
             is_shoulder = peak_idx in shoulder_indices
-            
+
+            # Check if this peak is a negative peak
+            is_negative = False
+            if has_shoulder_info and i < len(peak_metadata):
+                is_negative = peak_metadata[i].get('is_negative', False)
+
             # Get bounds based on peak type
             if is_shoulder and peak_idx in shoulder_bounds:
                 # If it's a shoulder, use the second derivative bounds
@@ -366,21 +375,23 @@ class Integrator:
                 right_bound = peak_idx
                 
                 # Define the range for min_left and min_right calculations
+                # For negative peaks, use argmax (closest to baseline) instead of argmin
+                valley_func = np.argmax if is_negative else np.argmin
                 if i > 0:  # If not the first peak
                     # Find the index of the previous peak's x value in the x array
                     start_idx = np.where(x == peaks_x[i - 1])[0][0] if np.any(x == peaks_x[i - 1]) else None
                     if start_idx is not None:
-                        min_left = start_idx + np.argmin(bounds_detection_signal[start_idx:peak_idx])
+                        min_left = start_idx + valley_func(bounds_detection_signal[start_idx:peak_idx])
                     else:
                         min_left = 0
                 else:
                     min_left = 0
-                
+
                 if i < len(peaks_x) - 1:  # If not the last peak
                     # Find the index of the next peak's x value in the x array
                     end_idx = np.where(x == peaks_x[i + 1])[0][0] if np.any(x == peaks_x[i + 1]) else None
                     if end_idx is not None:
-                        min_right = peak_idx + np.argmin(bounds_detection_signal[peak_idx:end_idx])
+                        min_right = peak_idx + valley_func(bounds_detection_signal[peak_idx:end_idx])
                     else:
                         min_right = len(bounds_detection_signal) - 1
                 else:
@@ -388,9 +399,9 @@ class Integrator:
                 
                 # Calculate vertical distance between apex and baseline (peak height)
                 apex_vertical_distance = apex_y - baseline_at_apex
-                
-                # Handle negative peaks (shouldn't happen but just in case)
-                if apex_vertical_distance < 0:
+
+                # For negative peaks, distance is negative — use absolute value
+                if is_negative or apex_vertical_distance < 0:
                     apex_vertical_distance = abs(apex_vertical_distance)
                 
                 # The threshold is 0.25% of the apex height
@@ -399,12 +410,14 @@ class Integrator:
                 dx = 25  # Step size for slope calculation
                 
                 # Check for shoulder to the left that would limit this peak's left bound
+                # (skip shoulder interactions for negative peaks)
                 left_limit_by_shoulder = None
-                for s_idx, s_bounds in shoulder_bounds.items():
-                    # If shoulder apex is to the left of this peak and its right bound is after this peak's min_left
-                    if s_idx < peak_idx and s_bounds[1] > min_left:
-                        left_limit_by_shoulder = s_bounds[1]
-                
+                if not is_negative:
+                    for s_idx, s_bounds in shoulder_bounds.items():
+                        # If shoulder apex is to the left of this peak and its right bound is after this peak's min_left
+                        if s_idx < peak_idx and s_bounds[1] > min_left:
+                            left_limit_by_shoulder = s_bounds[1]
+
                 # Calculate the left bound using the specified criteria
                 previous_slope = None
                 left_stop_reason = "no_criteria_met"
@@ -426,30 +439,33 @@ class Integrator:
                     
                     # Check based on provided criteria
                     if 'threshold' in criteria:
-                        # Now using original signal - normal thresholding should work
-                        if diff <= threshold:
+                        # For negative peaks, compare abs(diff) since diff is negative
+                        check_val = abs(diff) if is_negative else diff
+                        if check_val <= threshold:
                             left_bound = j
-                            left_stop_reason = f"threshold (diff={diff:.6f} <= {threshold:.6f})"
+                            left_stop_reason = f"threshold (check_val={check_val:.6f} <= {threshold:.6f})"
                             break
-                    
+
                     if 'minimum' in criteria and j == min_left:
                         left_bound = j
                         left_stop_reason = "minimum"
                         break
-                    
+
                     if 'slope' in criteria and previous_slope is not None and np.sign(slope) != np.sign(previous_slope):
                         left_bound = j
                         left_stop_reason = f"slope_change (slope={slope:.6f}, prev_slope={previous_slope:.6f})"
                         break
-                    
+
                     previous_slope = slope
-                
+
                 # Check for shoulder to the right that would limit this peak's right bound
+                # (skip shoulder interactions for negative peaks)
                 right_limit_by_shoulder = None
-                for s_idx, s_bounds in shoulder_bounds.items():
-                    # If shoulder apex is to the right of this peak and its left bound is before this peak's min_right
-                    if s_idx > peak_idx and s_bounds[0] < min_right:
-                        right_limit_by_shoulder = s_bounds[0]
+                if not is_negative:
+                    for s_idx, s_bounds in shoulder_bounds.items():
+                        # If shoulder apex is to the right of this peak and its left bound is before this peak's min_right
+                        if s_idx > peak_idx and s_bounds[0] < min_right:
+                            right_limit_by_shoulder = s_bounds[0]
                 
                 # Calculate the right bound similarly
                 previous_slope = None
@@ -472,10 +488,11 @@ class Integrator:
                     
                     # Check based on provided criteria
                     if 'threshold' in criteria:
-                        # Now using original signal - normal thresholding should work
-                        if diff <= threshold:
+                        # For negative peaks, compare abs(diff) since diff is negative
+                        check_val = abs(diff) if is_negative else diff
+                        if check_val <= threshold:
                             right_bound = j
-                            right_stop_reason = f"threshold (diff={diff:.6f} <= {threshold:.6f})"
+                            right_stop_reason = f"threshold (check_val={check_val:.6f} <= {threshold:.6f})"
                             break
                     
                     if 'minimum' in criteria and j == min_right:
@@ -531,7 +548,11 @@ class Integrator:
             
             # Apply correction factor
             area *= chemstation_area_factor
-            
+
+            # For negative peaks, report area as positive
+            if is_negative:
+                area = abs(area)
+
             # Store integrated area and bounds
             integrated_areas.append(area)
             integration_bounds.append((x[left_bound], x[right_bound]))
@@ -552,6 +573,10 @@ class Integrator:
             # Add shoulder flag if applicable
             if has_shoulder_info:
                 peak.is_shoulder = is_shoulder
+
+            # Add negative peak flag
+            if is_negative:
+                peak.is_negative = True
             
             # Assess peak quality if MS data is available and quality checks are enabled
             if ms_data is not None and quality_options and quality_options.get('quality_checks_enabled', False):

@@ -271,13 +271,17 @@ class PlotFrame(QWidget):
                         marker_y += data['baseline_y'][idx]
                 
                 if meta['type'] == 'peak':
-                    self.chromatogram_ax.plot(marker_x, marker_y, marker='*', color='orange', 
-                                         markersize=8, alpha=0.9, 
+                    self.chromatogram_ax.plot(marker_x, marker_y, marker='*', color='orange',
+                                         markersize=8, alpha=0.9,
                                          label='Peak' if 'Peak' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
                 elif meta['type'] == 'shoulder':
-                    self.chromatogram_ax.plot(marker_x, marker_y, marker='^', color='red', 
-                                         markersize=8, alpha=0.9, 
+                    self.chromatogram_ax.plot(marker_x, marker_y, marker='^', color='red',
+                                         markersize=8, alpha=0.9,
                                          label='Shoulder' if 'Shoulder' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
+                elif meta['type'] == 'negative_peak':
+                    self.chromatogram_ax.plot(marker_x, marker_y, marker='v', color='cyan',
+                                         markersize=8, alpha=0.9,
+                                         label='Neg. Peak' if 'Neg. Peak' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
         
         # Set labels and add legend
         self.chromatogram_ax.set_xlabel('Time (min)')
@@ -782,11 +786,16 @@ class PlotFrame(QWidget):
             # Get the color from the colormap
             color = cmap(color_idx / 20)
             
-            # Check if peak is flagged as saturated or convoluted
+            # Check if peak is flagged as saturated, convoluted, or negative
             peak = self.integrated_peaks[i]
             is_saturated = hasattr(peak, 'is_saturated') and peak.is_saturated
             is_convoluted = hasattr(peak, 'is_convoluted') and peak.is_convoluted
-            
+            is_negative = hasattr(peak, 'is_negative') and peak.is_negative
+
+            # Use cyan for negative peaks
+            if is_negative:
+                color = 'cyan'
+
             # Use different styling based on flags (prioritize saturation)
             if is_saturated:
                 linewidth = 2.0

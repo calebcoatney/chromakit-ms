@@ -1286,12 +1286,14 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage("No data available for integration")
             return
         
-        # Check if peak detection is enabled
+        # Check if peak detection is enabled (positive or negative)
         params = self.parameters_frame.get_parameters()
-        if not params['peaks']['enabled']:
+        peaks_enabled = params['peaks']['enabled']
+        neg_peaks_enabled = params.get('negative_peaks', {}).get('enabled', False)
+        if not peaks_enabled and not neg_peaks_enabled:
             self.status_bar.showMessage("Enable peak detection first to perform integration")
-            QMessageBox.warning(self, "Integration Error", 
-                               "You must enable peak detection first to perform integration.")
+            QMessageBox.warning(self, "Integration Error",
+                               "You must enable peak detection (positive or negative) first to perform integration.")
             return
         
         # Inform user that integration is in progress
@@ -1375,9 +1377,11 @@ class ChromaKitApp(QMainWindow):
             if not hasattr(self, 'current_processed') or self.current_processed is None:
                 return None
             
-            # Check if peak detection is enabled (no UI messaging)
+            # Check if peak detection is enabled (positive or negative, no UI messaging)
             params = self.parameters_frame.get_parameters()
-            if not params['peaks']['enabled']:
+            peaks_enabled = params['peaks']['enabled']
+            neg_peaks_enabled = params.get('negative_peaks', {}).get('enabled', False)
+            if not peaks_enabled and not neg_peaks_enabled:
                 return None
             
             # Perform integration - CORE FUNCTIONALITY WITHOUT UI UPDATES
