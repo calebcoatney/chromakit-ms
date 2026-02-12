@@ -602,43 +602,50 @@ class PlotFrame(QWidget):
 
     def _clear_peak_highlights(self):
         """Clear any peak highlights."""
-        # Store current axis limits
-        chromatogram_xlim = self.chromatogram_ax.get_xlim()
-        chromatogram_ylim = self.chromatogram_ax.get_ylim()
-        tic_xlim = self.tic_ax.get_xlim()
-        tic_ylim = self.tic_ax.get_ylim()
-        
+        # Store current axis limits (guard against None axes)
+        chromatogram_xlim = self.chromatogram_ax.get_xlim() if self.chromatogram_ax is not None else None
+        chromatogram_ylim = self.chromatogram_ax.get_ylim() if self.chromatogram_ax is not None else None
+        tic_xlim = self.tic_ax.get_xlim() if self.tic_ax is not None else None
+        tic_ylim = self.tic_ax.get_ylim() if self.tic_ax is not None else None
+
         for ax in [self.chromatogram_ax, self.tic_ax]:
+            if ax is None:
+                continue
             # Remove peak indicators
             for line in ax.get_lines():
                 if line.get_label() == '_selected_peak':
                     line.remove()
-            
+
             # Remove any annotations
             for txt in ax.texts:
                 if hasattr(txt, 'peak_annotation') and txt.peak_annotation:
                     txt.remove()
-        
+
         # Remove any highlighted fill_between
-        for collection in self.chromatogram_ax.collections:
-            if hasattr(collection, 'peak_highlight') and collection.peak_highlight:
-                collection.remove()
-        
+        if self.chromatogram_ax is not None:
+            for collection in self.chromatogram_ax.collections:
+                if hasattr(collection, 'peak_highlight') and collection.peak_highlight:
+                    collection.remove()
+
         # Restore the axis limits
-        self.chromatogram_ax.set_xlim(chromatogram_xlim)
-        self.chromatogram_ax.set_ylim(chromatogram_ylim)
-        self.tic_ax.set_xlim(tic_xlim)
-        self.tic_ax.set_ylim(tic_ylim)
-        
+        if self.chromatogram_ax is not None and chromatogram_xlim is not None:
+            self.chromatogram_ax.set_xlim(chromatogram_xlim)
+        if self.chromatogram_ax is not None and chromatogram_ylim is not None:
+            self.chromatogram_ax.set_ylim(chromatogram_ylim)
+        if self.tic_ax is not None and tic_xlim is not None:
+            self.tic_ax.set_xlim(tic_xlim)
+        if self.tic_ax is not None and tic_ylim is not None:
+            self.tic_ax.set_ylim(tic_ylim)
+
         self.canvas.draw_idle()
 
     def _highlight_selected_peak(self, peak):
         """Highlight the selected peak with enhanced information."""
-        # Store current axis limits before clearing highlights
-        chromatogram_xlim = self.chromatogram_ax.get_xlim()
-        chromatogram_ylim = self.chromatogram_ax.get_ylim()
-        tic_xlim = self.tic_ax.get_xlim()
-        tic_ylim = self.tic_ax.get_ylim()
+        # Store current axis limits before clearing highlights (guard against None axes)
+        chromatogram_xlim = self.chromatogram_ax.get_xlim() if self.chromatogram_ax is not None else None
+        chromatogram_ylim = self.chromatogram_ax.get_ylim() if self.chromatogram_ax is not None else None
+        tic_xlim = self.tic_ax.get_xlim() if self.tic_ax is not None else None
+        tic_ylim = self.tic_ax.get_ylim() if self.tic_ax is not None else None
         
         # First clear any existing highlights
         self._clear_peak_highlights()
@@ -649,6 +656,8 @@ class PlotFrame(QWidget):
         
         # Add annotation and highlight for each plot
         for ax in [self.chromatogram_ax, self.tic_ax]:
+            if ax is None:
+                continue
             # Create a more detailed annotation that includes compound ID if available
             annotation_text = f"Peak {peak.peak_number}\nRT: {peak.retention_time:.3f}"
             
@@ -740,11 +749,15 @@ class PlotFrame(QWidget):
                     break
         
         # Restore the axis limits before redrawing
-        self.chromatogram_ax.set_xlim(chromatogram_xlim)
-        self.chromatogram_ax.set_ylim(chromatogram_ylim)
-        self.tic_ax.set_xlim(tic_xlim) 
-        self.tic_ax.set_ylim(tic_ylim)
-        
+        if self.chromatogram_ax is not None and chromatogram_xlim is not None:
+            self.chromatogram_ax.set_xlim(chromatogram_xlim)
+        if self.chromatogram_ax is not None and chromatogram_ylim is not None:
+            self.chromatogram_ax.set_ylim(chromatogram_ylim)
+        if self.tic_ax is not None and tic_xlim is not None:
+            self.tic_ax.set_xlim(tic_xlim)
+        if self.tic_ax is not None and tic_ylim is not None:
+            self.tic_ax.set_ylim(tic_ylim)
+
         # Redraw the canvas
         self.canvas.draw_idle()
     
@@ -906,12 +919,31 @@ class PlotFrame(QWidget):
         """
         try:
             # Store current axis limits to preserve them
-            chromatogram_xlim = self.chromatogram_ax.get_xlim()
-            chromatogram_ylim = self.chromatogram_ax.get_ylim()
-            
+            chromatogram_xlim = self.chromatogram_ax.get_xlim() if self.chromatogram_ax is not None else None
+            chromatogram_ylim = self.chromatogram_ax.get_ylim() if self.chromatogram_ax is not None else None
+
+            # If tic_ax is None (previously hidden), skip straight to recreation
+            if self.tic_ax is None:
+                if visible:
+                    # Need to recreate the dual-axis layout
+                    self.figure.clear()
+                    self.tic_ax = self.figure.add_subplot(211)
+                    self.chromatogram_ax = self.figure.add_subplot(212, sharex=self.tic_ax)
+
+                    if self.chromatogram_data is not None:
+                        self.plot_chromatogram(self.chromatogram_data, new_file=False)
+                    if self.tic_data is not None and len(self.tic_data['x']) > 0:
+                        self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
+
+                    self.apply_theme()
+                    self.figure.tight_layout()
+                    self.canvas.draw_idle()
+                # If not visible and already None, nothing to do
+                return
+
             # Set visibility of the TIC axis
             self.tic_ax.set_visible(visible)
-            
+
             # When hiding TIC, make chromatogram plot take full height
             if not visible:
                 # Store reference to old TIC axis before deleting

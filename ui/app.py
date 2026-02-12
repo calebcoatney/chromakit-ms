@@ -445,12 +445,13 @@ class ChromaKitApp(QMainWindow):
         self.status_bar.showMessage("Generated sample data")
         
     @Slot(str)
-    def on_file_selected(self, file_path, batch_mode=False):
+    def on_file_selected(self, file_path, batch_mode=False, detector=None):
         """Handle file selection from the tree view.
-        
+
         Args:
             file_path: Path to the .D directory to load
             batch_mode: If True, suppress error dialogs (for batch processing)
+            detector: Specific detector channel to use, or None to auto-detect
         """
         try:
             # Clear stored peak data to prevent ghost peaks
@@ -483,8 +484,8 @@ class ChromaKitApp(QMainWindow):
                 self.status_bar.showMessage(f"Not a valid data directory: {file_path}")
                 return
                 
-            # Load the data
-            data = self.data_handler.load_data_directory(file_path)
+            # Load the data (pass detector to skip auto-detect when switching channels)
+            data = self.data_handler.load_data_directory(file_path, detector=detector)
             
             # Process chromatogram data if available
             if 'chromatogram' in data and len(data['chromatogram']['x']) > 0:
@@ -3211,13 +3212,11 @@ class ChromaKitApp(QMainWindow):
                 # Update detector and reload data
                 self.data_handler.current_detector = selected_detector
                 self.status_bar.showMessage(f"Changed detector to {selected_detector}")
-                
+
                 # Reload current data with new detector
                 if hasattr(self, 'current_directory_path') and self.current_directory_path:
-                    # Don't clear peak data before loading the file
-                    # (this is the key fix - we'll reapply it after loading)
-                    self.on_file_selected(self.current_directory_path)
-                    
+                    self.on_file_selected(self.current_directory_path, detector=selected_detector)
+
                     # Reapply integration results if they existed
                     if had_integrated_peaks and integration_results:
                         self.plot_frame.shade_integration_areas(integration_results)

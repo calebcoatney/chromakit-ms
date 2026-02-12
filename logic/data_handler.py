@@ -14,12 +14,13 @@ class DataHandler:
         self.current_detector = 'Unknown'  # Will be auto-detected when data is loaded
         self.spectrum_extractor = SpectrumExtractor()
     
-    def load_data_directory(self, file_path):
+    def load_data_directory(self, file_path, detector=None):
         """Load an Agilent .D directory.
-        
+
         Args:
             file_path (str): Path to the .D directory
-            
+            detector (str): Specific detector to use, or None to auto-detect
+
         Returns:
             dict: Dictionary containing chromatogram and TIC data
         """
@@ -28,18 +29,21 @@ class DataHandler:
                 file_path = file_path + '.D'
             else:
                 raise ValueError(f"File path must be an Agilent .D directory: {file_path}")
-        
+
         # Update navigation tracking - do this BEFORE loading the data
         self._update_directory_list(file_path)
-        
+
         try:
             # Load the data directory using rainbow
             data_dir = rb.read(file_path)
             self.current_data_dir = data_dir
             self.current_directory_path = file_path
-            
-            # Auto-detect the best available detector
-            self._auto_detect_detector(data_dir)
+
+            # Use specified detector or auto-detect
+            if detector is not None:
+                self.current_detector = detector
+            else:
+                self._auto_detect_detector(data_dir)
             
             # Get chromatogram data (using detected detector)
             chromatogram_data = self._get_chromatogram_data(data_dir)
