@@ -39,11 +39,12 @@ class DataHandler:
             self.current_data_dir = data_dir
             self.current_directory_path = file_path
 
-            # Use specified detector or auto-detect
+            # Use specified detector, keep current selection, or auto-detect
             if detector is not None:
                 self.current_detector = detector
-            else:
+            elif self.current_detector == 'Unknown':
                 self._auto_detect_detector(data_dir)
+            # else: keep self.current_detector as-is (user already selected one)
             
             # Get chromatogram data (using detected detector)
             chromatogram_data = self._get_chromatogram_data(data_dir)

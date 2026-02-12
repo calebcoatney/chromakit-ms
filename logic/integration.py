@@ -375,13 +375,18 @@ class Integrator:
                 right_bound = peak_idx
                 
                 # Define the range for min_left and min_right calculations
-                # For negative peaks, use argmax (closest to baseline) instead of argmin
-                valley_func = np.argmax if is_negative else np.argmin
                 if i > 0:  # If not the first peak
                     # Find the index of the previous peak's x value in the x array
                     start_idx = np.where(x == peaks_x[i - 1])[0][0] if np.any(x == peaks_x[i - 1]) else None
                     if start_idx is not None:
-                        min_left = start_idx + valley_func(bounds_detection_signal[start_idx:peak_idx])
+                        if is_negative:
+                            # For negative peaks, find the point closest to the baseline
+                            # between the previous peak and this one (baseline crossing)
+                            segment = bounds_detection_signal[start_idx:peak_idx]
+                            baseline_segment = baseline_y[start_idx:peak_idx]
+                            min_left = start_idx + np.argmin(np.abs(segment - baseline_segment))
+                        else:
+                            min_left = start_idx + np.argmin(bounds_detection_signal[start_idx:peak_idx])
                     else:
                         min_left = 0
                 else:
@@ -391,7 +396,13 @@ class Integrator:
                     # Find the index of the next peak's x value in the x array
                     end_idx = np.where(x == peaks_x[i + 1])[0][0] if np.any(x == peaks_x[i + 1]) else None
                     if end_idx is not None:
-                        min_right = peak_idx + valley_func(bounds_detection_signal[peak_idx:end_idx])
+                        if is_negative:
+                            # For negative peaks, find the point closest to the baseline
+                            segment = bounds_detection_signal[peak_idx:end_idx]
+                            baseline_segment = baseline_y[peak_idx:end_idx]
+                            min_right = peak_idx + np.argmin(np.abs(segment - baseline_segment))
+                        else:
+                            min_right = peak_idx + np.argmin(bounds_detection_signal[peak_idx:end_idx])
                     else:
                         min_right = len(bounds_detection_signal) - 1
                 else:
@@ -507,6 +518,18 @@ class Integrator:
                     
                     previous_slope = slope
             
+            # Clamp bounds to prevent overlap with adjacent peaks
+            if i > 0:
+                prev_peak_idx = np.where(x == peaks_x[i - 1])[0][0] if np.any(x == peaks_x[i - 1]) else None
+                if prev_peak_idx is not None and left_bound <= prev_peak_idx:
+                    # Don't extend past the previous peak's apex; use midpoint as boundary
+                    left_bound = (prev_peak_idx + peak_idx) // 2
+            if i < len(peaks_x) - 1:
+                next_peak_idx = np.where(x == peaks_x[i + 1])[0][0] if np.any(x == peaks_x[i + 1]) else None
+                if next_peak_idx is not None and right_bound >= next_peak_idx:
+                    # Don't extend past the next peak's apex; use midpoint as boundary
+                    right_bound = (peak_idx + next_peak_idx) // 2
+
             # Check for problematic case: bounds too close to apex (indicating premature stop)
             if left_bound == peak_idx and right_bound == peak_idx:
                 print(f"WARNING: Peak {peak_number} at RT={apex_x:.3f} has zero-width integration!")
