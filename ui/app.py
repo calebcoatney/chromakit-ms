@@ -16,6 +16,7 @@ from ui.frames.quantitation import QuantitationFrame
 from ui.frames.buttons import ButtonFrame
 from ui.dialogs.automation_dialog import AutomationDialog
 from ui.dialogs.export_settings_dialog import ExportSettingsDialog
+from ui.dialogs.scaling_factors_dialog import ScalingFactorsDialog
 from logic.automation_worker import AutomationWorker
 from logic.processor import ChromatogramProcessor
 from logic.batch_search import BatchSearchWorker
@@ -50,6 +51,12 @@ class ChromaKitApp(QMainWindow):
         
         # Initialize data handler
         self.data_handler = DataHandler()
+        
+        # Load scaling factors from settings
+        _settings = QSettings("CalebCoatney", "ChromaKit")
+        self.signal_factor = _settings.value("scaling/signal_factor", 1.0, type=float)
+        self.area_factor = _settings.value("scaling/area_factor", 1.0, type=float)
+        self.data_handler.signal_factor = self.signal_factor
         
         # Initialize export manager
         from logic.export_manager import ExportManager
@@ -172,6 +179,10 @@ class ChromaKitApp(QMainWindow):
         # Add export settings option
         export_settings_action = settings_menu.addAction("Export Settings...")
         export_settings_action.triggered.connect(self.show_export_settings_dialog)
+        
+        # Add scaling factors option
+        scaling_action = settings_menu.addAction("Scaling Factors...")
+        scaling_action.triggered.connect(self.show_scaling_factors_dialog)
         
         # Add a Tools menu
         tools_menu = self.menuBar().addMenu("Tools")
@@ -1388,8 +1399,9 @@ class ChromaKitApp(QMainWindow):
             # Perform integration - CORE FUNCTIONALITY WITHOUT UI UPDATES
             integration_results = self.processor.integrate_peaks(
                 processed_data=self.current_processed,
-                ms_data=ms_data,  # Pass MS data
-                quality_options=quality_options  # Pass quality options
+                ms_data=ms_data,
+                quality_options=quality_options,
+                chemstation_area_factor=self.area_factor
             )
             
             # Check if integration was successful
@@ -3225,3 +3237,15 @@ class ChromaKitApp(QMainWindow):
         """Show the export settings dialog."""
         dialog = ExportSettingsDialog(self)
         dialog.exec()
+    
+    def show_scaling_factors_dialog(self):
+        """Show the scaling factors configuration dialog."""
+        dialog = ScalingFactorsDialog(self)
+        dialog.factors_changed.connect(self._on_scaling_factors_changed)
+        dialog.exec()
+    
+    def _on_scaling_factors_changed(self, signal_factor, area_factor):
+        """Handle updated scaling factors from the dialog."""
+        self.signal_factor = signal_factor
+        self.area_factor = area_factor
+        self.data_handler.signal_factor = signal_factor

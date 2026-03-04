@@ -13,6 +13,7 @@ class DataHandler:
         self.current_index = -1
         self.current_detector = 'Unknown'  # Will be auto-detected when data is loaded
         self.spectrum_extractor = SpectrumExtractor()
+        self.signal_factor = 1.0  # Configurable via Settings > Scaling Factors
     
     def load_data_directory(self, file_path, detector=None):
         """Load an Agilent .D directory.
@@ -119,7 +120,7 @@ class DataHandler:
         
         # Prepare the data
         x = np.asarray(data.xlabels).flatten()
-        y = np.asarray(data.data).flatten() * 7680  # Apply scaling factor
+        y = np.asarray(data.data).flatten() * self.signal_factor
         
         return {'x': x, 'y': y}
     
