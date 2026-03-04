@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QLabel, QComboBox, QDialogButtonBox,
     QTabWidget  # Add QTabWidget to imports
 )
-from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer
+from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer, QSettings
 from PySide6.QtGui import QIcon, QBrush, QColor
 from ui.frames.tree import FileTreeFrame
 from ui.frames.plot import PlotFrame
