@@ -46,7 +46,8 @@ class PeakParams(BaseModel):
     polyorder: int = 3
     peak_prominence: float = 0.05
     peak_width: int = 5
-    shoulder_height_factor: float = 0.02
+    shoulder_height_factor: Optional[float] = Field(None, description="Deprecated: use sensitivity instead. Maps 0.01-0.10 to SNR threshold.")
+    shoulder_sensitivity: Optional[int] = Field(8, ge=1, le=10, description="Detection sensitivity 1-10 (higher = more detections)")
     apex_shoulder_distance: int = 10
     min_prominence: Optional[float] = None
     min_width: Optional[int] = None

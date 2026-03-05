@@ -7,36 +7,11 @@ from pybaselines import Baseline
 class ChromatogramProcessor:
     """Processes chromatogram data with smoothing, baseline subtraction, and peak finding."""
 
-    def _detect_peaks_and_shoulders_derivative(self, x, y, window_length=41, polyorder=3,
-                                              peak_prominence=0.05, peak_width=5,
-                                              shoulder_height_factor=0.02, apex_shoulder_distance=10):
-        """
-        Detect peaks and shoulders using derivative analysis.
-        This replaces both peak detection and shoulder detection with a unified approach.
-        
-        Parameters:
-        -----------
-        x : array-like
-            Retention time or x-axis values
-        y : array-like
-            Signal intensity values
-        window_length : int
-            Window length for Savitzky-Golay filter
-        polyorder : int
-            Polynomial order for Savitzky-Golay filter
-        peak_prominence : float
-            Minimum prominence for peak detection, relative to signal range
-        peak_width : int
-            Minimum width for peak detection (in data points)
-        shoulder_height_factor : float
-            Minimum height for shoulder detection as a fraction of max second derivative
-        apex_shoulder_distance : int
-            Minimum distance in points between apex and shoulder
-        """
     def _detect_peaks_and_shoulders_derivative(self, x, y, peak_params, shoulder_params, smoothed_y=None):
         """
         Detect peaks and shoulders using derivative analysis.
-        Separate logic for peak and shoulder detection, using UI parameters.
+        Uses noise-adaptive local thresholds for consistent detection
+        across heterogeneous peak sizes and varying noise levels.
         
         Args:
             x: Retention time array
@@ -52,24 +27,32 @@ class ChromatogramProcessor:
         peak_prominence = peak_params.get('min_prominence', 0.05)
         peak_width = peak_params.get('min_width', 5)
 
-        # CRITICAL FIX: Use the correct signal for peak detection
-        # If smoothing was enabled, use the smoothed signal; otherwise use original
         signal_for_detection = smoothed_y if smoothed_y is not None else y
         
-        # Calculate prominence threshold based on the detection signal
         signal_range = np.max(signal_for_detection) - np.min(signal_for_detection)
         min_prominence = peak_prominence if peak_prominence > 1 else peak_prominence * signal_range
         
-        # Find peaks on the appropriate signal
         peak_indices, peak_props = find_peaks(signal_for_detection, prominence=min_prominence, width=peak_width)
 
-        # --- Shoulder detection ---
+        # --- Shoulder detection (noise-adaptive, locally-normalized) ---
         shoulder_indices = []
+        shoulder_window = 41
+        shoulder_polyorder = 3
+
         if shoulder_params.get('enabled', False):
             shoulder_window = shoulder_params.get('window_length', 41)
             shoulder_polyorder = shoulder_params.get('polyorder', 3)
-            height_factor = shoulder_params.get('height_factor', 0.02)
             apex_distance = shoulder_params.get('apex_distance', 10)
+
+            # Support both new 'sensitivity' (1-10) and old 'height_factor' (0.01-0.10)
+            sensitivity = shoulder_params.get('sensitivity', None)
+            if sensitivity is not None:
+                # Map sensitivity [1, 10] → SNR multiplier [8.0, 2.5]
+                # Higher sensitivity = lower SNR threshold = more detections
+                snr_multiplier = 8.0 - (sensitivity - 1) * 5.5 / 9.0
+            else:
+                height_factor = shoulder_params.get('height_factor', 0.02)
+                snr_multiplier = 3.0 + (height_factor - 0.01) * 7.0 / 0.09
 
             data_length = len(y)
             if shoulder_window >= data_length:
@@ -81,30 +64,114 @@ class ChromatogramProcessor:
             if shoulder_polyorder >= shoulder_window:
                 shoulder_polyorder = shoulder_window - 1
 
-            # IMPROVED: Use a dedicated smoothing for shoulder detection (derivative analysis needs some smoothing)
+            # Use Savgol's built-in derivative computation for better noise rejection.
+            # This is mathematically superior to gradient(gradient(smooth(y))) because
+            # the polynomial fit provides optimal least-squares derivative estimates.
+            dx = np.median(np.diff(x))
             y_shoulder_smooth = savgol_filter(y, shoulder_window, shoulder_polyorder)
-            dy = np.gradient(y_shoulder_smooth, x)
-            d2y = np.gradient(dy, x)
-            
-            # Improved shoulder detection: look for inflection points (zero crossings in second derivative)
-            # that indicate potential shoulders/convolution
-            height_thresh = height_factor * np.abs(d2y).max()
-            
-            # Find minima in second derivative (negative peaks indicate convex regions)
-            shoulder_minima, _ = find_peaks(-d2y, height=height_thresh)
-            
-            # Filter shoulders: must be sufficiently far from main peaks
-            for idx in shoulder_minima:
-                if all(abs(idx - p) >= apex_distance for p in peak_indices):
-                    # Additional check: shoulder should have meaningful signal
-                    if y[idx] > 0.1 * np.max(y):  # At least 10% of max signal
-                        shoulder_indices.append(idx)
+            dy = savgol_filter(y, shoulder_window, shoulder_polyorder, deriv=1, delta=dx)
+            d2y = savgol_filter(y, shoulder_window, shoulder_polyorder, deriv=2, delta=dx)
 
-        # Find shoulder bounds using second derivative maxima
+            # Noise-adaptive threshold: estimate noise from baseline regions only
+            # (peak regions inflate MAD when peaks occupy a large fraction of the signal)
+            baseline_mask = y_shoulder_smooth < np.percentile(y_shoulder_smooth, 25)
+            if np.sum(baseline_mask) > 20:
+                baseline_d2y = d2y[baseline_mask]
+                noise_d2y = 1.4826 * np.median(np.abs(baseline_d2y - np.median(baseline_d2y)))
+                baseline_dy = dy[baseline_mask]
+                noise_dy = 1.4826 * np.median(np.abs(baseline_dy - np.median(baseline_dy)))
+            else:
+                median_d2y = np.median(d2y)
+                noise_d2y = 1.4826 * np.median(np.abs(d2y - median_d2y))
+                median_dy = np.median(dy)
+                noise_dy = 1.4826 * np.median(np.abs(dy - median_dy))
+
+            noise_threshold = snr_multiplier * noise_d2y
+
+            # Find candidate minima in d2y above noise floor
+            shoulder_minima, _ = find_peaks(-d2y, height=max(noise_threshold, 1e-15))
+
+            # Convert apex_distance to time units for sampling-rate independence
+            min_time_distance = apex_distance * dx
+
+            # Estimate per-peak exclusion zones from d2y curvature at the apex.
+            # For a Gaussian, d2y(apex) = -A/σ², so σ = sqrt(A/|d2y|).
+            # Using 1.5σ covers the natural d2y concave region (±σ) with margin.
+            peak_exclusion_radii = np.full(len(peak_indices), min_time_distance)
+            for pi, p in enumerate(peak_indices):
+                apex_val = y_shoulder_smooth[p]
+                apex_curv = abs(d2y[p])
+                if apex_curv > 1e-15 and apex_val > 0:
+                    sigma_est = np.sqrt(apex_val / apex_curv)
+                    peak_exclusion_radii[pi] = max(1.5 * sigma_est, min_time_distance)
+
+            # Local context window for signal-relative checks
+            local_window_pts = max(len(y) // 20, shoulder_window)
+            # Edge margin to avoid Savgol boundary artifacts
+            edge_margin = shoulder_window
+
+            for idx in shoulder_minima:
+                # Skip candidates near data boundaries
+                if idx < edge_margin or idx > len(y) - edge_margin:
+                    continue
+
+                # Must be outside every peak's exclusion zone
+                in_exclusion = False
+                for pi, p in enumerate(peak_indices):
+                    if abs(x[idx] - x[p]) < peak_exclusion_radii[pi]:
+                        in_exclusion = True
+                        break
+                if in_exclusion:
+                    continue
+
+                # Slope check: a real shoulder sits on the flank of a parent peak,
+                # so the first derivative should be non-trivial. Valley minima
+                # between isolated peaks have near-zero slope.
+                if noise_dy > 0 and abs(dy[idx]) < noise_dy:
+                    continue
+
+                # Local signal check: shoulder signal must be meaningful relative
+                # to the LOCAL maximum, not the global maximum
+                local_start = max(0, idx - local_window_pts)
+                local_end = min(len(y), idx + local_window_pts)
+                local_max = np.max(y[local_start:local_end])
+
+                if local_max > 0 and y[idx] > 0.1 * local_max:
+                    shoulder_indices.append(idx)
+
+            # Deduplicate: when multiple shoulders cluster nearby, keep only the
+            # one with the deepest d2y minimum. Use curvature-estimated width of
+            # the nearest peak as the dedup radius (shoulders on the same peak
+            # should merge).
+            if len(shoulder_indices) > 1:
+                deduped = []
+                used = set()
+                for i, si in enumerate(shoulder_indices):
+                    if i in used:
+                        continue
+                    # Find the nearest peak's exclusion radius for dedup distance
+                    nearest_radius = min_time_distance
+                    for pi, p in enumerate(peak_indices):
+                        dist = abs(x[si] - x[p])
+                        if dist < 3 * peak_exclusion_radii[pi]:
+                            nearest_radius = max(nearest_radius, peak_exclusion_radii[pi])
+                    group = [i]
+                    for j in range(i + 1, len(shoulder_indices)):
+                        if j in used:
+                            continue
+                        if abs(x[shoulder_indices[j]] - x[si]) < nearest_radius:
+                            group.append(j)
+                    best = min(group, key=lambda g: d2y[shoulder_indices[g]])
+                    deduped.append(shoulder_indices[best])
+                    for g in group:
+                        used.add(g)
+                shoulder_indices = deduped
+
+        # Find shoulder bounds: inner bound from valley detection, outer bound from signal descent
         shoulder_bounds = {}
         if len(shoulder_indices) > 0:
             shoulder_bounds = self._find_shoulder_bounds(
-                x, y, shoulder_indices, shoulder_window, shoulder_polyorder
+                x, y, shoulder_indices, peak_indices, shoulder_window, shoulder_polyorder
             )
 
         # Combine peaks and shoulders
@@ -144,7 +211,6 @@ class ChromatogramProcessor:
 
         # Return the detection signal used (for debugging/visualization)
         return peaks_x, peaks_y, peak_metadata, signal_for_detection
-    """Processes chromatogram data with smoothing, baseline subtraction, and peak finding."""
     
     def __init__(self):
         # Initialize the baseline fitter
@@ -1147,32 +1213,95 @@ class ChromatogramProcessor:
             print(f"Error evaluating fit quality: {e}")
             return 0.0
     
-    def _find_shoulder_bounds(self, x, y, shoulder_indices, shoulder_window=41, shoulder_polyorder=3):
+    def _detect_potential_shoulders(self, x, y, prominence_threshold=0.15, min_shoulder_height=0.1):
         """
-        Find bounds for shoulder peaks using local maxima in second derivative.
+        Detect potential shoulders within a local peak window for convolution analysis.
+        Used by peak fitting to decide if multi-peak fitting is warranted.
         
-        Mathematical approach:
-        1. Compute second derivative of smoothed signal
-        2. Find local maxima in second derivative (curvature change points)
-        3. For each shoulder, find nearest maxima to left and right as bounds
+        Args:
+            x: x-values of the peak window
+            y: y-values of the peak window
+            prominence_threshold: minimum relative prominence of d2y feature
+            min_shoulder_height: minimum signal height as fraction of local peak max
+            
+        Returns:
+            tuple: (list of shoulder dicts, convolution_score 0-1)
+        """
+        from scipy.signal import savgol_filter, find_peaks
+        import numpy as np
+        
+        if len(x) < 10:
+            return [], 0.0
+        
+        window = min(len(x) // 3, 21)
+        if window < 5:
+            window = 5
+        if window % 2 == 0:
+            window += 1
+        polyorder = min(3, window - 1)
+        
+        y_smooth = savgol_filter(y, window, polyorder)
+        dx = np.median(np.diff(x))
+        d2y = savgol_filter(y, window, polyorder, deriv=2, delta=dx)
+        
+        # Noise-adaptive threshold from baseline regions
+        baseline_mask = y_smooth < np.percentile(y_smooth, 25)
+        if np.sum(baseline_mask) > 10:
+            baseline_d2y = d2y[baseline_mask]
+            noise_d2y = 1.4826 * np.median(np.abs(baseline_d2y - np.median(baseline_d2y)))
+        else:
+            noise_d2y = 1.4826 * np.median(np.abs(d2y - np.median(d2y)))
+        min_height = max(3.0 * noise_d2y, prominence_threshold * np.abs(d2y).max())
+        
+        shoulder_minima, _ = find_peaks(-d2y, height=min_height)
+        
+        peak_max = np.max(y)
+        shoulders = []
+        for idx in shoulder_minima:
+            if peak_max > 0 and y[idx] > min_shoulder_height * peak_max:
+                shoulders.append({
+                    'index': int(idx),
+                    'x': float(x[idx]),
+                    'y': float(y[idx]),
+                    'd2y_depth': float(-d2y[idx])
+                })
+        
+        if len(shoulders) == 0:
+            convolution_score = 0.0
+        else:
+            max_depth = max(s['d2y_depth'] for s in shoulders)
+            d2y_range = np.max(np.abs(d2y))
+            convolution_score = min(max_depth / d2y_range if d2y_range > 0 else 0.0, 1.0)
+        
+        return shoulders, convolution_score
+    
+    def _find_shoulder_bounds(self, x, y, shoulder_indices, peak_indices, shoulder_window=41, shoulder_polyorder=3):
+        """
+        Find integration bounds for shoulder peaks.
+        
+        Uses asymmetric bound logic:
+        - Inner bound (toward parent peak): d2y inflection point (zero-crossing)
+          between shoulder and parent — the natural curvature boundary
+        - Outer bound (away from parent): walks outward until signal descends to 
+          near-baseline or reaches a local minimum / the next peak's territory.
         
         Args:
             x: Retention time array
-            y: Signal intensity array
+            y: Signal intensity array (baseline-corrected, so baseline ≈ 0)
             shoulder_indices: List of shoulder apex indices
-            shoulder_window: Window for smoothing (for derivative calculation)
+            peak_indices: Array of parent peak indices
+            shoulder_window: Window for smoothing
             shoulder_polyorder: Polynomial order for smoothing
             
         Returns:
             dict: shoulder_index -> {'left_bound': idx, 'right_bound': idx}
         """
-        from scipy.signal import savgol_filter, find_peaks
+        from scipy.signal import savgol_filter
         import numpy as np
         
         if len(shoulder_indices) == 0:
             return {}
             
-        # Ensure valid smoothing parameters
         data_length = len(y)
         if shoulder_window >= data_length:
             shoulder_window = min(data_length - 1, 41)
@@ -1182,34 +1311,104 @@ class ChromatogramProcessor:
             shoulder_window += 1
         if shoulder_polyorder >= shoulder_window:
             shoulder_polyorder = shoulder_window - 1
-            
-        # Smooth signal for derivative calculation
+        
         y_smooth = savgol_filter(y, shoulder_window, shoulder_polyorder)
+        dx = np.median(np.diff(x))
+        d2y = savgol_filter(y, shoulder_window, shoulder_polyorder, deriv=2, delta=dx)
         
-        # Calculate derivatives
-        dy = np.gradient(y_smooth, x)
-        d2y = np.gradient(dy, x)
-        
-        # Find local maxima in second derivative (curvature change points)
-        # These represent inflection points where curvature changes
-        maxima_indices, _ = find_peaks(d2y)
-        
-        # Find bounds for each shoulder
         shoulder_bounds = {}
         
         for shoulder_idx in shoulder_indices:
-            bounds = {'left_bound': None, 'right_bound': None}
+            shoulder_height = y_smooth[shoulder_idx]
             
-            # Find left bound: largest maxima index < shoulder_idx
-            left_candidates = maxima_indices[maxima_indices < shoulder_idx]
-            if len(left_candidates) > 0:
-                bounds['left_bound'] = int(np.max(left_candidates))
+            # Determine which side has the parent peak
+            if len(peak_indices) > 0:
+                distances = np.abs(peak_indices - shoulder_idx)
+                nearest_peak_idx = peak_indices[np.argmin(distances)]
+            else:
+                nearest_peak_idx = 0
             
-            # Find right bound: smallest maxima index > shoulder_idx
-            right_candidates = maxima_indices[maxima_indices > shoulder_idx]
-            if len(right_candidates) > 0:
-                bounds['right_bound'] = int(np.min(right_candidates))
+            parent_is_left = nearest_peak_idx < shoulder_idx
+            
+            # --- Inner bound (toward parent peak): inflection point ---
+            # The d2y zero-crossing between parent and shoulder marks where
+            # curvature transitions from one peak's domain to the other.
+            # For overlapping peaks: d2y goes negative (parent) → positive
+            # (saddle) → negative (shoulder). The zero-crossing closest to
+            # the shoulder is where the shoulder's curvature begins.
+            if parent_is_left:
+                inner_start, inner_end = nearest_peak_idx, shoulder_idx
+            else:
+                inner_start, inner_end = shoulder_idx, nearest_peak_idx
+            
+            inner_bound = (inner_start + inner_end) // 2  # fallback: midpoint
+            
+            if inner_end - inner_start > 2:
+                region_d2y = d2y[inner_start:inner_end]
                 
+                # Find d2y zero-crossings (sign changes) in the inter-peak region
+                zero_crossings = []
+                for k in range(len(region_d2y) - 1):
+                    if region_d2y[k] * region_d2y[k + 1] < 0:
+                        zero_crossings.append(inner_start + k)
+                
+                if zero_crossings:
+                    # Use the zero-crossing closest to the shoulder
+                    if parent_is_left:
+                        inner_bound = zero_crossings[-1]
+                    else:
+                        inner_bound = zero_crossings[0]
+                else:
+                    # No zero-crossing: shoulder is very subtle (d2y stays negative).
+                    # Use the point of maximum d2y (least negative curvature) as the
+                    # best approximation of the inflection-like transition.
+                    inner_bound = inner_start + np.argmax(region_d2y)
+            
+            # --- Outer bound (away from parent peak): walk until signal returns to baseline ---
+            descent_threshold = 0.02  # stop at 2% of shoulder height above baseline
+            target_level = descent_threshold * shoulder_height
+            
+            if parent_is_left:
+                # Walk right from shoulder apex
+                outer_bound = shoulder_idx
+                next_peaks = peak_indices[peak_indices > shoulder_idx]
+                for j in range(shoulder_idx + 1, data_length):
+                    if len(next_peaks) > 0:
+                        next_peak = next_peaks[0]
+                        if j >= (shoulder_idx + next_peak) // 2:
+                            outer_bound = j
+                            break
+                    if y_smooth[j] <= target_level:
+                        outer_bound = j
+                        break
+                    if j > shoulder_idx + 2 and y_smooth[j] > y_smooth[j - 1] and y_smooth[j - 1] < y_smooth[j - 2]:
+                        outer_bound = j - 1
+                        break
+                    outer_bound = j
+            else:
+                # Walk left from shoulder apex
+                outer_bound = shoulder_idx
+                prev_peaks = peak_indices[peak_indices < shoulder_idx]
+                for j in range(shoulder_idx - 1, -1, -1):
+                    if len(prev_peaks) > 0:
+                        prev_peak = prev_peaks[-1]
+                        if j <= (prev_peak + shoulder_idx) // 2:
+                            outer_bound = j
+                            break
+                    if y_smooth[j] <= target_level:
+                        outer_bound = j
+                        break
+                    if j < shoulder_idx - 2 and y_smooth[j] > y_smooth[j + 1] and y_smooth[j + 1] < y_smooth[j + 2]:
+                        outer_bound = j + 1
+                        break
+                    outer_bound = j
+            
+            # Assign to left/right based on parent direction
+            if parent_is_left:
+                bounds = {'left_bound': int(inner_bound), 'right_bound': int(outer_bound)}
+            else:
+                bounds = {'left_bound': int(outer_bound), 'right_bound': int(inner_bound)}
+            
             shoulder_bounds[int(shoulder_idx)] = bounds
             
         return shoulder_bounds

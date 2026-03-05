@@ -5,6 +5,7 @@
 
 # Test files
 test.ipynb
+shoulder-detection-logic.py
 library/
 overrides/
 results/

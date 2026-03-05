@@ -49,5 +49,23 @@ def convert_params_for_processor(params: dict) -> dict:
             params['peaks']['peak_prominence'] = params['peaks']['min_prominence']
         if params['peaks'].get('min_width') is not None:
             params['peaks']['peak_width'] = params['peaks']['min_width']
+        
+        # Extract shoulder params into separate dict for processor
+        shoulder_dict = {'enabled': True}
+        if 'shoulder_sensitivity' in params['peaks']:
+            val = params['peaks'].pop('shoulder_sensitivity')
+            if val is not None:
+                shoulder_dict['sensitivity'] = val
+        if 'shoulder_height_factor' in params['peaks']:
+            val = params['peaks'].pop('shoulder_height_factor')
+            if val is not None:
+                shoulder_dict['height_factor'] = val
+        if 'apex_shoulder_distance' in params['peaks']:
+            shoulder_dict['apex_distance'] = params['peaks'].pop('apex_shoulder_distance')
+        if 'window_length' in params['peaks']:
+            shoulder_dict['window_length'] = params['peaks']['window_length']
+        if 'polyorder' in params['peaks']:
+            shoulder_dict['polyorder'] = params['peaks']['polyorder']
+        params['shoulders'] = shoulder_dict
     
     return params
