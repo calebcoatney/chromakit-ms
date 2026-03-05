@@ -245,12 +245,28 @@ class ProcessingThread(QThread):
 
         self.progress_update.emit("Scanning for JSON files...")
 
-        # Collect directories that contain JSON files, preserving os.walk order
+        # Collect directories that contain JSON files, sorted chronologically
+        # by the timestamp in the first JSON file of each directory.
         dir_file_pairs = []
         for root, _, files in os.walk(directory):
             json_files = sorted(f for f in files if f.endswith('.json'))
             if json_files:
                 dir_file_pairs.append((root, json_files))
+
+        def _dir_sort_key(pair):
+            """Return a datetime for the first JSON file in the directory."""
+            root, jfiles = pair
+            try:
+                with open(os.path.join(root, jfiles[0]), 'r', encoding='utf-8') as fh:
+                    ts = json.load(fh).get('timestamp', '')
+                dt = _parse_timestamp(str(ts)) if ts else None
+                if dt is not None:
+                    return dt
+            except Exception:
+                pass
+            return datetime.datetime.max  # unparseable → sort to end
+
+        dir_file_pairs.sort(key=_dir_sort_key)
 
         for root, json_files in dir_file_pairs:
             current_col = 1

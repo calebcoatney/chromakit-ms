@@ -7,10 +7,33 @@ Created on Thu Dec  5 11:28:40 2024
 
 import os
 import json
+import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font
 import tkinter as tk
 from tkinter import filedialog
+
+# Timestamp patterns used by Agilent instruments
+_TS_PARSE_FMTS = [
+    "%d %b %y  %I:%M %p",
+    "%d %b %y %I:%M %p",
+    "%d %b %Y %I:%M %p",
+    "%d-%b-%y %H:%M:%S",
+    "%m/%d/%Y %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%d %b %y  %H:%M",
+    "%d %b %y %H:%M",
+]
+
+
+def _parse_timestamp(ts_string: str):
+    """Try to parse *ts_string* using known Agilent patterns."""
+    for pattern in _TS_PARSE_FMTS:
+        try:
+            return datetime.datetime.strptime(ts_string.strip(), pattern)
+        except ValueError:
+            continue
+    return None
 
 
 def process_json_to_excel(directory, output_file):
@@ -20,13 +43,28 @@ def process_json_to_excel(directory, output_file):
 
     starting_row = 1  # Start row for writing each file
 
+    # Collect all (root, json_files) pairs, then sort chronologically
+    dir_file_pairs = []
     for root, _, files in os.walk(directory):
-        # Filter for .json files in the current folder
         json_files = [f for f in files if f.endswith('.json')]
+        if json_files:
+            dir_file_pairs.append((root, json_files))
 
-        if not json_files:
-            continue  # Skip folders without .json files
+    def _dir_sort_key(pair):
+        root, jfiles = pair
+        try:
+            with open(os.path.join(root, jfiles[0]), 'r', encoding='utf-8') as fh:
+                ts = json.load(fh).get('timestamp', '')
+            dt = _parse_timestamp(str(ts)) if ts else None
+            if dt is not None:
+                return dt
+        except Exception:
+            pass
+        return datetime.datetime.max
 
+    dir_file_pairs.sort(key=_dir_sort_key)
+
+    for root, json_files in dir_file_pairs:
         for file in json_files:
             json_path = os.path.join(root, file)
             try:
