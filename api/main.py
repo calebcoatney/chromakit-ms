@@ -235,7 +235,8 @@ async def integrate_peaks(request: IntegrateRequest):
         result = processor.integrate_peaks(
             processed_data=processed_data,
             rt_table=request.rt_table,
-            chemstation_area_factor=request.chemstation_area_factor
+            chemstation_area_factor=request.chemstation_area_factor,
+            peak_groups=request.peak_groups
         )
         
         # Serialize results

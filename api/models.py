@@ -21,12 +21,19 @@ class SmoothingParams(BaseModel):
     savgol_filter: Dict[str, int] = {"window_length": 11, "polyorder": 3}
 
 
+class BreakPoint(BaseModel):
+    """A signal break point for segmented baseline fitting."""
+    time: float = Field(..., description="Break point time in minutes")
+    tolerance: float = Field(default=0.1, description="Tolerance window around break point")
+
+
 class BaselineParams(BaseModel):
     """Baseline correction parameters."""
     show_corrected: bool = False
     method: str = "asls"
     lambda_: float = Field(default=1e6, alias="lambda")
     asymmetry: float = 0.01
+    break_points: Optional[List[BreakPoint]] = Field(None, description="Signal break points for segmented baseline fitting")
     
     class Config:
         populate_by_name = True  # Allow both 'lambda' and 'lambda_'
@@ -43,6 +50,7 @@ class PeakParams(BaseModel):
     apex_shoulder_distance: int = 10
     min_prominence: Optional[float] = None
     min_width: Optional[int] = None
+    range_filters: Optional[List[List[float]]] = Field(None, description="List of [start, end] time ranges to keep peaks within")
 
 
 class ProcessingParams(BaseModel):
@@ -65,6 +73,7 @@ class IntegrateRequest(BaseModel):
     processed_data: Dict[str, Any] = Field(..., description="Processed chromatogram data")
     rt_table: Optional[Dict[str, Any]] = Field(None, description="Optional retention time table")
     chemstation_area_factor: float = 0.0784
+    peak_groups: Optional[List[List[float]]] = Field(None, description="List of [start, end] time windows for peak grouping")
 
 
 # Response Models

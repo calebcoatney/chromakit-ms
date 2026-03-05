@@ -208,7 +208,8 @@ class ChromatogramProcessor:
             x_values, smoothed_y,
             method=params['baseline']['method'],
             lam=params['baseline']['lambda'],
-            fastchrom_params=params['baseline'].get('fastchrom')
+            fastchrom_params=params['baseline'].get('fastchrom'),
+            break_points=params['baseline'].get('break_points', [])
         )
         
         # STEP 3: Find peaks and shoulders using derivative method
@@ -291,6 +292,24 @@ class ChromatogramProcessor:
                 peaks_y = merged_y[sort_order]
                 peak_metadata = [merged_meta[i] for i in sort_order]
 
+        # STEP 5: Range filtering — keep only peaks within user-specified time ranges
+        range_filters = params.get('peaks', {}).get('range_filters', [])
+        if range_filters and len(peaks_x) > 0:
+            range_mask = np.zeros(len(peaks_x), dtype=bool)
+            for rf in range_filters:
+                if len(rf) == 2:
+                    rf_start, rf_end = rf
+                    range_mask |= (peaks_x >= rf_start) & (peaks_x <= rf_end)
+            
+            filtered_count = len(peaks_x) - np.sum(range_mask)
+            if filtered_count > 0:
+                print(f"Range filtering: Removing {filtered_count} peaks outside specified ranges")
+            
+            peaks_x = peaks_x[range_mask]
+            peaks_y = peaks_y[range_mask]
+            if peak_metadata and len(peak_metadata) > 0:
+                peak_metadata = [m for i, m in enumerate(peak_metadata) if i < len(range_mask) and range_mask[i]]
+
         # Return processed data
         return {
             'x': x_values,
@@ -356,8 +375,64 @@ class ChromatogramProcessor:
             print(f"Smoothing failed: {str(e)}")
             return y  # Return original data if smoothing fails
     
-    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None):
-        """Apply baseline correction using the specified method."""
+    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None):
+        """Apply baseline correction using the specified method.
+        
+        If break_points are provided, the signal is split at each break point
+        and baselines are fitted independently to each segment.
+        """
+        # Handle break points: split signal, fit each segment, stitch back
+        if break_points and len(break_points) > 0 and x is not None and len(x) > 0:
+            # Compute split indices from break point times
+            split_indices = []
+            for bp in break_points:
+                bp_time = bp.get('time', bp) if isinstance(bp, dict) else float(bp)
+                bp_tol = bp.get('tolerance', 0.0) if isinstance(bp, dict) else 0.0
+                # Find the index closest to the break point time
+                idx = int(np.argmin(np.abs(x - bp_time)))
+                # Apply tolerance: use the midpoint of the tolerance window
+                # The tolerance just gives the user some slack in specifying the exact time
+                split_indices.append(idx)
+            
+            # Sort and deduplicate
+            split_indices = sorted(set(split_indices))
+            # Filter out boundary indices
+            split_indices = [i for i in split_indices if 0 < i < len(x)]
+            
+            if len(split_indices) > 0:
+                print(f"Break point baseline: splitting signal at {len(split_indices)} point(s)")
+                # Build segment boundaries: [0, idx1, idx2, ..., len(x)]
+                boundaries = [0] + split_indices + [len(x)]
+                
+                baseline_segments = []
+                corrected_segments = []
+                
+                for seg_i in range(len(boundaries) - 1):
+                    seg_start = boundaries[seg_i]
+                    seg_end = boundaries[seg_i + 1]
+                    seg_y = y[seg_start:seg_end]
+                    
+                    if len(seg_y) == 0:
+                        continue
+                    
+                    print(f"  Segment {seg_i + 1}: indices [{seg_start}:{seg_end}], length={len(seg_y)}")
+                    # Fit baseline to this segment using the same method/params
+                    seg_baseline, seg_corrected = self._apply_baseline_correction_single(
+                        seg_y, method=method, lam=lam, fastchrom_params=fastchrom_params
+                    )
+                    baseline_segments.append(seg_baseline)
+                    corrected_segments.append(seg_corrected)
+                
+                if len(baseline_segments) > 0:
+                    full_baseline = np.concatenate(baseline_segments)
+                    full_corrected = np.concatenate(corrected_segments)
+                    return full_baseline, full_corrected
+                # Fall through to single-segment if something went wrong
+        
+        return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params)
+    
+    def _apply_baseline_correction_single(self, y, method="asls", lam=1e6, fastchrom_params=None):
+        """Apply baseline correction to a single signal segment."""
         # Re-initialize the baseline fitter each time to avoid length mismatch issues
         self.baseline_fitter = Baseline()
         
@@ -375,7 +450,7 @@ class ChromatogramProcessor:
         }
         
         # Validate input data
-        if x is None or y is None:
+        if y is None:
             print("No data for baseline correction")
             return np.zeros_like(y), y
             
@@ -438,7 +513,7 @@ class ChromatogramProcessor:
                 print(f"Fallback baseline also failed: {str(e2)}")
                 return np.zeros_like(y), y
     
-    def integrate_peaks(self, processed_data=None, rt_table=None, chemstation_area_factor=0.0784, ms_data=None, quality_options=None):
+    def integrate_peaks(self, processed_data=None, rt_table=None, chemstation_area_factor=0.0784, ms_data=None, quality_options=None, peak_groups=None):
         """Integrate peaks in a processed chromatogram.
         
         Args:
@@ -447,6 +522,7 @@ class ChromatogramProcessor:
             chemstation_area_factor: Area scaling factor to match ChemStation
             ms_data: Optional MS data object for peak quality assessment
             quality_options: Options for peak quality assessment
+            peak_groups: Optional list of [start, end] time windows for peak grouping
             
         Returns:
             dict: Dictionary containing integration results
@@ -491,8 +567,9 @@ class ChromatogramProcessor:
             rt_table=rt_table,
             chemstation_area_factor=chemstation_area_factor,
             verbose=True,
-            ms_data=ms_data,  # Pass MS data for quality assessment
-            quality_options=quality_options  # Pass quality options
+            ms_data=ms_data,
+            quality_options=quality_options,
+            peak_groups=peak_groups
         )
         
         return integration_results

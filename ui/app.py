@@ -183,6 +183,14 @@ class ChromaKitApp(QMainWindow):
         # Add scaling factors option
         scaling_action = settings_menu.addAction("Scaling Factors...")
         scaling_action.triggered.connect(self.show_scaling_factors_dialog)
+
+        # Add parameter visibility option
+        param_vis_action = settings_menu.addAction("Configure Visible Parameters...")
+        param_vis_action.triggered.connect(self.show_parameter_visibility_dialog)
+
+        # Apply saved parameter visibility on startup
+        from ui.dialogs.parameter_visibility_dialog import load_visibility_settings
+        self.parameters_frame.set_section_visibility(load_visibility_settings())
         
         # Add a Tools menu
         tools_menu = self.menuBar().addMenu("Tools")
@@ -1396,12 +1404,16 @@ class ChromaKitApp(QMainWindow):
             if not peaks_enabled and not neg_peaks_enabled:
                 return None
             
+            # Extract peak groups from parameters
+            peak_groups = params.get('integration', {}).get('peak_groups', [])
+            
             # Perform integration - CORE FUNCTIONALITY WITHOUT UI UPDATES
             integration_results = self.processor.integrate_peaks(
                 processed_data=self.current_processed,
                 ms_data=ms_data,
                 quality_options=quality_options,
-                chemstation_area_factor=self.area_factor
+                chemstation_area_factor=self.area_factor,
+                peak_groups=peak_groups if peak_groups else None
             )
             
             # Check if integration was successful
@@ -3249,3 +3261,15 @@ class ChromaKitApp(QMainWindow):
         self.signal_factor = signal_factor
         self.area_factor = area_factor
         self.data_handler.signal_factor = signal_factor
+
+    def show_parameter_visibility_dialog(self):
+        """Show dialog to configure which parameter sections are visible."""
+        from ui.dialogs.parameter_visibility_dialog import (
+            ParameterVisibilityDialog, load_visibility_settings, save_visibility_settings
+        )
+        current = load_visibility_settings()
+        dialog = ParameterVisibilityDialog(current, self)
+        if dialog.exec() == QDialog.Accepted:
+            vis = dialog.get_visibility()
+            save_visibility_settings(vis)
+            self.parameters_frame.set_section_visibility(vis)

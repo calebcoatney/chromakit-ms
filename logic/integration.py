@@ -41,6 +41,10 @@ class Peak:
         # Add saturation properties
         self.is_saturated = False
         self.saturation_level = None
+
+        # Add grouping properties
+        self.is_grouped = False
+        self.grouped_peak_count = None
         
         # Add quantitation properties (Polyarc + IS method)
         self.mol_C = None  # Moles of carbon
@@ -85,7 +89,9 @@ class Peak:
             'is_saturated': self.is_saturated,
             'saturation_level': self.saturation_level,
             'is_shoulder': getattr(self, 'is_shoulder', False),
-            'is_negative': getattr(self, 'is_negative', False)
+            'is_negative': getattr(self, 'is_negative', False),
+            'is_grouped': getattr(self, 'is_grouped', False),
+            'grouped_peak_count': getattr(self, 'grouped_peak_count', None)
         }
         
         # Add quality issues
@@ -259,7 +265,130 @@ class Integrator:
         return left_bound, right_bound
     
     @staticmethod
-    def integrate(processed_data, rt_table=None, chemstation_area_factor=0.0784, verbose=True, ms_data=None, quality_options=None):
+    def _apply_peak_grouping(peaks_list, peak_groups, x, y, baseline_y,
+                              x_peaks, y_peaks, baseline_peaks,
+                              ret_times, integrated_areas, integration_bounds):
+        """Merge peaks within user-specified group windows into composite peaks.
+        
+        Args:
+            peaks_list: List of Peak objects from integration
+            peak_groups: List of [start, end] time windows
+            x: Full chromatogram time array
+            y: Full chromatogram signal array (for finding apex)
+            baseline_y: Full baseline array
+            x_peaks, y_peaks, baseline_peaks: Per-peak data arrays
+            ret_times, integrated_areas, integration_bounds: Per-peak summary lists
+            
+        Returns:
+            Tuple of updated (peaks_list, x_peaks, y_peaks, baseline_peaks,
+                              ret_times, integrated_areas, integration_bounds)
+        """
+        # Track which peaks get consumed by a group
+        consumed_indices = set()
+        grouped_peaks = []  # (sort_key, Peak, x_peak, y_peak, baseline_peak)
+        
+        for group in peak_groups:
+            if len(group) != 2:
+                continue
+            g_start, g_end = float(group[0]), float(group[1])
+            
+            # Find all peaks whose apex RT falls within this group window
+            member_indices = []
+            for i, peak in enumerate(peaks_list):
+                if g_start <= peak.retention_time <= g_end and i not in consumed_indices:
+                    member_indices.append(i)
+            
+            if len(member_indices) == 0:
+                continue
+            
+            consumed_indices.update(member_indices)
+            
+            # Compute composite values
+            total_area = sum(peaks_list[i].area for i in member_indices)
+            
+            # Apex = time of max signal within the group window
+            window_mask = (x >= g_start) & (x <= g_end)
+            if np.any(window_mask):
+                window_y = y[window_mask]
+                window_x = x[window_mask]
+                apex_idx_in_window = np.argmax(window_y)
+                apex_rt = float(window_x[apex_idx_in_window])
+            else:
+                # Fallback: use the peak with the largest area
+                best_i = max(member_indices, key=lambda i: peaks_list[i].area)
+                apex_rt = peaks_list[best_i].retention_time
+            
+            # Build start/end indices from the chromatogram arrays
+            start_idx = np.searchsorted(x, g_start, side='left')
+            end_idx = np.searchsorted(x, g_end, side='right') - 1
+            start_idx = max(0, start_idx)
+            end_idx = min(len(x) - 1, end_idx)
+            
+            # Create composite Peak
+            width = g_end - g_start
+            compound_id = "Group"
+            composite = Peak(
+                compound_id=compound_id,
+                peak_number=0,  # will be re-numbered later
+                retention_time=apex_rt,
+                integrator='py',
+                width=width,
+                area=total_area,
+                start_time=g_start,
+                end_time=g_end,
+                start_index=start_idx,
+                end_index=end_idx
+            )
+            composite.is_grouped = True
+            composite.grouped_peak_count = len(member_indices)
+            
+            # Build per-peak arrays for the group window
+            gx = x[start_idx:end_idx + 1]
+            gy = y[start_idx:end_idx + 1]
+            gb = baseline_y[start_idx:end_idx + 1]
+            
+            grouped_peaks.append((g_start, composite, gx, gy, gb))
+        
+        # Build final lists: ungrouped peaks + grouped peaks, sorted by RT
+        new_peaks = []
+        new_x_peaks = []
+        new_y_peaks = []
+        new_baseline_peaks = []
+        new_ret_times = []
+        new_areas = []
+        new_bounds = []
+        
+        # Add ungrouped peaks
+        for i, peak in enumerate(peaks_list):
+            if i not in consumed_indices:
+                new_peaks.append((peak.retention_time, peak, x_peaks[i], y_peaks[i], baseline_peaks[i]))
+        
+        # Add grouped peaks
+        for sort_key, composite, gx, gy, gb in grouped_peaks:
+            new_peaks.append((sort_key, composite, gx, gy, gb))
+        
+        # Sort by retention time / start time
+        new_peaks.sort(key=lambda t: t[0])
+        
+        # Unpack and re-number
+        final_peaks = []
+        for idx, (_, peak, xp, yp, bp) in enumerate(new_peaks):
+            peak.peak_number = idx + 1
+            final_peaks.append(peak)
+            new_x_peaks.append(xp)
+            new_y_peaks.append(yp)
+            new_baseline_peaks.append(bp)
+            new_ret_times.append(peak.retention_time)
+            new_areas.append(peak.area)
+            new_bounds.append((peak.start_time, peak.end_time))
+        
+        if len(consumed_indices) > 0:
+            print(f"Peak grouping: Merged {len(consumed_indices)} peaks into {len(grouped_peaks)} groups")
+        
+        return final_peaks, new_x_peaks, new_y_peaks, new_baseline_peaks, new_ret_times, new_areas, new_bounds
+    
+    @staticmethod
+    def integrate(processed_data, rt_table=None, chemstation_area_factor=0.0784, verbose=True, ms_data=None, quality_options=None, peak_groups=None):
         """Integrate peaks in a chromatogram.
         
         Args:
@@ -269,6 +398,7 @@ class Integrator:
             verbose: Whether to print integration results
             ms_data: Optional MS data object for peak quality assessment
             quality_options: Options for peak quality assessment
+            peak_groups: Optional list of [start, end] time windows for peak grouping
             
         Returns:
             dict: Dictionary containing integration results
@@ -619,6 +749,16 @@ class Integrator:
             
             peaks_list.append(peak)
         
+        # Apply peak grouping if specified
+        if peak_groups and len(peak_groups) > 0 and len(peaks_list) > 0:
+            peaks_list, x_peaks, y_peaks, baseline_peaks, ret_times, integrated_areas, integration_bounds = \
+                Integrator._apply_peak_grouping(
+                    peaks_list, peak_groups, x, 
+                    integration_signal,
+                    baseline_y, x_peaks, y_peaks, baseline_peaks, 
+                    ret_times, integrated_areas, integration_bounds
+                )
+
         if verbose:
             try:
                 from tabulate import tabulate

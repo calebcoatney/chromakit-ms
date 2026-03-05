@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QGroupBox, QFormLayout,
     QCheckBox, QSlider, QDoubleSpinBox, QSpinBox, QComboBox, QHBoxLayout,
-    QLineEdit, QFrame, QPushButton
+    QLineEdit, QFrame, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QRegularExpressionValidator
@@ -43,6 +44,7 @@ class ParametersFrame(QWidget):
                 'lambda': 1e4,      # Changed from 1e6 to 1e4
                 'asymmetry': 0.01,
                 'align_tic': False,  # Add alignment option
+                'break_points': [],  # List of {'time': float, 'tolerance': float}
                 'fastchrom': {
                     'half_window': None,
                     'smooth_half_window': None,
@@ -52,7 +54,8 @@ class ParametersFrame(QWidget):
                 'enabled': False,
                 'min_prominence': 1e5,  # Changed from 0.5 to 1e5
                 'min_height': 0.0,
-                'min_width': 0.0
+                'min_width': 0.0,
+                'range_filters': []  # List of [start, end] time ranges
             },
             'negative_peaks': {
                 'enabled': False,
@@ -64,6 +67,9 @@ class ParametersFrame(QWidget):
                 'polyorder': 3,
                 'height_factor': 0.02,
                 'apex_distance': 10
+            },
+            'integration': {
+                'peak_groups': []  # List of [start, end] time windows for grouping
             }
         }
         
@@ -80,6 +86,9 @@ class ParametersFrame(QWidget):
         parameters_label = QLabel("Integration Parameters")
         parameters_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.params_layout.addWidget(parameters_label)
+
+        # Dict to hold group box references for visibility toggling
+        self.section_groups = {}
         
         # Add smoothing group
         self._init_smoothing_controls()
@@ -95,6 +104,12 @@ class ParametersFrame(QWidget):
 
         # Add shoulder detection group
         self._init_shoulder_controls()
+
+        # Add range filter controls
+        self._init_range_filter_controls()
+
+        # Add peak grouping controls
+        self._init_peak_grouping_controls()
         
         # Add stretch at the end to push everything to the top
         self.params_layout.addStretch()
@@ -174,8 +189,9 @@ class ParametersFrame(QWidget):
         self._update_smoothing_controls_state()
         
         # Add to parameters layout
+        self.section_groups['smoothing'] = smoothing_group
         self.params_layout.addWidget(smoothing_group)
-    
+
     def _init_baseline_controls(self):
         """Initialize baseline correction controls"""
         baseline_group = QGroupBox("Baseline Correction")
@@ -270,6 +286,11 @@ class ParametersFrame(QWidget):
         # Update lambda and fastchrom control visibility based on method
         self.update_lam_visibility()
         
+        # --- Advanced baseline options (hideable via visibility config) ---
+        self.baseline_advanced_container = QWidget()
+        advanced_layout = QVBoxLayout(self.baseline_advanced_container)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+
         # Add MS baseline correction button
         ms_baseline_frame = QFrame()
         ms_baseline_layout = QVBoxLayout(ms_baseline_frame)
@@ -284,22 +305,54 @@ class ParametersFrame(QWidget):
         self.ms_baseline_button.clicked.connect(self._on_ms_baseline_clicked)
         ms_baseline_layout.addWidget(self.ms_baseline_button)
         
-        form_layout.addRow(ms_baseline_frame)
+        advanced_layout.addWidget(ms_baseline_frame)
         
         # Add TIC alignment checkbox
         self.align_tic = QCheckBox("Align TIC with FID")
         self.align_tic.setChecked(self.current_params['baseline'].get('align_tic', False))
         self.align_tic.stateChanged.connect(self._on_align_tic_toggled)
-        form_layout.addRow(self.align_tic)
+        advanced_layout.addWidget(self.align_tic)
         
         # Add explanation label
         align_info = QLabel("Corrects for small time delays between FID and MS detectors")
         align_info.setStyleSheet("color: #666666; font-size: 10px;")
-        form_layout.addRow("", align_info)
+        advanced_layout.addWidget(align_info)
+        
+        # Break point controls for segmented baseline fitting
+        bp_frame = QFrame()
+        bp_frame.setFrameStyle(QFrame.Box)
+        bp_layout = QVBoxLayout(bp_frame)
+        
+        bp_label = QLabel("Signal Break Points")
+        bp_label.setStyleSheet("font-weight: bold;")
+        bp_layout.addWidget(bp_label)
+        
+        bp_info = QLabel("Split baseline fitting at valve-switch step changes.\nEach segment is fitted independently.")
+        bp_info.setStyleSheet("color: #666666; font-size: 10px;")
+        bp_layout.addWidget(bp_info)
+        
+        self.break_point_table = QTableWidget(0, 3)
+        self.break_point_table.setHorizontalHeaderLabels(["Time (min)", "Tolerance", ""])
+        self.break_point_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.break_point_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.break_point_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.break_point_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.break_point_table.setMaximumHeight(120)
+        bp_layout.addWidget(self.break_point_table)
+        
+        bp_add_btn = QPushButton("+ Add Break Point")
+        bp_add_btn.clicked.connect(self._add_break_point_row)
+        bp_layout.addWidget(bp_add_btn)
+        
+        advanced_layout.addWidget(bp_frame)
+
+        form_layout.addRow(self.baseline_advanced_container)
         
         # Add to parameters layout
+        self.section_groups['baseline'] = baseline_group
+        self.section_groups['baseline_advanced'] = self.baseline_advanced_container
         self.params_layout.addWidget(baseline_group)
-    
+
     def _init_peaks_controls(self):
         """Initialize peak detection controls"""
         peaks_group = QGroupBox("Peak Detection")
@@ -329,8 +382,9 @@ class ParametersFrame(QWidget):
         self._update_peaks_controls_state()
         
         # Add to parameters layout
+        self.section_groups['peaks'] = peaks_group
         self.params_layout.addWidget(peaks_group)
-    
+
     def _init_negative_peaks_controls(self):
         """Initialize negative peak detection controls"""
         neg_peaks_group = QGroupBox("Negative Peak Detection")
@@ -362,6 +416,7 @@ class ParametersFrame(QWidget):
         self._update_neg_peaks_controls_state()
 
         # Add to parameters layout
+        self.section_groups['negative_peaks'] = neg_peaks_group
         self.params_layout.addWidget(neg_peaks_group)
 
     def _on_neg_peaks_toggled(self, state):
@@ -525,7 +580,191 @@ class ParametersFrame(QWidget):
         self._update_shoulder_controls_state()
         
         # Add to parameters layout
+        self.section_groups['shoulders'] = shoulder_group
         self.params_layout.addWidget(shoulder_group)
+
+    def _init_range_filter_controls(self):
+        """Initialize peak range filter table UI."""
+        group = QGroupBox("Peak Range Filters")
+        layout = QVBoxLayout(group)
+
+        info = QLabel("Only keep peaks within these time ranges.\nLeave empty to keep all peaks.")
+        info.setStyleSheet("color: #666666; font-size: 10px;")
+        layout.addWidget(info)
+
+        self.range_filter_table = QTableWidget(0, 3)
+        self.range_filter_table.setHorizontalHeaderLabels(["Start Time", "End Time", ""])
+        self.range_filter_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.range_filter_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.range_filter_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.range_filter_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.range_filter_table.setMaximumHeight(150)
+        layout.addWidget(self.range_filter_table)
+
+        add_btn = QPushButton("+ Add Range")
+        add_btn.clicked.connect(self._add_range_filter_row)
+        layout.addWidget(add_btn)
+
+        self.section_groups['range_filters'] = group
+        self.params_layout.addWidget(group)
+
+    def _add_range_filter_row(self):
+        """Add a new row to the range filter table."""
+        row = self.range_filter_table.rowCount()
+        self.range_filter_table.insertRow(row)
+
+        start_spin = QDoubleSpinBox()
+        start_spin.setDecimals(3)
+        start_spin.setRange(0, 9999)
+        start_spin.valueChanged.connect(self._on_range_filters_changed)
+        self.range_filter_table.setCellWidget(row, 0, start_spin)
+
+        end_spin = QDoubleSpinBox()
+        end_spin.setDecimals(3)
+        end_spin.setRange(0, 9999)
+        end_spin.setValue(60.0)
+        end_spin.valueChanged.connect(self._on_range_filters_changed)
+        self.range_filter_table.setCellWidget(row, 1, end_spin)
+
+        del_btn = QPushButton("✕")
+        del_btn.setFixedWidth(30)
+        del_btn.clicked.connect(lambda checked, r=row: self._remove_range_filter_row(r))
+        self.range_filter_table.setCellWidget(row, 2, del_btn)
+
+    def _remove_range_filter_row(self, row):
+        """Remove a row from the range filter table."""
+        self.range_filter_table.removeRow(row)
+        # Reconnect delete buttons with correct row indices
+        for r in range(self.range_filter_table.rowCount()):
+            del_btn = self.range_filter_table.cellWidget(r, 2)
+            if del_btn:
+                del_btn.clicked.disconnect()
+                del_btn.clicked.connect(lambda checked, r=r: self._remove_range_filter_row(r))
+        self._on_range_filters_changed()
+
+    def _on_range_filters_changed(self, _=None):
+        """Collect range filter values and emit parameters_changed."""
+        ranges = []
+        for r in range(self.range_filter_table.rowCount()):
+            start_w = self.range_filter_table.cellWidget(r, 0)
+            end_w = self.range_filter_table.cellWidget(r, 1)
+            if start_w and end_w:
+                ranges.append([start_w.value(), end_w.value()])
+        self.current_params['peaks']['range_filters'] = ranges
+        self.parameters_changed.emit(self.current_params)
+
+    def _init_peak_grouping_controls(self):
+        """Initialize peak grouping table UI."""
+        group = QGroupBox("Peak Grouping")
+        layout = QVBoxLayout(group)
+
+        info = QLabel("Merge peaks within each time window into a single grouped peak.\nApplied during integration.")
+        info.setStyleSheet("color: #666666; font-size: 10px;")
+        layout.addWidget(info)
+
+        self.peak_group_table = QTableWidget(0, 3)
+        self.peak_group_table.setHorizontalHeaderLabels(["Start Time", "End Time", ""])
+        self.peak_group_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.peak_group_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.peak_group_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.peak_group_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.peak_group_table.setMaximumHeight(150)
+        layout.addWidget(self.peak_group_table)
+
+        add_btn = QPushButton("+ Add Group")
+        add_btn.clicked.connect(self._add_peak_group_row)
+        layout.addWidget(add_btn)
+
+        self.section_groups['peak_grouping'] = group
+        self.params_layout.addWidget(group)
+
+    def _add_peak_group_row(self):
+        """Add a new row to the peak grouping table."""
+        row = self.peak_group_table.rowCount()
+        self.peak_group_table.insertRow(row)
+
+        start_spin = QDoubleSpinBox()
+        start_spin.setDecimals(3)
+        start_spin.setRange(0, 9999)
+        start_spin.valueChanged.connect(self._on_peak_groups_changed)
+        self.peak_group_table.setCellWidget(row, 0, start_spin)
+
+        end_spin = QDoubleSpinBox()
+        end_spin.setDecimals(3)
+        end_spin.setRange(0, 9999)
+        end_spin.setValue(60.0)
+        end_spin.valueChanged.connect(self._on_peak_groups_changed)
+        self.peak_group_table.setCellWidget(row, 1, end_spin)
+
+        del_btn = QPushButton("✕")
+        del_btn.setFixedWidth(30)
+        del_btn.clicked.connect(lambda checked, r=row: self._remove_peak_group_row(r))
+        self.peak_group_table.setCellWidget(row, 2, del_btn)
+
+    def _remove_peak_group_row(self, row):
+        """Remove a row from the peak grouping table."""
+        self.peak_group_table.removeRow(row)
+        for r in range(self.peak_group_table.rowCount()):
+            del_btn = self.peak_group_table.cellWidget(r, 2)
+            if del_btn:
+                del_btn.clicked.disconnect()
+                del_btn.clicked.connect(lambda checked, r=r: self._remove_peak_group_row(r))
+        self._on_peak_groups_changed()
+
+    def _on_peak_groups_changed(self, _=None):
+        """Collect peak group values and emit parameters_changed."""
+        groups = []
+        for r in range(self.peak_group_table.rowCount()):
+            start_w = self.peak_group_table.cellWidget(r, 0)
+            end_w = self.peak_group_table.cellWidget(r, 1)
+            if start_w and end_w:
+                groups.append([start_w.value(), end_w.value()])
+        self.current_params['integration']['peak_groups'] = groups
+        self.parameters_changed.emit(self.current_params)
+
+    def _add_break_point_row(self):
+        """Add a new row to the break point table."""
+        row = self.break_point_table.rowCount()
+        self.break_point_table.insertRow(row)
+
+        time_spin = QDoubleSpinBox()
+        time_spin.setDecimals(3)
+        time_spin.setRange(0, 9999)
+        time_spin.valueChanged.connect(self._on_break_points_changed)
+        self.break_point_table.setCellWidget(row, 0, time_spin)
+
+        tol_spin = QDoubleSpinBox()
+        tol_spin.setDecimals(3)
+        tol_spin.setRange(0, 10)
+        tol_spin.setValue(0.1)
+        tol_spin.valueChanged.connect(self._on_break_points_changed)
+        self.break_point_table.setCellWidget(row, 1, tol_spin)
+
+        del_btn = QPushButton("✕")
+        del_btn.setFixedWidth(30)
+        del_btn.clicked.connect(lambda checked, r=row: self._remove_break_point_row(r))
+        self.break_point_table.setCellWidget(row, 2, del_btn)
+
+    def _remove_break_point_row(self, row):
+        """Remove a row from the break point table."""
+        self.break_point_table.removeRow(row)
+        for r in range(self.break_point_table.rowCount()):
+            del_btn = self.break_point_table.cellWidget(r, 2)
+            if del_btn:
+                del_btn.clicked.disconnect()
+                del_btn.clicked.connect(lambda checked, r=r: self._remove_break_point_row(r))
+        self._on_break_points_changed()
+
+    def _on_break_points_changed(self, _=None):
+        """Collect break point values and emit parameters_changed."""
+        bps = []
+        for r in range(self.break_point_table.rowCount()):
+            time_w = self.break_point_table.cellWidget(r, 0)
+            tol_w = self.break_point_table.cellWidget(r, 1)
+            if time_w and tol_w:
+                bps.append({'time': time_w.value(), 'tolerance': tol_w.value()})
+        self.current_params['baseline']['break_points'] = bps
+        self.parameters_changed.emit(self.current_params)
 
     def update_lam_visibility(self):
         """Show/hide lambda and fastchrom controls based on the current algorithm"""
@@ -699,6 +938,16 @@ class ParametersFrame(QWidget):
     def get_parameters(self):
         """Get the current processing parameters"""
         return self.current_params
+
+    def set_section_visibility(self, visibility: dict):
+        """Show/hide parameter sections based on visibility dict.
+        
+        Args:
+            visibility: Dict of {section_key: bool}
+        """
+        for key, visible in visibility.items():
+            if key in self.section_groups:
+                self.section_groups[key].setVisible(visible)
 
     def _on_align_tic_toggled(self, state):
         """Handle TIC alignment toggle."""
