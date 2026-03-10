@@ -301,6 +301,9 @@ class ProcessingThread(QThread):
 
                     # --- Header fields ---
                     for hf in enabled_headers:
+                        if hf.get('key') == 'blank_line':
+                            current_row += 1
+                            continue
                         label = hf['custom_label'].strip() or hf['label']
                         raw_value = json_data.get(hf['key'], "")
                         if hf.get('show_label', True):
@@ -806,6 +809,12 @@ class JsonToExcelConverter(QDialog):
             self._header_list.setItemWidget(item, self._make_header_item_widget(item))
 
         header_outer.addWidget(self._header_list)
+
+        add_blank_btn = QPushButton("+ Add Blank Line")
+        add_blank_btn.setToolTip("Insert a blank spacer row into the header (drag to reorder)")
+        add_blank_btn.clicked.connect(self._add_blank_line_item)
+        header_outer.addWidget(add_blank_btn)
+
         outer_layout.addWidget(header_group)
 
         # --- Peak table columns ---
@@ -863,6 +872,20 @@ class JsonToExcelConverter(QDialog):
     def _make_header_item_widget(self, item: QListWidgetItem) -> QWidget:
         """Create the inline widget for one header-list item."""
         hf = item.data(Qt.UserRole)
+
+        if hf.get('key') == 'blank_line':
+            row_w = QWidget()
+            row_l = QHBoxLayout(row_w)
+            row_l.setContentsMargins(4, 2, 4, 2)
+            cb = QCheckBox("— Blank Line —")
+            cb.setChecked(hf.get('enabled', True))
+            cb.toggled.connect(lambda checked, it=item: self._update_header_item_data(it, 'enabled', checked))
+            row_l.addWidget(cb)
+            lbl = QLabel("(inserts an empty row)")
+            lbl.setStyleSheet("color: gray; font-style: italic;")
+            row_l.addWidget(lbl)
+            row_l.addStretch()
+            return row_w
 
         row_w = QWidget()
         row_l = QHBoxLayout(row_w)
@@ -928,6 +951,17 @@ class JsonToExcelConverter(QDialog):
             item.setSizeHint(QSize(0, 36))
             self._header_list.addItem(item)
             self._header_list.setItemWidget(item, self._make_header_item_widget(item))
+
+    def _add_blank_line_item(self):
+        """Append a blank-line spacer item to the header list."""
+        hf = {'key': 'blank_line', 'label': '— Blank Line —', 'enabled': True,
+              'custom_label': '', 'show_label': False}
+        item = QListWidgetItem()
+        item.setData(Qt.UserRole, hf)
+        item.setSizeHint(QSize(0, 36))
+        self._header_list.addItem(item)
+        self._header_list.setItemWidget(item, self._make_header_item_widget(item))
+        self._header_list.scrollToItem(item)
 
     # ------------------------------------------------------------------
     # Format config get/set helpers
