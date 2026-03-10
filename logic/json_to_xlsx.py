@@ -13,24 +13,40 @@ from openpyxl.styles import Font
 import tkinter as tk
 from tkinter import filedialog
 
-# Timestamp patterns used by Agilent instruments
+# Timestamp patterns used by Agilent instruments and common ISO formats
 _TS_PARSE_FMTS = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S.%f",
     "%d %b %y  %I:%M %p",
     "%d %b %y %I:%M %p",
     "%d %b %Y %I:%M %p",
     "%d-%b-%y %H:%M:%S",
     "%m/%d/%Y %H:%M:%S",
-    "%Y-%m-%dT%H:%M:%S",
     "%d %b %y  %H:%M",
     "%d %b %y %H:%M",
+    "%d/%m/%Y %H:%M:%S",
+    "%d/%m/%Y %H:%M",
+    "%Y-%m-%d",
 ]
 
 
 def _parse_timestamp(ts_string: str):
-    """Try to parse *ts_string* using known Agilent patterns."""
+    """Try to parse *ts_string* into a datetime object."""
+    if not ts_string:
+        return None
+    ts_string = ts_string.strip()
+    
+    # Try ISO first
+    try:
+        return datetime.datetime.fromisoformat(ts_string)
+    except (ValueError, AttributeError):
+        pass
+
     for pattern in _TS_PARSE_FMTS:
         try:
-            return datetime.datetime.strptime(ts_string.strip(), pattern)
+            return datetime.datetime.strptime(ts_string, pattern)
         except ValueError:
             continue
     return None
@@ -85,7 +101,14 @@ def process_json_to_excel(directory, output_file):
                 for header, value in headers:
                     cell = ws.cell(row=current_row, column=col_offset, value=header)
                     cell.font = Font(bold=True)
-                    ws.cell(row=current_row, column=col_offset + 1, value=value)
+                    
+                    val_cell = ws.cell(row=current_row, column=col_offset + 1, value=value)
+                    if header == "Timestamp:" and value:
+                        dt = _parse_timestamp(str(value))
+                        if dt:
+                            val_cell.value = dt
+                            val_cell.number_format = "m/d/yy h:mm" # Default Excel date/time format
+                    
                     current_row += 1
 
                 # Optional signal and notebook fields

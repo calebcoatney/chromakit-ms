@@ -69,14 +69,20 @@ DEFAULT_FORMAT_CONFIG = {
 
 # Timestamp parse patterns to try when reformatting
 _TS_PARSE_FMTS = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S.%f",
     "%d %b %y  %I:%M %p",
     "%d %b %y %I:%M %p",
     "%d %b %Y %I:%M %p",
     "%d-%b-%y %H:%M:%S",
     "%m/%d/%Y %H:%M:%S",
-    "%Y-%m-%dT%H:%M:%S",
     "%d %b %y  %H:%M",
     "%d %b %y %H:%M",
+    "%d/%m/%Y %H:%M:%S",
+    "%d/%m/%Y %H:%M",
+    "%Y-%m-%d",
 ]
 
 # Human-readable label → Excel number-format string (or special token "as_stored").
@@ -94,11 +100,21 @@ TIMESTAMP_FORMAT_OPTIONS = [
 
 
 def _parse_timestamp(ts_string: str):
-    """Try to parse *ts_string* using known Agilent patterns.
+    """Try to parse *ts_string* using known Agilent patterns and common ISO patterns.
     Returns a :class:`datetime.datetime` on success, or ``None``."""
+    ts_string = ts_string.strip()
+    if not ts_string:
+        return None
+
+    # Try standard ISO first
+    try:
+        return datetime.datetime.fromisoformat(ts_string)
+    except (ValueError, AttributeError):
+        pass
+
     for pattern in _TS_PARSE_FMTS:
         try:
-            return datetime.datetime.strptime(ts_string.strip(), pattern)
+            return datetime.datetime.strptime(ts_string, pattern)
         except ValueError:
             continue
     return None
