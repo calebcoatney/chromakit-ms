@@ -17,6 +17,7 @@
   --surface-color: #ffffff;
   --text-color: #2d3748;
   --text-secondary: #718096;
+  --text-muted: #a0aec0;
   --border-color: #e2e8f0;
   --card-header-bg: linear-gradient(to right, #f7fafc, #edf2f7);
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
@@ -26,6 +27,11 @@
   --plot-grid: #edf2f7;
   --table-hover: #f7fafc;
   --table-selected: #ebf8ff;
+  --accent-color: #667eea;
+  --hover-bg: #edf2f7;
+  --success-bg: #f0fff4;
+  --success-color: #48bb78;
+  --card-bg: #f7fafc;
 }
 
 /* ── Dark theme ── */
@@ -39,6 +45,7 @@
   --surface-color: #2d3748;
   --text-color: #e2e8f0;
   --text-secondary: #a0aec0;
+  --text-muted: #718096;
   --border-color: #4a5568;
   --card-header-bg: linear-gradient(to right, #2d3748, #353f52);
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
@@ -48,6 +55,11 @@
   --plot-grid: #4a5568;
   --table-hover: #353f52;
   --table-selected: #2a4365;
+  --accent-color: #7c93f5;
+  --hover-bg: #353f52;
+  --success-bg: #1c3a2a;
+  --success-color: #68d391;
+  --card-bg: #2d3748;
 }
 
 body {
@@ -344,4 +356,69 @@ body {
   .sidebar {
     width: 100%;
   }
+}
+
+/* ── Modal / Dialog ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.modal-content {
+  background: var(--surface-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  width: 90%;
+  max-width: 480px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 0.25rem;
+  border-radius: 4px;
+}
+
+.modal-close:hover {
+  background: var(--hover-bg);
+}
+
+.modal-body {
+  padding: 1.25rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid var(--border-color);
 }

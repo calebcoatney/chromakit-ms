@@ -11,6 +11,12 @@ import ProcessingControls from './components/ProcessingControls';
 import ChromatogramPlot from './components/ChromatogramPlot';
 import PeakTable from './components/PeakTable';
 import MSSpectrumViewer from './components/MSSpectrumViewer';
+import ScalingFactorsDialog from './components/ScalingFactorsDialog';
+import ExportSettingsDialog from './components/ExportSettingsDialog';
+import EditAssignmentDialog from './components/EditAssignmentDialog';
+import MSOptionsDialog from './components/MSOptionsDialog';
+import QuantitationPanel from './components/QuantitationPanel';
+import RTTableManager from './components/RTTableManager';
 import * as api from './services/api.ts';
 import './styles/App.css';
 
@@ -31,6 +37,20 @@ function App() {
   const [spectrum, setSpectrum] = useState(null);
   const [msSearchResults, setMsSearchResults] = useState(null);
   const [msSearching, setMsSearching] = useState(false);
+
+  // Dialog visibility
+  const [showScaling, setShowScaling] = useState(false);
+  const [showExportSettings, setShowExportSettings] = useState(false);
+  const [showEditAssign, setShowEditAssign] = useState(false);
+  const [showMSOptions, setShowMSOptions] = useState(false);
+
+  // Feature state
+  const [scalingFactors, setScalingFactors] = useState({ signal: 1.0, area: 1.0 });
+  const [msOptions, setMsOptions] = useState({});
+  const [quantEnabled, setQuantEnabled] = useState(false);
+  const [quantSettings, setQuantSettings] = useState({});
+  const [quantCalc, setQuantCalc] = useState({});
+  const [rtSettings, setRtSettings] = useState({});
 
   // Health check on mount + interval
   useEffect(() => {
@@ -192,6 +212,20 @@ function App() {
     }
   };
 
+  // Scaling factors
+  const handleScalingApply = (signal, area) => {
+    setScalingFactors({ signal, area });
+    api.setScalingFactors(signal, area).catch(() => {});
+  };
+
+  // Edit assignment
+  const handleAssign = (compound) => {
+    if (selectedPeakIndex == null || !integrationResults) return;
+    const peaks = [...integrationResults.peaks];
+    peaks[selectedPeakIndex] = { ...peaks[selectedPeakIndex], compound_name: compound.name };
+    setIntegrationResults({ ...integrationResults, peaks });
+  };
+
   return (
     <div className="app">
       <Header apiStatus={apiStatus} />
@@ -200,16 +234,32 @@ function App() {
         {/* Sidebar */}
         <aside className="sidebar">
           <FileBrowser onFileSelect={handleFileSelect} />
+
+          {/* RT Table Manager */}
+          <RTTableManager settings={rtSettings} onSettingsChange={setRtSettings} />
+
+          {/* Quantitation Panel */}
+          <QuantitationPanel
+            enabled={quantEnabled}
+            onToggle={setQuantEnabled}
+            settings={quantSettings}
+            onSettingsChange={setQuantSettings}
+            onRequantitate={() => { /* TODO: call /api/quantitate */ }}
+            peaks={integrationResults?.peaks}
+            calculatedValues={quantCalc}
+          />
         </aside>
 
         {/* Main Panel */}
         <main className="main-panel">
           {/* Error */}
           {error && (
-            <div className="status-indicator error">⚠️ {error}</div>
+            <div className="status-indicator error" style={{ cursor: 'pointer' }} onClick={() => setError(null)}>
+              ⚠️ {error} <span style={{ marginLeft: '0.5rem', opacity: 0.6 }}>✕</span>
+            </div>
           )}
 
-          {/* File info bar */}
+          {/* Toolbar */}
           {selectedFile && (
             <div className="card">
               <div className="card-body">
@@ -228,7 +278,7 @@ function App() {
                       ) : 'Loading...'}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                     {/* Detector selector */}
                     {availableDetectors.length > 1 && (
                       <select
@@ -242,9 +292,18 @@ function App() {
                         ))}
                       </select>
                     )}
-                    {/* Navigation buttons */}
+                    {/* Navigation */}
                     <button className="btn btn-sm btn-secondary" onClick={() => handleNavigate('previous')} title="Previous sample">◀</button>
                     <button className="btn btn-sm btn-secondary" onClick={() => handleNavigate('next')} title="Next sample">▶</button>
+                    {/* Toolbar buttons */}
+                    <button className="btn btn-sm btn-secondary" onClick={() => setShowScaling(true)} title="Scaling Factors">⚖️</button>
+                    <button className="btn btn-sm btn-secondary" onClick={() => setShowExportSettings(true)} title="Export Settings">📁</button>
+                    {fileData?.has_ms && (
+                      <button className="btn btn-sm btn-secondary" onClick={() => setShowMSOptions(true)} title="MS Options">🔬</button>
+                    )}
+                    {selectedPeakIndex != null && (
+                      <button className="btn btn-sm btn-secondary" onClick={() => setShowEditAssign(true)} title="Edit Assignment">🏷️</button>
+                    )}
                     {loading && <div className="spinner"></div>}
                   </div>
                 </div>
@@ -327,6 +386,32 @@ function App() {
           )}
         </main>
       </div>
+
+      {/* ── Dialogs ── */}
+      <ScalingFactorsDialog
+        open={showScaling}
+        onClose={() => setShowScaling(false)}
+        onApply={handleScalingApply}
+        initialSignal={scalingFactors.signal}
+        initialArea={scalingFactors.area}
+      />
+      <ExportSettingsDialog
+        open={showExportSettings}
+        onClose={() => setShowExportSettings(false)}
+      />
+      <EditAssignmentDialog
+        open={showEditAssign}
+        onClose={() => setShowEditAssign(false)}
+        onAssign={handleAssign}
+        peak={integrationResults?.peaks?.[selectedPeakIndex]}
+        compoundList={[]}
+      />
+      <MSOptionsDialog
+        open={showMSOptions}
+        onClose={() => setShowMSOptions(false)}
+        onApply={(opts) => setMsOptions(opts)}
+        initialOptions={msOptions}
+      />
     </div>
   );
 }
