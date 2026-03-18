@@ -11,6 +11,22 @@ overrides/
 results/
 cache/
 memory/
+eval_results/
+
+# U-Net training: model weights and R&D artifacts
+*.pth
+unet-training/archive/
+unet-training/eval_results/
+unet-training/compare_methods.py
+unet-training/optuna_dual_search.py
+unet-training/optuna_filter_search.py
+unet-training/sweep_filters.py
+unet-training/diagnose_phantoms.py
+unet-training/run_eval*.py
+unet-training/demo.py
+unet-training/real_demo.py
+unet-training/pipeline_viz.py
+unet-training/real_testing.ipynb
 
 # User-specific files
 *.rsuser
@@ -404,6 +420,7 @@ FodyWeavers.xsd
 !.vscode/launch.json
 !.vscode/extensions.json
 *.code-workspace
+.vscode/
 
 # Local History for Visual Studio Code
 .history/
