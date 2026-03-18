@@ -23,13 +23,13 @@ def serialize_numpy(data: Any) -> Any:
     """Convert numpy types to native Python types for JSON serialization."""
     if isinstance(data, dict):
         return {k: serialize_numpy(v) for k, v in data.items()}
-    elif isinstance(data, list):
+    elif isinstance(data, (list, tuple)):
         return [serialize_numpy(item) for item in data]
     elif isinstance(data, np.ndarray):
         return data.tolist()
-    elif isinstance(data, (np.integer, np.int32, np.int64)):
+    elif isinstance(data, np.integer):
         return int(data)
-    elif isinstance(data, (np.floating, np.float32, np.float64)):
+    elif isinstance(data, np.floating):
         return float(data)
     elif isinstance(data, np.bool_):
         return bool(data)
