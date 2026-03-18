@@ -9,7 +9,7 @@ setup(
     url="https://github.com/calebcoatney/chromakit-ms",
     license="Apache-2.0",
     packages=find_packages(),
-    py_modules=["main"],
+    py_modules=["main", "web"],
     include_package_data=True,
     package_data={
         "": ["*.qss", "*.png", "*.ico"],
@@ -17,6 +17,7 @@ setup(
     entry_points={
         "console_scripts": [
             "chromakit-ms=main:main",
+            "chromakit-web=web:main",
         ],
     },
     install_requires=[
