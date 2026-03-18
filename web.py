@@ -36,20 +36,29 @@ def main():
     # Mount the static frontend on the FastAPI app (unless --dev)
     if not args.dev:
         from fastapi.staticfiles import StaticFiles
+        from fastapi.responses import FileResponse
         from api.main import app
 
-        # Serve index.html for SPA routing (catch-all must be last)
+        # Serve static assets (JS, CSS, images) — must be mounted before catch-all
+        app.mount("/assets", StaticFiles(directory=str(dist_dir / "assets")), name="static-assets")
+
+        # Override the root route to serve the SPA
+        for i, route in enumerate(app.routes):
+            if hasattr(route, 'path') and route.path == "/":
+                app.routes.pop(i)
+                break
+
+        @app.get("/", include_in_schema=False)
+        async def serve_index():
+            return FileResponse(dist_dir / "index.html")
+
+        # Catch-all for SPA client-side routing (must be last)
         @app.get("/{full_path:path}", include_in_schema=False)
         async def serve_spa(full_path: str):
-            """Serve the React SPA for any non-API route."""
-            from fastapi.responses import FileResponse
             file_path = dist_dir / full_path
             if file_path.is_file():
                 return FileResponse(file_path)
             return FileResponse(dist_dir / "index.html")
-
-        # Serve static assets (JS, CSS, images)
-        app.mount("/assets", StaticFiles(directory=str(dist_dir / "assets")), name="static-assets")
 
     # Auto-open browser after a short delay
     if not args.no_browser:
