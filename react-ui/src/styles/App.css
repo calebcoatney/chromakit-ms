@@ -5,7 +5,9 @@
   box-sizing: border-box;
 }
 
-:root {
+/* ── Light theme (default) ── */
+:root,
+[data-theme="light"] {
   --primary-color: #667eea;
   --primary-dark: #764ba2;
   --secondary-color: #48bb78;
@@ -16,8 +18,36 @@
   --text-color: #2d3748;
   --text-secondary: #718096;
   --border-color: #e2e8f0;
+  --card-header-bg: linear-gradient(to right, #f7fafc, #edf2f7);
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.15);
+  --input-bg: #ffffff;
+  --plot-bg: white;
+  --plot-grid: #edf2f7;
+  --table-hover: #f7fafc;
+  --table-selected: #ebf8ff;
+}
+
+/* ── Dark theme ── */
+[data-theme="dark"] {
+  --primary-color: #7c93f5;
+  --primary-dark: #9b6bc9;
+  --secondary-color: #68d391;
+  --danger-color: #fc8181;
+  --warning-color: #f6ad55;
+  --bg-color: #1a202c;
+  --surface-color: #2d3748;
+  --text-color: #e2e8f0;
+  --text-secondary: #a0aec0;
+  --border-color: #4a5568;
+  --card-header-bg: linear-gradient(to right, #2d3748, #353f52);
+  --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.4);
+  --input-bg: #4a5568;
+  --plot-bg: #2d3748;
+  --plot-grid: #4a5568;
+  --table-hover: #353f52;
+  --table-selected: #2a4365;
 }
 
 body {
@@ -95,7 +125,7 @@ body {
 .card-header {
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border-color);
-  background: linear-gradient(to right, #f7fafc, #edf2f7);
+  background: var(--card-header-bg);
 }
 
 .card-header h2 {
@@ -177,6 +207,8 @@ body {
   border-radius: 6px;
   font-size: 0.875rem;
   transition: border-color 0.2s;
+  background: var(--input-bg);
+  color: var(--text-color);
 }
 
 .form-control:focus {
