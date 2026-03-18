@@ -10,6 +10,7 @@ import FileBrowser from './components/FileBrowser';
 import ProcessingControls from './components/ProcessingControls';
 import ChromatogramPlot from './components/ChromatogramPlot';
 import PeakTable from './components/PeakTable';
+import MSSpectrumViewer from './components/MSSpectrumViewer';
 import * as api from './services/api.ts';
 import './styles/App.css';
 
@@ -27,6 +28,9 @@ function App() {
   const [availableDetectors, setAvailableDetectors] = useState([]);
   const [currentDetector, setCurrentDetector] = useState(null);
   const [selectedPeakIndex, setSelectedPeakIndex] = useState(null);
+  const [spectrum, setSpectrum] = useState(null);
+  const [msSearchResults, setMsSearchResults] = useState(null);
+  const [msSearching, setMsSearching] = useState(false);
 
   // Health check on mount + interval
   useEffect(() => {
@@ -133,6 +137,45 @@ function App() {
     }
   };
 
+  // Spectrum extraction
+  const handleExtractSpectrum = async (rt) => {
+    if (!selectedFile) return;
+    try {
+      const data = await api.extractSpectrum(selectedFile.path, rt);
+      setSpectrum(data);
+      setMsSearchResults(null);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to extract spectrum');
+    }
+  };
+
+  // MS library search
+  const handleSearchSpectrum = async () => {
+    if (!spectrum) return;
+    setMsSearching(true);
+    try {
+      const results = await api.searchSpectrum(spectrum);
+      setMsSearchResults(results);
+    } catch (err) {
+      if (err.response?.status === 501) {
+        setError('MS library search requires ms-toolkit-nrel on the server');
+      } else {
+        setError(err.response?.data?.detail || 'MS search failed');
+      }
+    } finally {
+      setMsSearching(false);
+    }
+  };
+
+  // Peak selection → extract spectrum
+  const handlePeakSelect = (idx) => {
+    setSelectedPeakIndex(idx);
+    if (fileData?.has_ms && integrationResults?.peaks?.[idx]) {
+      const rt = integrationResults.peaks[idx].retention_time;
+      handleExtractSpectrum(rt);
+    }
+  };
+
   // Navigation
   const handleNavigate = async (direction) => {
     setError(null);
@@ -225,9 +268,23 @@ function App() {
             ticData={fileData?.tic}
             showCorrectedSignal={currentParams?.baseline?.show_corrected || false}
             showBaseline={true}
-            onPeakClick={(idx) => setSelectedPeakIndex(idx)}
+            onPeakClick={(idx) => handlePeakSelect(idx)}
             selectedPeakIndex={selectedPeakIndex}
           />
+
+          {/* MS Spectrum Viewer */}
+          {fileData?.has_ms && (
+            <MSSpectrumViewer
+              spectrum={spectrum}
+              searchResults={msSearchResults}
+              selectedPeakRT={integrationResults?.peaks?.[selectedPeakIndex]?.retention_time}
+              hasMS={fileData?.has_ms}
+              onExtractSpectrum={handleExtractSpectrum}
+              onSearchSpectrum={handleSearchSpectrum}
+              searching={msSearching}
+              disabled={loading}
+            />
+          )}
 
           {/* Integrate button */}
           {processedData && processedData.peaks_x?.length > 0 && !integrationResults && (
@@ -250,7 +307,7 @@ function App() {
             <PeakTable
               integrationResults={integrationResults}
               onIntegrate={handleIntegrate}
-              onPeakClick={(idx) => setSelectedPeakIndex(idx)}
+              onPeakClick={(idx) => handlePeakSelect(idx)}
               selectedPeakIndex={selectedPeakIndex}
               disabled={loading}
             />
