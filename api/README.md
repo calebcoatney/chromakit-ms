@@ -97,8 +97,7 @@ Content-Type: application/json
   "params": {
     "smoothing": {
       "enabled": true,
-      "median_filter": {"kernel_size": 5},
-      "savgol_filter": {"window_length": 11, "polyorder": 3}
+      "lambda": 1000
     },
     "baseline": {
       "method": "asls",

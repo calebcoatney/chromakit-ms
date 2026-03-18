@@ -17,8 +17,16 @@ class LoadFileRequest(BaseModel):
 class SmoothingParams(BaseModel):
     """Smoothing parameters."""
     enabled: bool = False
-    median_filter: Dict[str, int] = {"kernel_size": 5}
-    savgol_filter: Dict[str, int] = {"window_length": 11, "polyorder": 3}
+    method: str = Field(default="whittaker", description="Smoothing method: 'whittaker' or 'savgol'")
+    median_enabled: bool = Field(default=False, description="Apply median pre-filter for spike removal")
+    median_kernel: int = Field(default=5, ge=3, description="Median filter kernel size (odd)")
+    lambda_: float = Field(default=1e-1, alias="lambda")
+    diff_order: int = Field(default=1, ge=1, le=2, description="Whittaker difference order: 1=slope, 2=curvature")
+    savgol_window: int = Field(default=3, ge=3, description="Savitzky-Golay window length (odd)")
+    savgol_polyorder: int = Field(default=1, ge=1, description="Savitzky-Golay polynomial order")
+
+    class Config:
+        populate_by_name = True
 
 
 class BreakPoint(BaseModel):
