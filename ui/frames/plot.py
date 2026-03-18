@@ -283,6 +283,50 @@ class PlotFrame(QWidget):
                                          markersize=8, alpha=0.9,
                                          label='Neg. Peak' if 'Neg. Peak' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
         
+        # Draw deconvolution component curves from pipeline
+        if fitted_curves:
+            _deconv_colors = ['#e6194b', '#3cb44b', '#4363d8', '#f58231',
+                              '#911eb4', '#42d4f4', '#f032e6', '#bfef45',
+                              '#fabebe', '#469990']
+            for i, comp in enumerate(fitted_curves):
+                color = _deconv_colors[i % len(_deconv_colors)]
+
+                if hasattr(comp, 't_curve'):
+                    # EMGComponent: draw dashed EMG curves
+                    y_emg = comp.y_curve
+                    if not show_corrected:
+                        baseline_at = np.interp(comp.t_curve, data['x'], data['baseline_y'])
+                        y_emg = y_emg + baseline_at
+                    self.chromatogram_ax.plot(
+                        comp.t_curve, y_emg, '--', color=color,
+                        linewidth=1.0, alpha=0.7,
+                        label='EMG' if i == 0 and 'EMG' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None
+                    )
+                elif hasattr(comp, 'start_index'):
+                    # DeconvComponent: colored fill_between + vertical boundary lines
+                    si = max(0, comp.start_index)
+                    ei = min(len(data['x']) - 1, comp.end_index)
+                    seg_x = data['x'][si:ei + 1]
+                    seg_y = data['corrected_y'][si:ei + 1]
+                    if not show_corrected:
+                        seg_y = seg_y + data['baseline_y'][si:ei + 1]
+                    base_y = data['baseline_y'][si:ei + 1] if not show_corrected else np.zeros(len(seg_x))
+                    self.chromatogram_ax.fill_between(
+                        seg_x, base_y, seg_y, color=color, alpha=0.25,
+                        label='Deconv' if i == 0 and 'Deconv' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None
+                    )
+                    # Vertical boundary lines at split points (skip chunk edges)
+                    if comp.split_type_left != 'chunk':
+                        self.chromatogram_ax.axvline(
+                            comp.start_time, color=color, linewidth=0.6,
+                            linestyle=':', alpha=0.5
+                        )
+                    if comp.split_type_right != 'chunk':
+                        self.chromatogram_ax.axvline(
+                            comp.end_time, color=color, linewidth=0.6,
+                            linestyle=':', alpha=0.5
+                        )
+
         # Set labels and add legend
         self.chromatogram_ax.set_xlabel('Time (min)')
         self.chromatogram_ax.set_ylabel('Intensity')
@@ -567,6 +611,8 @@ class PlotFrame(QWidget):
                 
                 # If no peak was found or no integrated peaks, just add the marker line
                 for ax in [self.chromatogram_ax, self.tic_ax]:
+                    if ax is None:
+                        continue
                     # Remove previous lines
                     for line in ax.get_lines():
                         if line.get_label() == '_selected_point':

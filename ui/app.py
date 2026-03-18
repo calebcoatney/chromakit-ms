@@ -1407,8 +1407,17 @@ class ChromaKitApp(QMainWindow):
             peak_mode = params['peaks'].get('mode', 'classical')
 
             if peak_mode == 'deconvolution':
-                # EMG-based integration from cached deconvolution components
-                integration_results = self._integrate_deconvolution()
+                deconv_windows = params.get('deconvolution', {}).get('windows', [])
+                if deconv_windows:
+                    # Hybrid mode: integrate classical peaks outside windows
+                    # with the normal integrator, deconv components with the
+                    # deconv integrator, then merge.
+                    integration_results = self._integrate_hybrid(
+                        params, ms_data, quality_options,
+                    )
+                else:
+                    # Full deconvolution — all peaks are deconv components
+                    integration_results = self._integrate_deconvolution()
             else:
                 # Extract peak groups from parameters
                 peak_groups = params.get('integration', {}).get('peak_groups', [])
@@ -1443,22 +1452,115 @@ class ChromaKitApp(QMainWindow):
             return None
 
     def _integrate_deconvolution(self):
-        """Integrate peaks using cached EMG deconvolution components."""
-        from logic.deconvolution import integrate_emg_components
+        """Integrate peaks using cached deconvolution components (EMG or geometric)."""
+        from logic.deconvolution import (
+            integrate_emg_components, integrate_deconv_components,
+            EMGComponent, DeconvComponent,
+        )
 
         processed = self.current_processed
         visible_components = processed.get('fitted_curves', [])
         if not visible_components:
             return None
 
-        return integrate_emg_components(
-            visible_components,
-            processed['x'],
-            processed['corrected_y'],
-            processed['baseline_y'],
-            self.area_factor,
-        )
+        # Dispatch based on component type
+        if isinstance(visible_components[0], DeconvComponent):
+            return integrate_deconv_components(
+                visible_components,
+                processed['x'],
+                processed['corrected_y'],
+                processed['baseline_y'],
+                self.area_factor,
+            )
+        else:
+            return integrate_emg_components(
+                visible_components,
+                processed['x'],
+                processed['corrected_y'],
+                processed['baseline_y'],
+                self.area_factor,
+            )
     
+    def _integrate_hybrid(self, params, ms_data, quality_options):
+        """Integrate peaks in hybrid mode: classical integrator for peaks
+        outside deconvolution windows, deconv integrator for components inside.
+        """
+        processed = self.current_processed
+        deconv_windows = params.get('deconvolution', {}).get('windows', [])
+
+        # --- 1. Identify which peaks are classical vs deconv ---
+        all_px = processed.get('peaks_x', np.array([]))
+        fitted_curves = processed.get('fitted_curves', [])
+        deconv_rts = {c.retention_time for c in fitted_curves}
+
+        def _in_any_window(rt):
+            for win in deconv_windows:
+                if len(win) == 2 and win[0] <= rt <= win[1]:
+                    return True
+            return False
+
+        # Build mask: True = classical peak (outside windows)
+        classical_mask = np.array([
+            (rt not in deconv_rts) and not _in_any_window(rt)
+            for rt in all_px
+        ], dtype=bool) if len(all_px) > 0 else np.array([], dtype=bool)
+
+        # --- 2. Integrate classical peaks via the normal integrator ---
+        classical_results = None
+        if np.any(classical_mask):
+            classical_processed = dict(processed)
+            classical_processed['peaks_x'] = all_px[classical_mask]
+            classical_processed['peaks_y'] = processed['peaks_y'][classical_mask]
+            full_meta = processed.get('peak_metadata', [])
+            classical_processed['peak_metadata'] = [
+                m for m, keep in zip(full_meta, classical_mask) if keep
+            ]
+            peak_groups = params.get('integration', {}).get('peak_groups', [])
+            classical_results = self.processor.integrate_peaks(
+                processed_data=classical_processed,
+                ms_data=ms_data,
+                quality_options=quality_options,
+                chemstation_area_factor=self.area_factor,
+                peak_groups=peak_groups if peak_groups else None,
+            )
+
+        # --- 3. Integrate deconv components ---
+        deconv_results = self._integrate_deconvolution()
+
+        # --- 4. Merge results, sorted by retention time ---
+        if classical_results and deconv_results:
+            merged = {}
+            for key in ('peaks', 'x_peaks', 'y_peaks', 'baseline_peaks',
+                        'retention_times', 'integrated_areas',
+                        'integration_bounds', 'peaks_list'):
+                c_vals = classical_results.get(key, [])
+                d_vals = deconv_results.get(key, [])
+                merged[key] = list(c_vals) + list(d_vals)
+
+            # Sort everything by retention time
+            sort_idx = sorted(
+                range(len(merged['retention_times'])),
+                key=lambda i: merged['retention_times'][i],
+            )
+            for key in merged:
+                merged[key] = [merged[key][i] for i in sort_idx]
+
+            # Re-number peaks sequentially
+            for i, peak in enumerate(merged['peaks']):
+                peak.peak_number = i + 1
+
+            n_class = len(classical_results.get('peaks', []))
+            n_deconv = len(deconv_results.get('peaks', []))
+            print(f"  Hybrid integration: {n_class} classical + "
+                  f"{n_deconv} deconvolved = {len(merged['peaks'])} total peaks")
+            return merged
+        elif classical_results:
+            return classical_results
+        elif deconv_results:
+            return deconv_results
+        else:
+            return None
+
     def _apply_rt_matching_to_peaks(self, peaks):
         """Apply RT table matching to integrated peaks."""
         if not hasattr(self, 'rt_settings') or not self.rt_settings.get('enabled', False):
@@ -2003,9 +2105,15 @@ class ChromaKitApp(QMainWindow):
         self.current_processed = processed
 
     def _apply_deconvolution(self, processed, params):
-        """Run the deconvolution pipeline and inject results into processed data."""
+        """Run the deconvolution pipeline and inject results into processed data.
+
+        Hybrid mode: when deconvolution windows are specified, classical peaks
+        are kept outside those windows and only replaced inside them by
+        deconvolution components.  When no windows are specified, all classical
+        peaks are replaced (full deconvolution).
+        """
         from logic.deconvolution import (
-            is_available, run_deconvolution_pipeline, EMGComponent
+            is_available, run_deconvolution_pipeline, EMGComponent, DeconvComponent
         )
         if not is_available():
             print("Deconvolution not available (missing torch or model weights)")
@@ -2013,18 +2121,44 @@ class ChromaKitApp(QMainWindow):
 
         corrected_y = processed['corrected_y']
 
-        # Cache invalidation: re-run if signal, prominence, or smoothing changed
-        min_prom = params['peaks'].get('min_prominence', 0)
+        # Gather deconvolution parameters
+        deconv_params = params.get('deconvolution', {})
+        deconv_windows = deconv_params.get('windows', [])
+        # Deconv pipeline always uses min_prominence=0 (optimal for U-Net
+        # peak detection).  The main prominence box controls classical peak
+        # detection, which matters in hybrid mode (outside deconv windows).
         smoothing_params = (params['smoothing']
                             if params['smoothing'].get('enabled', False)
                             else None)
-        cache_key = (hash(corrected_y.tobytes()), min_prom, str(smoothing_params))
+
+        splitting_method = deconv_params.get('splitting_method', 'geometric')
+        pipeline_kwargs = dict(
+            min_prominence=0,
+            smoothing_params=smoothing_params,
+            splitting_method=splitting_method,
+            heatmap_threshold=deconv_params.get('heatmap_threshold', 0.36),
+            pre_fit_signal_threshold=deconv_params.get('pre_fit_signal_threshold', 0.05),
+            min_area_frac=deconv_params.get('min_area_frac', 0.15),
+            valley_threshold_frac=deconv_params.get('valley_threshold_frac', 0.48),
+        )
+        if splitting_method == 'emg':
+            pipeline_kwargs.update(
+                mu_bound_factor=deconv_params.get('mu_bound_factor', 0.68),
+                fat_threshold_frac=deconv_params.get('fat_threshold_frac', 0.44),
+                dedup_sigma_factor=deconv_params.get('dedup_sigma_factor', 1.32),
+            )
+        else:
+            pipeline_kwargs.update(
+                dedup_rt_tolerance=deconv_params.get('dedup_rt_tolerance', 0.005),
+            )
+
+        # Cache invalidation: re-run if signal or any deconv param changed
+        cache_key = (hash(corrected_y.tobytes()), str(pipeline_kwargs))
         if not hasattr(self, '_deconv_cache') or self._deconv_cache.get('key') != cache_key:
-            print(f"Running deconvolution pipeline (min_prominence={min_prom})...")
+            print(f"Running deconvolution pipeline ({splitting_method})...")
             result = run_deconvolution_pipeline(
                 processed['x'], corrected_y,
-                min_prominence=min_prom,
-                smoothing_params=smoothing_params,
+                **pipeline_kwargs,
             )
             self._deconv_cache = {
                 'key': cache_key,
@@ -2034,41 +2168,124 @@ class ChromaKitApp(QMainWindow):
             print("Using cached deconvolution result")
             result = self._deconv_cache['result']
 
-        if not result.components:
-            processed['peaks_x'] = np.array([])
-            processed['peaks_y'] = np.array([])
-            processed['peak_metadata'] = []
-            processed['fitted_curves'] = []
-            return
+        # ------------------------------------------------------------------
+        # Hybrid mode: when windows are specified, keep classical peaks outside
+        # the windows and replace only those inside with deconv components.
+        # When no windows: full replacement (original behaviour).
+        # ------------------------------------------------------------------
 
-        visible = result.components
+        deconv_components = list(result.components) if result.components else []
 
-        # Inject into processed data
-        if visible:
-            peaks_x = np.array([c.retention_time for c in visible])
-            # Get y values at apex positions from the corrected signal
+        if deconv_windows:
+            # Filter deconv components to only those within windows
+            filtered_deconv = []
+            for c in deconv_components:
+                for win in deconv_windows:
+                    if len(win) == 2 and win[0] <= c.retention_time <= win[1]:
+                        filtered_deconv.append(c)
+                        break
+            n_removed = len(deconv_components) - len(filtered_deconv)
+            if n_removed:
+                print(f"  Window filter: kept {len(filtered_deconv)} of "
+                      f"{len(deconv_components)} components in "
+                      f"{len(deconv_windows)} window(s)")
+            deconv_components = filtered_deconv
+
+            # Preserve classical peaks that fall OUTSIDE deconv windows
+            classical_px = processed.get('peaks_x', np.array([]))
+            classical_py = processed.get('peaks_y', np.array([]))
+            classical_meta = processed.get('peak_metadata', [])
+
+            keep_mask = np.ones(len(classical_px), dtype=bool)
+            for i, px in enumerate(classical_px):
+                for win in deconv_windows:
+                    if len(win) == 2 and win[0] <= px <= win[1]:
+                        keep_mask[i] = False
+                        break
+
+            kept_classical_x = classical_px[keep_mask]
+            kept_classical_y = classical_py[keep_mask]
+            kept_classical_meta = [m for m, k in zip(classical_meta, keep_mask) if k]
+
+            n_classical_removed = int(np.sum(~keep_mask))
+            print(f"  Hybrid mode: keeping {len(kept_classical_x)} classical peaks "
+                  f"(removed {n_classical_removed} inside windows), "
+                  f"adding {len(deconv_components)} deconv components")
+
+            # Build deconv arrays
+            if deconv_components:
+                deconv_x = np.array([c.retention_time for c in deconv_components])
+                deconv_y = np.array([
+                    corrected_y[int(np.argmin(np.abs(processed['x'] - c.retention_time)))]
+                    for c in deconv_components
+                ])
+                deconv_meta = [
+                    {
+                        'x': c.retention_time,
+                        'y': c.peak_height,
+                        'type': 'peak',
+                        'is_shoulder': False,
+                        'is_negative': False,
+                        'index': int(np.argmin(np.abs(processed['x'] - c.retention_time))),
+                    }
+                    for c in deconv_components
+                ]
+            else:
+                deconv_x = np.array([])
+                deconv_y = np.array([])
+                deconv_meta = []
+
+            # Merge classical (outside) + deconv (inside), sorted by RT
+            if len(kept_classical_x) > 0 and len(deconv_x) > 0:
+                merged_x = np.concatenate([kept_classical_x, deconv_x])
+                merged_y = np.concatenate([kept_classical_y, deconv_y])
+                merged_meta = kept_classical_meta + deconv_meta
+                sort_order = np.argsort(merged_x)
+                processed['peaks_x'] = merged_x[sort_order]
+                processed['peaks_y'] = merged_y[sort_order]
+                processed['peak_metadata'] = [merged_meta[i] for i in sort_order]
+            elif len(deconv_x) > 0:
+                processed['peaks_x'] = deconv_x
+                processed['peaks_y'] = deconv_y
+                processed['peak_metadata'] = deconv_meta
+            else:
+                processed['peaks_x'] = kept_classical_x
+                processed['peaks_y'] = kept_classical_y
+                processed['peak_metadata'] = kept_classical_meta
+
+            # Only store fitted curves for the deconv components (used for
+            # overlay rendering); classical peaks have no fitted curves.
+            processed['fitted_curves'] = deconv_components
+
+        else:
+            # No windows → full deconvolution replaces all classical peaks
+            if not deconv_components:
+                processed['peaks_x'] = np.array([])
+                processed['peaks_y'] = np.array([])
+                processed['peak_metadata'] = []
+                processed['fitted_curves'] = []
+                return
+
+            peaks_x = np.array([c.retention_time for c in deconv_components])
             peaks_y = np.array([
                 corrected_y[int(np.argmin(np.abs(processed['x'] - c.retention_time)))]
-                for c in visible
+                for c in deconv_components
             ])
-        else:
-            peaks_x = np.array([])
-            peaks_y = np.array([])
 
-        processed['peaks_x'] = peaks_x
-        processed['peaks_y'] = peaks_y
-        processed['fitted_curves'] = visible  # list of EMGComponent
-        processed['peak_metadata'] = [
-            {
-                'x': c.retention_time,
-                'y': c.peak_height,
-                'type': 'peak',
-                'is_shoulder': False,
-                'is_negative': False,
-                'index': int(np.argmin(np.abs(processed['x'] - c.retention_time))),
-            }
-            for c in visible
-        ]
+            processed['peaks_x'] = peaks_x
+            processed['peaks_y'] = peaks_y
+            processed['fitted_curves'] = deconv_components
+            processed['peak_metadata'] = [
+                {
+                    'x': c.retention_time,
+                    'y': c.peak_height,
+                    'type': 'peak',
+                    'is_shoulder': False,
+                    'is_negative': False,
+                    'index': int(np.argmin(np.abs(processed['x'] - c.retention_time))),
+                }
+                for c in deconv_components
+            ]
 
     def debug_data(self):
         """Print debug information about current data."""
@@ -2376,7 +2593,8 @@ class ChromaKitApp(QMainWindow):
             try:
                 from logic.json_exporter import update_json_with_ms_search_results
                 detector = self.data_handler.current_detector if hasattr(self.data_handler, 'current_detector') else 'Unknown'
-                json_success = update_json_with_ms_search_results(self.integrated_peaks, current_dir, detector)
+                proc_params = self.parameters_frame.get_parameters() if hasattr(self, 'parameters_frame') else None
+                json_success = update_json_with_ms_search_results(self.integrated_peaks, current_dir, detector, processing_params=proc_params)
                 
                 if json_success:
                     # Automatically export CSV to the same directory

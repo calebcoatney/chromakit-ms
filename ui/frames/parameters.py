@@ -58,6 +58,21 @@ class ParametersFrame(QWidget):
                 'min_width': 0.0,
                 'range_filters': []  # List of [start, end] time ranges
             },
+            'deconvolution': {
+                'splitting_method': 'geometric',
+                'windows': [],  # List of [start, end] — empty = deconvolve everything
+                # Shared parameters
+                'heatmap_threshold': 0.36,
+                'pre_fit_signal_threshold': 0.001,
+                'min_area_frac': 0.15,
+                'valley_threshold_frac': 0.48,
+                # EMG-only
+                'mu_bound_factor': 0.68,
+                'fat_threshold_frac': 0.44,
+                'dedup_sigma_factor': 1.32,
+                # Geometric-only
+                'dedup_rt_tolerance': 0.005,
+            },
             'negative_peaks': {
                 'enabled': False,
                 'min_prominence': 1e5,
@@ -473,20 +488,174 @@ class ParametersFrame(QWidget):
         # Direct entry box for prominence with validation
         self.prominence_entry = QLineEdit()
         self.prominence_entry.setText(str(self.current_params['peaks']['min_prominence']))
-        
+
         # Set up validator for decimal and scientific notation
         validator = QRegularExpressionValidator(QRegularExpression(r'^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$'))
         self.prominence_entry.setValidator(validator)
-        
+
         self.prominence_entry.editingFinished.connect(self._on_prominence_entry_changed)
-        form_layout.addRow("Min Prominence:", self.prominence_entry)
-        
-        # Add help label
-        form_layout.addRow("", QLabel("Enter a number or scientific notation (e.g. 1e-3)"))
-        
+        self.prominence_label = QLabel("Min Prominence:")
+        form_layout.addRow(self.prominence_label, self.prominence_entry)
+
+        # Help label (changes with mode)
+        self.prominence_help = QLabel("Enter a number or scientific notation (e.g. 1e-3)")
+        form_layout.addRow("", self.prominence_help)
+
+        # ── Deconvolution sub-controls (visible only in deconvolution mode) ──
+
+        self.deconv_controls_frame = QFrame()
+        deconv_layout = QFormLayout(self.deconv_controls_frame)
+        deconv_layout.setContentsMargins(0, 4, 0, 0)
+
+        # Splitting method
+        self.splitting_method_combo = QComboBox()
+        self.splitting_method_combo.addItem("Geometric Splitting", "geometric")
+        self.splitting_method_combo.addItem("EMG Curve Fitting", "emg")
+        self.splitting_method_combo.setToolTip(
+            "Geometric: fast, accurate RT & area, best for large peaks.\n"
+            "EMG: better at detecting small peaks, recovers peak shape parameters."
+        )
+        self.splitting_method_combo.currentIndexChanged.connect(self._on_splitting_method_changed)
+        deconv_layout.addRow("Splitting Method:", self.splitting_method_combo)
+
+        # Deconvolution windows table
+        windows_info = QLabel("Apply deconvolution only in these time ranges.\n"
+                              "Leave empty to deconvolve the entire chromatogram.")
+        windows_info.setStyleSheet("color: #666666; font-size: 10px;")
+        deconv_layout.addRow(windows_info)
+
+        self.deconv_windows_table = QTableWidget(0, 3)
+        self.deconv_windows_table.setHorizontalHeaderLabels(["Start (min)", "End (min)", ""])
+        self.deconv_windows_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.deconv_windows_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.deconv_windows_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.deconv_windows_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.deconv_windows_table.setMaximumHeight(120)
+        deconv_layout.addRow(self.deconv_windows_table)
+
+        add_window_btn = QPushButton("+ Add Window")
+        add_window_btn.clicked.connect(self._add_deconv_window_row)
+        deconv_layout.addRow(add_window_btn)
+
+        # Advanced toggle
+        self.deconv_advanced_toggle = QPushButton("▶ Advanced")
+        self.deconv_advanced_toggle.setFlat(True)
+        self.deconv_advanced_toggle.setStyleSheet("text-align: left; padding: 2px;")
+        self.deconv_advanced_toggle.clicked.connect(self._toggle_deconv_advanced)
+        deconv_layout.addRow(self.deconv_advanced_toggle)
+
+        # Advanced frame (hidden by default)
+        self.deconv_advanced_frame = QFrame()
+        adv_layout = QFormLayout(self.deconv_advanced_frame)
+        adv_layout.setContentsMargins(8, 0, 0, 0)
+
+        # Shared params
+        self.heatmap_threshold_spin = QDoubleSpinBox()
+        self.heatmap_threshold_spin.setRange(0.10, 0.50)
+        self.heatmap_threshold_spin.setSingleStep(0.02)
+        self.heatmap_threshold_spin.setDecimals(2)
+        self.heatmap_threshold_spin.setValue(self.current_params['deconvolution']['heatmap_threshold'])
+        self.heatmap_threshold_spin.setToolTip("U-Net confidence threshold for detecting peak apexes.\nLower = more sensitive, higher = fewer false positives.")
+        self.heatmap_threshold_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('heatmap_threshold', v))
+        adv_layout.addRow("U-Net Confidence:", self.heatmap_threshold_spin)
+
+        self.pre_fit_signal_spin = QDoubleSpinBox()
+        self.pre_fit_signal_spin.setRange(0.0, 5.0)
+        self.pre_fit_signal_spin.setSingleStep(0.1)
+        self.pre_fit_signal_spin.setDecimals(1)
+        self.pre_fit_signal_spin.setValue(
+            self.current_params['deconvolution']['pre_fit_signal_threshold'] * 100
+        )
+        self.pre_fit_signal_spin.setSuffix("%")
+        self.pre_fit_signal_spin.setToolTip(
+            "Skip U-Net detections where the raw signal is below this % of the peak maximum.\n"
+            "Pre-fit noise gate — prevents fitting on baseline noise.\n"
+            "0.1% is a good starting point. 0% = no pre-filtering."
+        )
+        self.pre_fit_signal_spin.valueChanged.connect(self._on_pre_fit_signal_changed)
+        adv_layout.addRow("Pre-fit Signal Gate:", self.pre_fit_signal_spin)
+
+        self.min_area_frac_spin = QDoubleSpinBox()
+        self.min_area_frac_spin.setRange(0.00, 0.30)
+        self.min_area_frac_spin.setSingleStep(0.01)
+        self.min_area_frac_spin.setDecimals(2)
+        self.min_area_frac_spin.setValue(self.current_params['deconvolution']['min_area_frac'])
+        self.min_area_frac_spin.setToolTip("Remove components with area below this fraction of the median.\nHigher = more aggressive phantom filtering.")
+        self.min_area_frac_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('min_area_frac', v))
+        adv_layout.addRow("Min Area Fraction:", self.min_area_frac_spin)
+
+        self.valley_threshold_spin = QDoubleSpinBox()
+        self.valley_threshold_spin.setRange(0.20, 0.80)
+        self.valley_threshold_spin.setSingleStep(0.05)
+        self.valley_threshold_spin.setDecimals(2)
+        self.valley_threshold_spin.setValue(self.current_params['deconvolution']['valley_threshold_frac'])
+        self.valley_threshold_spin.setToolTip("Valley depth for splitting merged peaks.\nLower = split at shallower valleys, higher = require deeper valleys.")
+        self.valley_threshold_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('valley_threshold_frac', v))
+        adv_layout.addRow("Valley Depth:", self.valley_threshold_spin)
+
+        # EMG-only params
+        self.emg_only_label = QLabel("EMG-specific:")
+        self.emg_only_label.setStyleSheet("color: #666666; font-size: 10px; font-weight: bold;")
+        adv_layout.addRow(self.emg_only_label)
+
+        self.mu_bound_spin = QDoubleSpinBox()
+        self.mu_bound_spin.setRange(0.50, 3.00)
+        self.mu_bound_spin.setSingleStep(0.1)
+        self.mu_bound_spin.setDecimals(2)
+        self.mu_bound_spin.setValue(self.current_params['deconvolution']['mu_bound_factor'])
+        self.mu_bound_spin.setToolTip("Peak position bounds as multiples of sigma.\nSmaller = tighter peak positions, larger = more flexibility.")
+        self.mu_bound_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('mu_bound_factor', v))
+        adv_layout.addRow("Position Bounds (x sigma):", self.mu_bound_spin)
+
+        self.fat_threshold_spin = QDoubleSpinBox()
+        self.fat_threshold_spin.setRange(0.20, 0.80)
+        self.fat_threshold_spin.setSingleStep(0.05)
+        self.fat_threshold_spin.setDecimals(2)
+        self.fat_threshold_spin.setValue(self.current_params['deconvolution']['fat_threshold_frac'])
+        self.fat_threshold_spin.setToolTip("FWHM threshold for flagging over-wide components.\nComponents wider than this fraction of the window trigger refitting.")
+        self.fat_threshold_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('fat_threshold_frac', v))
+        adv_layout.addRow("Width Threshold:", self.fat_threshold_spin)
+
+        self.dedup_sigma_spin = QDoubleSpinBox()
+        self.dedup_sigma_spin.setRange(0.00, 2.00)
+        self.dedup_sigma_spin.setSingleStep(0.1)
+        self.dedup_sigma_spin.setDecimals(2)
+        self.dedup_sigma_spin.setValue(self.current_params['deconvolution']['dedup_sigma_factor'])
+        self.dedup_sigma_spin.setToolTip("Merge components within this many sigma of each other.\n0 = no deduplication.")
+        self.dedup_sigma_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('dedup_sigma_factor', v))
+        adv_layout.addRow("Dedup Distance (sigma):", self.dedup_sigma_spin)
+
+        # Geometric-only params
+        self.geo_only_label = QLabel("Geometric-specific:")
+        self.geo_only_label.setStyleSheet("color: #666666; font-size: 10px; font-weight: bold;")
+        adv_layout.addRow(self.geo_only_label)
+
+        self.dedup_rt_spin = QDoubleSpinBox()
+        self.dedup_rt_spin.setRange(0.000, 0.100)
+        self.dedup_rt_spin.setSingleStep(0.005)
+        self.dedup_rt_spin.setDecimals(3)
+        self.dedup_rt_spin.setValue(self.current_params['deconvolution']['dedup_rt_tolerance'])
+        self.dedup_rt_spin.setToolTip("Merge components within this RT distance (minutes).\n0 = no deduplication.")
+        self.dedup_rt_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('dedup_rt_tolerance', v))
+        adv_layout.addRow("Dedup Distance (min):", self.dedup_rt_spin)
+
+        # Reset button
+        self.deconv_reset_btn = QPushButton("Reset to Optimized Defaults")
+        self.deconv_reset_btn.setToolTip("Restore Optuna-optimized defaults for the current splitting method.")
+        self.deconv_reset_btn.clicked.connect(self._reset_deconv_defaults)
+        adv_layout.addRow(self.deconv_reset_btn)
+
+        self.deconv_advanced_frame.setVisible(False)
+        deconv_layout.addRow(self.deconv_advanced_frame)
+
+        # Initially hidden (shown when deconvolution mode is selected)
+        self.deconv_controls_frame.setVisible(False)
+        form_layout.addRow(self.deconv_controls_frame)
+
         # Enable/disable controls based on initial state
         self._update_peaks_controls_state()
-        
+        self._update_deconv_method_visibility()
+
         # Add to parameters layout
         self.section_groups['peaks'] = peaks_group
         self.params_layout.addWidget(peaks_group)
@@ -953,6 +1122,7 @@ class ParametersFrame(QWidget):
         is_deconv = self.current_params['peaks']['mode'] == 'deconvolution'
         self.prominence_entry.setEnabled(enabled)
         self.peak_mode_combo.setEnabled(enabled)
+        self.deconv_controls_frame.setVisible(enabled and is_deconv)
 
     def _update_shoulder_controls_state(self):
         """Update enabled state of shoulder controls"""
@@ -1135,25 +1305,194 @@ class ParametersFrame(QWidget):
         mode = self.peak_mode_combo.currentData()
         self.current_params['peaks']['mode'] = mode
 
-        # Set sensible prominence default for each mode
+        # Set sensible defaults for each mode.  The prominence box always
+        # controls classical peak detection (scipy find_peaks).  In hybrid
+        # deconvolution mode (with windows), this determines which peaks are
+        # kept outside the deconvolution windows.
         if mode == 'deconvolution':
-            self.current_params['peaks']['min_prominence'] = 0.01
-            self.prominence_entry.setText('0.01')
+            # Keep prominence at its classical default — it now controls
+            # classical peak detection in hybrid mode (outside deconv windows).
+            # The deconvolution pipeline internally uses min_prominence=0.
+            self.prominence_label.setText("Min Prominence:")
             self.prominence_entry.setToolTip(
-                'Fraction of signal range (0-1). '
-                'E.g. 0.01 = keep peaks above 1% of signal range.'
+                'Prominence threshold for classical peak detection.\n'
+                'In hybrid mode (with deconvolution windows), this controls\n'
+                'peak sensitivity outside the deconvolution windows.'
             )
+            self.prominence_help.setText("Controls classical peaks (outside deconv windows)")
         else:
             self.current_params['peaks']['min_prominence'] = 1e5
             self.prominence_entry.setText('100000.0')
+            self.prominence_label.setText("Min Prominence:")
             self.prominence_entry.setToolTip(
                 'Absolute prominence threshold for scipy find_peaks.'
             )
+            self.prominence_help.setText("Enter a number or scientific notation (e.g. 1e-3)")
 
         self._update_peaks_controls_state()
         self._update_shoulder_controls_state()
         self.parameters_changed.emit(self.current_params)
-    
+
+    def _on_splitting_method_changed(self, index):
+        """Handle splitting method change — update defaults and visibility."""
+        method = self.splitting_method_combo.currentData()
+        self.current_params['deconvolution']['splitting_method'] = method
+        self._update_deconv_method_visibility()
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_deconv_param_changed(self, key, value):
+        """Handle any deconvolution advanced parameter change."""
+        self.current_params['deconvolution'][key] = value
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_pre_fit_signal_changed(self, value):
+        """Handle pre-fit signal gate change (displayed as %, stored as fraction)."""
+        self.current_params['deconvolution']['pre_fit_signal_threshold'] = value / 100.0
+        self.parameters_changed.emit(self.current_params)
+
+    def _add_deconv_window_row(self):
+        """Add a new row to the deconvolution windows table."""
+        row = self.deconv_windows_table.rowCount()
+        self.deconv_windows_table.insertRow(row)
+
+        start_spin = QDoubleSpinBox()
+        start_spin.setDecimals(3)
+        start_spin.setRange(0, 9999)
+        start_spin.valueChanged.connect(self._on_deconv_windows_changed)
+        self.deconv_windows_table.setCellWidget(row, 0, start_spin)
+
+        end_spin = QDoubleSpinBox()
+        end_spin.setDecimals(3)
+        end_spin.setRange(0, 9999)
+        end_spin.setValue(60.0)
+        end_spin.valueChanged.connect(self._on_deconv_windows_changed)
+        self.deconv_windows_table.setCellWidget(row, 1, end_spin)
+
+        del_btn = QPushButton("✕")
+        del_btn.setFixedWidth(30)
+        del_btn.clicked.connect(lambda checked, r=row: self._remove_deconv_window_row(r))
+        self.deconv_windows_table.setCellWidget(row, 2, del_btn)
+
+    def _remove_deconv_window_row(self, row):
+        """Remove a row from the deconvolution windows table."""
+        self.deconv_windows_table.removeRow(row)
+        for r in range(self.deconv_windows_table.rowCount()):
+            del_btn = self.deconv_windows_table.cellWidget(r, 2)
+            if del_btn:
+                del_btn.clicked.disconnect()
+                del_btn.clicked.connect(lambda checked, r=r: self._remove_deconv_window_row(r))
+        self._on_deconv_windows_changed()
+
+    def _on_deconv_windows_changed(self, _=None):
+        """Collect deconvolution window values and emit parameters_changed."""
+        windows = []
+        for r in range(self.deconv_windows_table.rowCount()):
+            start_w = self.deconv_windows_table.cellWidget(r, 0)
+            end_w = self.deconv_windows_table.cellWidget(r, 1)
+            if start_w and end_w:
+                windows.append([start_w.value(), end_w.value()])
+        self.current_params['deconvolution']['windows'] = windows
+        self.parameters_changed.emit(self.current_params)
+
+    def _toggle_deconv_advanced(self):
+        """Toggle visibility of advanced deconvolution parameters."""
+        visible = not self.deconv_advanced_frame.isVisible()
+        self.deconv_advanced_frame.setVisible(visible)
+        self.deconv_advanced_toggle.setText("▼ Advanced" if visible else "▶ Advanced")
+
+    def _update_deconv_method_visibility(self):
+        """Show/hide method-specific params based on splitting method."""
+        is_emg = self.current_params['deconvolution']['splitting_method'] == 'emg'
+
+        # EMG-only controls
+        for w in [self.emg_only_label, self.mu_bound_spin, self.fat_threshold_spin,
+                  self.dedup_sigma_spin]:
+            w.setVisible(is_emg)
+        # Find and toggle the QLabel row labels for EMG spinboxes
+        adv_layout = self.deconv_advanced_frame.layout()
+        for i in range(adv_layout.rowCount()):
+            label_item = adv_layout.itemAt(i, QFormLayout.LabelRole)
+            field_item = adv_layout.itemAt(i, QFormLayout.FieldRole)
+            if field_item and field_item.widget() in (self.mu_bound_spin,
+                                                       self.fat_threshold_spin,
+                                                       self.dedup_sigma_spin):
+                if label_item and label_item.widget():
+                    label_item.widget().setVisible(is_emg)
+
+        # Geometric-only controls
+        for w in [self.geo_only_label, self.dedup_rt_spin]:
+            w.setVisible(not is_emg)
+        for i in range(adv_layout.rowCount()):
+            label_item = adv_layout.itemAt(i, QFormLayout.LabelRole)
+            field_item = adv_layout.itemAt(i, QFormLayout.FieldRole)
+            if field_item and field_item.widget() is self.dedup_rt_spin:
+                if label_item and label_item.widget():
+                    label_item.widget().setVisible(not is_emg)
+
+    # Defaults for each method: Optuna-optimized where applicable,
+    # with min_prominence=0 and pre_fit_signal_threshold=0.001 based
+    # on real-data testing (high dynamic range chromatograms).
+    _DECONV_DEFAULTS = {
+        'geometric': {
+            'heatmap_threshold': 0.36,
+            'pre_fit_signal_threshold': 0.001,
+            'min_area_frac': 0.15,
+            'valley_threshold_frac': 0.48,
+            'dedup_rt_tolerance': 0.005,
+            # EMG params kept at their defaults for switching
+            'mu_bound_factor': 0.68,
+            'fat_threshold_frac': 0.44,
+            'dedup_sigma_factor': 1.32,
+        },
+        'emg': {
+            'heatmap_threshold': 0.47,
+            'pre_fit_signal_threshold': 0.001,
+            'min_area_frac': 0.11,
+            'valley_threshold_frac': 0.48,
+            'mu_bound_factor': 0.68,
+            'fat_threshold_frac': 0.44,
+            'dedup_sigma_factor': 1.32,
+            # Geometric params kept at their defaults for switching
+            'dedup_rt_tolerance': 0.005,
+        },
+    }
+
+    def _reset_deconv_defaults(self):
+        """Reset deconvolution parameters to Optuna-optimized defaults.
+
+        Does not touch Min Prominence — that controls classical peak detection
+        and is independent of the deconvolution tuning parameters.
+        """
+        method = self.current_params['deconvolution']['splitting_method']
+        defaults = self._DECONV_DEFAULTS[method]
+
+        for key, val in defaults.items():
+            self.current_params['deconvolution'][key] = val
+
+        # Update spinboxes without emitting per-change signals
+        self._sync_deconv_spinboxes()
+        self.parameters_changed.emit(self.current_params)
+
+    def _sync_deconv_spinboxes(self):
+        """Sync all deconvolution spinbox values from current_params."""
+        d = self.current_params['deconvolution']
+        for spin, key in [
+            (self.heatmap_threshold_spin, 'heatmap_threshold'),
+            (self.min_area_frac_spin, 'min_area_frac'),
+            (self.valley_threshold_spin, 'valley_threshold_frac'),
+            (self.mu_bound_spin, 'mu_bound_factor'),
+            (self.fat_threshold_spin, 'fat_threshold_frac'),
+            (self.dedup_sigma_spin, 'dedup_sigma_factor'),
+            (self.dedup_rt_spin, 'dedup_rt_tolerance'),
+        ]:
+            spin.blockSignals(True)
+            spin.setValue(d[key])
+            spin.blockSignals(False)
+        # Pre-fit signal gate: stored as fraction, displayed as %
+        self.pre_fit_signal_spin.blockSignals(True)
+        self.pre_fit_signal_spin.setValue(d['pre_fit_signal_threshold'] * 100)
+        self.pre_fit_signal_spin.blockSignals(False)
+
     def _on_ms_baseline_clicked(self):
         """Signal that MS baseline correction button was clicked."""
         # Emit the signal
@@ -1239,20 +1578,15 @@ class ParametersFrame(QWidget):
         """Handle prominence entry change with validation"""
         text = self.prominence_entry.text()
         try:
-            # Try to convert the text to a float
             value = float(text)
-            
-            # Update parameters
             self.current_params['peaks']['min_prominence'] = value
-            
+
             # Provide visual feedback
             self.prominence_entry.setStyleSheet("background-color: #e6f2ff; border: 1px solid #99ccff;")
             QTimer.singleShot(800, lambda: self.prominence_entry.setStyleSheet(""))
-            
-            # Emit signal for parameter change
+
             self.parameters_changed.emit(self.current_params)
-            
+
         except ValueError:
-            # Invalid input - show red feedback
             self.prominence_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
             QTimer.singleShot(800, lambda: self.prominence_entry.setStyleSheet(""))

@@ -30,7 +30,7 @@ except ImportError:
 
 
 # =========================================================================== #
-#  1D U-Net model (mirrors shoulder-detection/unet_model.py)
+#  1D U-Net model (mirrors unet-training/unet_model.py)
 # =========================================================================== #
 
 def _require_torch():
@@ -461,9 +461,25 @@ class EMGComponent:
 
 
 @dataclass
+class DeconvComponent:
+    """A single deconvolved peak component from geometric splitting."""
+    retention_time: float      # apex RT (snapped or U-Net predicted)
+    area: float                # np.trapz of signal segment
+    peak_height: float         # signal value at apex position
+    chunk_index: int
+    start_time: float          # left boundary RT
+    end_time: float            # right boundary RT
+    start_index: int           # left boundary in full time array
+    end_index: int             # right boundary in full time array
+    apex_index: int            # apex in full time array
+    split_type_left: str       # 'chunk' | 'valley' | 'inflection' | 'midpoint'
+    split_type_right: str      # 'chunk' | 'valley' | 'inflection' | 'midpoint'
+
+
+@dataclass
 class DeconvolutionResult:
     """Result of the full deconvolution pipeline."""
-    components: list  # list of EMGComponent
+    components: list  # list of EMGComponent or DeconvComponent
     chunks: list      # list of Chunk objects
 
 
@@ -521,16 +537,21 @@ def _apply_smoothing_for_unet(signal, smoothing_params):
 
 
 def run_deconvolution_pipeline(time, corrected_signal, *,
-                                heatmap_threshold=0.15,
+                                splitting_method='emg',
+                                heatmap_threshold=0.44,
                                 heatmap_distance=10,
                                 weights_path=None,
-                                min_prominence=0.01,
+                                min_prominence=0.07,
                                 smoothing_params=None,
-                                pre_fit_signal_threshold=0.005,
-                                dedup_sigma_factor=0.5,
-                                min_area_frac=0.0):
+                                pre_fit_signal_threshold=0.057,
+                                dedup_sigma_factor=0.83,
+                                dedup_rt_tolerance=0.005,
+                                min_area_frac=0.12,
+                                mu_bound_factor=1.5,
+                                fat_threshold_frac=0.5,
+                                valley_threshold_frac=0.5):
     """
-    Full deconvolution pipeline: chunk → U-Net inference → EMG fit.
+    Full deconvolution pipeline: chunk → U-Net inference → EMG fit or geometric split.
 
     Parameters
     ----------
@@ -538,6 +559,9 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
         Retention time axis.
     corrected_signal : 1-D array
         Baseline-corrected signal.
+    splitting_method : str
+        'emg' for EMG curve fitting (default), 'geometric' for geometric
+        area splitting with boundary detection.
     heatmap_threshold : float
         Minimum heatmap probability to accept an apex.
     heatmap_distance : int
@@ -560,8 +584,12 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
         the corrected signal is below this fraction are discarded before
         fitting, saving computation.  0 = no filtering.
     dedup_sigma_factor : float
-        Post-fit deduplication: merge components whose RTs are within
-        this many sigma of each other, keeping the one with larger area.
+        Post-fit deduplication (EMG mode): merge components whose RTs are
+        within this many sigma of each other, keeping the one with larger
+        area.  0 = no deduplication.
+    dedup_rt_tolerance : float
+        Post-fit deduplication (geometric mode): merge components whose
+        RTs are within this many minutes, keeping the one with larger area.
         0 = no deduplication.
     min_area_frac : float
         Post-fit area filter: drop components with area less than this
@@ -624,25 +652,15 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
     print(f"  U-Net inference: {len(chunks)} chunks ({raw_output.shape[1]}-ch) "
           f"in {_time.perf_counter()-t0:.3f}s")
 
-    # Step 3: Extract apexes and fit EMGs per chunk
+    # Step 3: Extract apexes per chunk (shared by both splitting methods)
     t0 = _time.perf_counter()
-    _PIPELINE_BUDGET = 10.0  # total seconds for all EMG fits
-    all_components = []
-    skipped_chunks = 0
+    per_chunk_apexes = []  # list of (apex_pixels, apex_rts, predicted_params)
 
     for ci, chunk in enumerate(chunks):
-        # Abort if we've spent too long fitting
-        if _time.perf_counter() - t0 > _PIPELINE_BUDGET:
-            skipped_chunks = len(chunks) - ci
-            print(f"  EMG fitting: budget exceeded, skipping {skipped_chunks} remaining chunks")
-            break
-
         t_interp = interp_data[ci][0]
         heatmap = all_heatmaps[ci]
 
         # Scale heatmap_distance so minimum apex separation is ≥ 0.03 min.
-        # For narrow chunks the default 10-pixel distance maps to a tiny
-        # real-time gap, causing the U-Net to hallucinate extra apexes.
         chunk_width = t_interp[-1] - t_interp[0]
         min_sep_time = 0.03  # min
         min_distance_pixels = max(
@@ -654,6 +672,7 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
             heatmap, height=heatmap_threshold, distance=min_distance_pixels
         )
         if len(apex_pixels) == 0:
+            per_chunk_apexes.append(None)
             continue
 
         apex_rts = [float(t_interp[int(p)]) for p in apex_pixels]
@@ -664,7 +683,6 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
             s_chunk_raw = corrected_signal[si_chunk:ei_chunk]
             keep = []
             for ai, p in enumerate(apex_pixels):
-                # Map apex pixel position back to original signal index
                 frac = int(p) / (WINDOW_LENGTH - 1)
                 orig_idx = int(round(frac * (len(s_chunk_raw) - 1)))
                 orig_idx = max(0, min(orig_idx, len(s_chunk_raw) - 1))
@@ -672,6 +690,7 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
                 if signal_at_apex >= pre_fit_signal_threshold * global_signal_range:
                     keep.append(ai)
             if len(keep) == 0:
+                per_chunk_apexes.append(None)
                 continue
             if len(keep) < len(apex_pixels):
                 apex_pixels = [apex_pixels[i] for i in keep]
@@ -690,67 +709,117 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
                     'tau': max(pred_tau, 1e-4),
                 })
 
-        si, ei = chunk.start_index, chunk.end_index + 1
-        t_chunk = time_arr[si:ei]
-        s_chunk = corrected_signal[si:ei]
-        if len(t_chunk) < 4:
-            continue
+        per_chunk_apexes.append((apex_pixels, apex_rts, predicted_params))
 
-        # Group nearby apexes for joint fitting, isolate well-separated ones
-        fit_groups = _group_nearby_apexes(apex_rts, t_chunk, s_chunk)
+    print(f"  Apex extraction: {sum(1 for a in per_chunk_apexes if a is not None)} "
+          f"chunks with apexes in {_time.perf_counter()-t0:.3f}s")
 
-        for sub_rts, sub_si, sub_ei in fit_groups:
-            sub_t = t_chunk[sub_si:sub_ei + 1]
-            sub_s = s_chunk[sub_si:sub_ei + 1]
-            if len(sub_t) < 4:
-                continue
-
-            # Match predicted params to this sub-group's RTs
-            sub_params = None
-            if predicted_params is not None:
-                sub_params = []
-                for srt in sub_rts:
-                    # Find the predicted param closest to this RT
-                    best_idx = int(np.argmin([abs(srt - art) for art in apex_rts]))
-                    sub_params.append(predicted_params[best_idx])
-
-            emg_fits, _ = _deconvolve_chunk(sub_t, sub_s, sub_rts,
-                                            predicted_params=sub_params)
-            if not emg_fits:
-                continue
-
-            for fit in emg_fits:
-                y_curve = _single_emg(
-                    t_chunk, fit['amplitude'], fit['retention_time'],
-                    fit['sigma'], fit['tau']
-                )
-                peak_height = float(np.max(y_curve))
-                # Skip degenerate fits (zero area or negligible height)
-                if fit['area'] < 1e-10 or peak_height < 1e-10:
-                    continue
-                all_components.append(EMGComponent(
-                    retention_time=fit['retention_time'],
-                    area=fit['area'],
-                    sigma=fit['sigma'],
-                    tau=fit['tau'],
-                    peak_height=peak_height,
-                    chunk_index=ci,
-                    t_curve=t_chunk.copy(),
-                    y_curve=y_curve,
-                ))
-
-    print(f"  EMG fitting: {len(all_components)} components in {_time.perf_counter()-t0:.3f}s")
-
-    # Step 4: Post-fit boundary resolution — re-fit truncated components
+    # Step 4: Split into components (EMG fitting or geometric splitting)
     t0 = _time.perf_counter()
-    all_components = _resolve_boundary_truncations(
-        all_components, chunks, time_arr, corrected_signal,
-        interp_data, all_heatmaps, heatmap_threshold, heatmap_distance,
-    )
-    print(f"  Boundary resolution: {len(all_components)} components in {_time.perf_counter()-t0:.3f}s")
+    all_components = []
 
-    # Step 5: Filter spurious low-height components
-    # min_prominence < 1 → fraction of total signal range; ≥ 1 → absolute
+    if splitting_method == 'geometric':
+        # ── Geometric splitting path ──
+        for ci, chunk in enumerate(chunks):
+            if per_chunk_apexes[ci] is None:
+                continue
+            _, apex_rts, _ = per_chunk_apexes[ci]
+            si, ei = chunk.start_index, chunk.end_index + 1
+            t_chunk = time_arr[si:ei]
+            s_chunk = corrected_signal[si:ei]
+            if len(t_chunk) < 4:
+                continue
+
+            geo_comps = _geometric_split_chunk(
+                t_chunk, s_chunk, apex_rts, chunk_start_index=si,
+                chunk_index=ci, time_full=time_arr,
+                valley_threshold_frac=valley_threshold_frac,
+            )
+            all_components.extend(geo_comps)
+
+        print(f"  Geometric splitting: {len(all_components)} components in "
+              f"{_time.perf_counter()-t0:.3f}s")
+
+    else:
+        # ── EMG fitting path (default) ──
+        _PIPELINE_BUDGET = 10.0
+        skipped_chunks = 0
+
+        for ci, chunk in enumerate(chunks):
+            if _time.perf_counter() - t0 > _PIPELINE_BUDGET:
+                skipped_chunks = len(chunks) - ci
+                print(f"  EMG fitting: budget exceeded, skipping {skipped_chunks} remaining chunks")
+                break
+
+            if per_chunk_apexes[ci] is None:
+                continue
+            apex_pixels, apex_rts, predicted_params = per_chunk_apexes[ci]
+
+            si, ei = chunk.start_index, chunk.end_index + 1
+            t_chunk = time_arr[si:ei]
+            s_chunk = corrected_signal[si:ei]
+            if len(t_chunk) < 4:
+                continue
+
+            fit_groups = _group_nearby_apexes(apex_rts, t_chunk, s_chunk,
+                                                valley_threshold_frac=valley_threshold_frac)
+
+            for sub_rts, sub_si, sub_ei in fit_groups:
+                sub_t = t_chunk[sub_si:sub_ei + 1]
+                sub_s = s_chunk[sub_si:sub_ei + 1]
+                if len(sub_t) < 4:
+                    continue
+
+                sub_params = None
+                if predicted_params is not None:
+                    sub_params = []
+                    for srt in sub_rts:
+                        best_idx = int(np.argmin([abs(srt - art) for art in apex_rts]))
+                        sub_params.append(predicted_params[best_idx])
+
+                emg_fits, _ = _deconvolve_chunk(sub_t, sub_s, sub_rts,
+                                                predicted_params=sub_params,
+                                                mu_bound_factor=mu_bound_factor,
+                                                fat_threshold_frac=fat_threshold_frac)
+                if not emg_fits:
+                    continue
+
+                for fit in emg_fits:
+                    y_curve = _single_emg(
+                        t_chunk, fit['amplitude'], fit['retention_time'],
+                        fit['sigma'], fit['tau']
+                    )
+                    peak_height = float(np.max(y_curve))
+                    if fit['area'] < 1e-10 or peak_height < 1e-10:
+                        continue
+                    all_components.append(EMGComponent(
+                        retention_time=fit['retention_time'],
+                        area=fit['area'],
+                        sigma=fit['sigma'],
+                        tau=fit['tau'],
+                        peak_height=peak_height,
+                        chunk_index=ci,
+                        t_curve=t_chunk.copy(),
+                        y_curve=y_curve,
+                    ))
+
+        print(f"  EMG fitting: {len(all_components)} components in "
+              f"{_time.perf_counter()-t0:.3f}s")
+
+    # Step 5: Post-fit boundary resolution (EMG only — geometric has exact bounds)
+    if splitting_method == 'emg':
+        t0 = _time.perf_counter()
+        all_components = _resolve_boundary_truncations(
+            all_components, chunks, time_arr, corrected_signal,
+            interp_data, all_heatmaps, heatmap_threshold, heatmap_distance,
+            mu_bound_factor=mu_bound_factor,
+            fat_threshold_frac=fat_threshold_frac,
+            valley_threshold_frac=valley_threshold_frac,
+        )
+        print(f"  Boundary resolution: {len(all_components)} components in "
+              f"{_time.perf_counter()-t0:.3f}s")
+
+    # Step 6: Filter spurious low-height components
     if min_prominence > 0 and all_components:
         signal_range = float(np.max(corrected_signal) - np.min(corrected_signal))
         abs_threshold = (min_prominence * signal_range
@@ -763,26 +832,87 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
             print(f"  Prominence filter: removed {n_removed} spurious components "
                   f"(threshold={abs_threshold:.1f})")
 
-    # Step 6: Deduplicate nearby components (keep larger by area)
-    if dedup_sigma_factor > 0 and all_components and len(all_components) > 1:
-        all_components = sorted(all_components, key=lambda c: c.retention_time)
-        kept = [all_components[0]]
-        for c in all_components[1:]:
-            prev = kept[-1]
-            separation = abs(c.retention_time - prev.retention_time)
-            merge_thresh = dedup_sigma_factor * max(c.sigma, prev.sigma)
-            if separation < merge_thresh:
-                if c.area > prev.area:
-                    kept[-1] = c
-            else:
-                kept.append(c)
-        n_deduped = len(all_components) - len(kept)
-        if n_deduped:
-            print(f"  Deduplication: merged {n_deduped} components "
-                  f"(within {dedup_sigma_factor}σ)")
-        all_components = kept
+    # Step 7: Merge nearby components into single peaks
+    # When two predicted apexes are too close, they're likely the same peak
+    # split by noise — merge their boundaries and re-integrate as one.
+    if len(all_components) > 1:
+        if splitting_method == 'geometric' and dedup_rt_tolerance > 0:
+            all_components = sorted(all_components, key=lambda c: c.retention_time)
+            kept = [all_components[0]]
+            for c in all_components[1:]:
+                prev = kept[-1]
+                if abs(c.retention_time - prev.retention_time) < dedup_rt_tolerance:
+                    # Merge: extend boundaries, pick apex with higher signal,
+                    # re-integrate the combined region
+                    si = min(prev.start_index, c.start_index)
+                    ei = max(prev.end_index, c.end_index)
+                    seg_s = np.maximum(corrected_signal[si:ei + 1], 0)
+                    seg_t = time_arr[si:ei + 1]
+                    merged_area = float(np.trapz(seg_s, seg_t)) if len(seg_t) >= 2 else prev.area + c.area
+                    # Keep apex with higher peak_height
+                    if c.peak_height > prev.peak_height:
+                        apex = c
+                    else:
+                        apex = prev
+                    kept[-1] = DeconvComponent(
+                        retention_time=apex.retention_time,
+                        area=merged_area,
+                        peak_height=apex.peak_height,
+                        chunk_index=apex.chunk_index,
+                        start_time=float(time_arr[si]),
+                        end_time=float(time_arr[ei]),
+                        start_index=si,
+                        end_index=ei,
+                        apex_index=apex.apex_index,
+                        split_type_left=prev.split_type_left,
+                        split_type_right=c.split_type_right,
+                    )
+                else:
+                    kept.append(c)
+            n_deduped = len(all_components) - len(kept)
+            if n_deduped:
+                print(f"  Deduplication: merged {n_deduped} components "
+                      f"(within {dedup_rt_tolerance:.3f} min)")
+            all_components = kept
+        elif splitting_method == 'emg' and dedup_sigma_factor > 0:
+            all_components = sorted(all_components, key=lambda c: c.retention_time)
+            kept = [all_components[0]]
+            for c in all_components[1:]:
+                prev = kept[-1]
+                separation = abs(c.retention_time - prev.retention_time)
+                merge_thresh = dedup_sigma_factor * max(c.sigma, prev.sigma)
+                if separation < merge_thresh:
+                    # Merge: keep dominant peak's shape, combine areas,
+                    # extend curve to cover both
+                    if c.peak_height > prev.peak_height:
+                        dominant, minor = c, prev
+                    else:
+                        dominant, minor = prev, c
+                    merged_area = dominant.area + minor.area
+                    # Rebuild curve: sum both EMG curves
+                    merged_y = dominant.y_curve + _single_emg(
+                        dominant.t_curve, minor.area, minor.retention_time,
+                        minor.sigma, minor.tau,
+                    )
+                    kept[-1] = EMGComponent(
+                        retention_time=dominant.retention_time,
+                        area=merged_area,
+                        sigma=dominant.sigma,
+                        tau=dominant.tau,
+                        peak_height=float(np.max(merged_y)),
+                        chunk_index=dominant.chunk_index,
+                        t_curve=dominant.t_curve,
+                        y_curve=merged_y,
+                    )
+                else:
+                    kept.append(c)
+            n_deduped = len(all_components) - len(kept)
+            if n_deduped:
+                print(f"  Deduplication: merged {n_deduped} components "
+                      f"(within {dedup_sigma_factor}σ)")
+            all_components = kept
 
-    # Step 7: Drop components with area < X% of median area
+    # Step 8: Drop components with area < X% of median area
     if min_area_frac > 0 and all_components:
         areas = [c.area for c in all_components]
         median_area = float(np.median(areas))
@@ -794,13 +924,9 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
             print(f"  Area filter: removed {n_removed} components "
                   f"(threshold={area_threshold:.2f}, {min_area_frac:.0%} of median)")
 
-    # Step 8: Proportional area rescaling
-    # The analytical EMG area (amp) can overcount when components overlap.
-    # Rescale each component's area so that the total fitted signal matches
-    # the actual chromatogram — each component gets its proportional share.
-    if len(all_components) > 1:
+    # Step 9: Proportional area rescaling (EMG only — geometric areas are already correct)
+    if splitting_method == 'emg' and len(all_components) > 1:
         t0 = _time.perf_counter()
-        # Evaluate each component on the full time axis
         curves = np.zeros((len(all_components), len(time_arr)))
         for i, comp in enumerate(all_components):
             curves[i] = _single_emg(
@@ -808,13 +934,9 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
                 comp.sigma, comp.tau,
             )
         total_fit = curves.sum(axis=0)
-
-        # Clamp signal to non-negative for area allocation
         signal_pos = np.maximum(corrected_signal, 0)
 
         for i, comp in enumerate(all_components):
-            # Proportional share: where total_fit > 0, allocate signal
-            # proportionally to each component's contribution
             mask = total_fit > 1e-12
             share = np.zeros_like(time_arr)
             share[mask] = curves[i][mask] / total_fit[mask] * signal_pos[mask]
@@ -826,8 +948,218 @@ def run_deconvolution_pipeline(time, corrected_signal, *,
     return DeconvolutionResult(components=all_components, chunks=chunks)
 
 
+# =========================================================================== #
+#  Geometric splitting helpers
+# =========================================================================== #
+
+def _resolve_apex_position(s_chunk, predicted_idx, window=5):
+    """
+    Snap a predicted apex to the nearest local maximum, or keep as shoulder.
+
+    Parameters
+    ----------
+    s_chunk : 1-D array — signal within the chunk
+    predicted_idx : int — predicted apex index in s_chunk
+    window : int — search radius (±window points)
+
+    Returns
+    -------
+    (snapped_idx, is_shoulder) : (int, bool)
+    """
+    lo = max(0, predicted_idx - window)
+    hi = min(len(s_chunk), predicted_idx + window + 1)
+    region = s_chunk[lo:hi]
+    local_max_idx = lo + int(np.argmax(region))
+
+    # Check if the local max is a true local maximum (higher than both neighbors)
+    if 0 < local_max_idx < len(s_chunk) - 1:
+        if (s_chunk[local_max_idx] >= s_chunk[local_max_idx - 1] and
+                s_chunk[local_max_idx] >= s_chunk[local_max_idx + 1]):
+            return local_max_idx, False
+
+    # Edge case: at array boundary, still accept if it's the region max
+    if s_chunk[local_max_idx] > s_chunk[predicted_idx] * 1.01:
+        return local_max_idx, False
+
+    # No clear local max — this is a shoulder, keep the predicted position
+    return predicted_idx, True
+
+
+def _find_split_boundary(t_chunk, s_chunk, idx_a, idx_b,
+                         valley_threshold_frac=0.5):
+    """
+    Find the best split point between two predicted apexes.
+
+    Three-tier logic:
+    1. Valley: signal minimum < 50% of shorter peak height
+    2. Inflection: d2y zero-crossing with savgol smoothing
+    3. Midpoint: (rt_a + rt_b) / 2
+
+    Parameters
+    ----------
+    t_chunk, s_chunk : 1-D arrays — chunk time and signal
+    idx_a, idx_b : int — indices of two adjacent apexes (idx_a < idx_b)
+
+    Returns
+    -------
+    (boundary_idx, split_type) : (int, str)
+    """
+    from scipy.signal import savgol_filter
+
+    if idx_a >= idx_b:
+        idx_a, idx_b = idx_b, idx_a
+
+    # Region between the two apexes
+    region_s = s_chunk[idx_a:idx_b + 1]
+    if len(region_s) < 3:
+        mid = (idx_a + idx_b) // 2
+        return mid, 'midpoint'
+
+    # Tier 1: Valley detection
+    valley_local_idx = int(np.argmin(region_s))
+    valley_idx = idx_a + valley_local_idx
+    valley_val = region_s[valley_local_idx]
+    shorter_peak = min(s_chunk[idx_a], s_chunk[idx_b])
+
+    if shorter_peak > 1e-12 and valley_val < valley_threshold_frac * shorter_peak:
+        return valley_idx, 'valley'
+
+    # Tier 2: Inflection point via d2y zero-crossing
+    # Use heavy savgol smoothing on the inter-peak region to find curvature changes
+    region_len = idx_b - idx_a + 1
+    if region_len > 5:
+        # Savgol window: use about half the region, odd number
+        sg_window = min(region_len, max(5, region_len // 2))
+        if sg_window % 2 == 0:
+            sg_window += 1
+        sg_window = min(sg_window, region_len)
+        if sg_window % 2 == 0:
+            sg_window -= 1
+
+        if sg_window >= 5:
+            smoothed = savgol_filter(s_chunk[idx_a:idx_b + 1],
+                                     window_length=sg_window, polyorder=3)
+            d2y = np.gradient(np.gradient(smoothed))
+
+            # Find zero-crossings
+            zero_crossings = []
+            for k in range(len(d2y) - 1):
+                if d2y[k] * d2y[k + 1] < 0:
+                    zero_crossings.append(idx_a + k)
+
+            if zero_crossings:
+                # Use the zero-crossing closest to the midpoint between apexes
+                midpoint = (idx_a + idx_b) / 2
+                best_zc = min(zero_crossings, key=lambda z: abs(z - midpoint))
+                return best_zc, 'inflection'
+
+    # Tier 3: Midpoint fallback
+    mid = (idx_a + idx_b) // 2
+    return mid, 'midpoint'
+
+
+def _geometric_split_chunk(t_chunk, s_chunk, apex_rts, chunk_start_index,
+                            chunk_index, time_full,
+                            valley_threshold_frac=0.5):
+    """
+    Split a chunk into components using geometric boundaries.
+
+    Parameters
+    ----------
+    t_chunk, s_chunk : 1-D arrays — chunk time and signal
+    apex_rts : list of float — predicted apex retention times
+    chunk_start_index : int — index of t_chunk[0] in the full time array
+    chunk_index : int — chunk index for labeling
+    time_full : 1-D array — full time axis (for index mapping)
+
+    Returns
+    -------
+    list of DeconvComponent
+    """
+    if len(apex_rts) == 0:
+        return []
+
+    sorted_rts = sorted(apex_rts)
+
+    # Resolve apex positions: snap to local max or keep as shoulder
+    apex_indices = []
+    for rt in sorted_rts:
+        predicted_idx = int(np.argmin(np.abs(t_chunk - rt)))
+        snapped_idx, _ = _resolve_apex_position(s_chunk, predicted_idx, window=5)
+        apex_indices.append(snapped_idx)
+
+    # Find boundaries between adjacent apexes
+    n_apexes = len(apex_indices)
+    boundaries = []  # list of (boundary_idx, split_type)
+
+    for i in range(n_apexes - 1):
+        b_idx, b_type = _find_split_boundary(
+            t_chunk, s_chunk, apex_indices[i], apex_indices[i + 1],
+            valley_threshold_frac=valley_threshold_frac,
+        )
+        boundaries.append((b_idx, b_type))
+
+    # Build component segments
+    components = []
+    for i in range(n_apexes):
+        # Left boundary
+        if i == 0:
+            left_idx = 0
+            left_type = 'chunk'
+        else:
+            left_idx = boundaries[i - 1][0]
+            left_type = boundaries[i - 1][1]
+
+        # Right boundary
+        if i == n_apexes - 1:
+            right_idx = len(t_chunk) - 1
+            right_type = 'chunk'
+        else:
+            right_idx = boundaries[i][0]
+            right_type = boundaries[i][1]
+
+        # Ensure valid range
+        if right_idx <= left_idx:
+            continue
+
+        # Integrate the segment
+        seg_s = np.maximum(s_chunk[left_idx:right_idx + 1], 0)
+        seg_t = t_chunk[left_idx:right_idx + 1]
+        if len(seg_t) < 2:
+            continue
+
+        area = float(np.trapz(seg_s, seg_t))
+        if area < 1e-10:
+            continue
+
+        apex_idx_chunk = apex_indices[i]
+        peak_height = float(s_chunk[apex_idx_chunk])
+
+        # Map chunk-local indices to full time array indices
+        full_start = chunk_start_index + left_idx
+        full_end = chunk_start_index + right_idx
+        full_apex = chunk_start_index + apex_idx_chunk
+
+        components.append(DeconvComponent(
+            retention_time=float(t_chunk[apex_idx_chunk]),
+            area=area,
+            peak_height=peak_height,
+            chunk_index=chunk_index,
+            start_time=float(t_chunk[left_idx]),
+            end_time=float(t_chunk[right_idx]),
+            start_index=full_start,
+            end_index=full_end,
+            apex_index=full_apex,
+            split_type_left=left_type,
+            split_type_right=right_type,
+        ))
+
+    return components
+
+
 def _group_nearby_apexes(apex_rts, t_chunk, s_chunk,
-                          max_per_group=_MAX_PEAKS_PER_FIT):
+                          max_per_group=_MAX_PEAKS_PER_FIT,
+                          valley_threshold_frac=0.5):
     """
     Group apex RTs by proximity for joint fitting.
 
@@ -850,8 +1182,8 @@ def _group_nearby_apexes(apex_rts, t_chunk, s_chunk,
         idx_b = int(np.argmin(np.abs(t_chunk - rt_b)))
         valley_min = float(np.min(s_chunk[idx_a:idx_b + 1]))
         shorter_peak = min(s_chunk[idx_a], s_chunk[idx_b])
-        # If valley doesn't drop below 50% of the shorter peak, they overlap
-        merge_flags.append(valley_min > shorter_peak * 0.5)
+        # If valley doesn't drop below threshold of the shorter peak, they overlap
+        merge_flags.append(valley_min > shorter_peak * valley_threshold_frac)
 
     # Build groups of connected peaks
     groups = [[sorted_rts[0]]]
@@ -901,7 +1233,9 @@ _FIT_MAX_POINTS = 60  # downsample data fed to curve_fit for speed
 
 
 def _deconvolve_chunk(t_chunk, s_chunk, apex_rts, _max_retries=2,
-                      predicted_params=None):
+                      predicted_params=None,
+                      mu_bound_factor=1.5,
+                      fat_threshold_frac=0.5):
     """
     Fit a multi-EMG model to a chunk with tight mu bounds (±1.5σ of seed).
 
@@ -1018,10 +1352,10 @@ def _deconvolve_chunk(t_chunk, s_chunk, apex_rts, _max_retries=2,
 
             amp_guess = max(s_fit[idx], 1e-6) * sig_guess_i * 5.0
 
-            # Tight mu bounds: ±1.5 × σ_guess of the U-Net seed RT,
+            # Tight mu bounds: ±N × σ_guess of the U-Net seed RT,
             # clamped to the fit window
-            mu_lo = max(t_fit[0], rt - 1.5 * sig_guess_i)
-            mu_hi = min(t_fit[-1], rt + 1.5 * sig_guess_i)
+            mu_lo = max(t_fit[0], rt - mu_bound_factor * sig_guess_i)
+            mu_hi = min(t_fit[-1], rt + mu_bound_factor * sig_guess_i)
 
             # Clamp initial guesses to be strictly within bounds
             sig_guess_i = float(np.clip(sig_guess_i, sig_lo * 1.01, sig_hi * 0.99))
@@ -1065,7 +1399,7 @@ def _deconvolve_chunk(t_chunk, s_chunk, apex_rts, _max_retries=2,
             # exceeds half the window, try refitting without it
             if n_peaks > 1:
                 fwhms = [2.355 * r['sigma'] + r['tau'] for r in results]
-                fat_threshold = window_width * 0.5
+                fat_threshold = window_width * fat_threshold_frac
                 fattest_idx = int(np.argmax(fwhms))
 
                 if fwhms[fattest_idx] > fat_threshold:
@@ -1075,7 +1409,9 @@ def _deconvolve_chunk(t_chunk, s_chunk, apex_rts, _max_retries=2,
                     # Try without the fattest component
                     reduced_rts = current_rts[:fattest_idx] + current_rts[fattest_idx + 1:]
                     reduced_results, reduced_popt = _deconvolve_chunk(
-                        t_chunk, s_chunk, reduced_rts, _max_retries=0
+                        t_chunk, s_chunk, reduced_rts, _max_retries=0,
+                        mu_bound_factor=mu_bound_factor,
+                        fat_threshold_frac=fat_threshold_frac,
                     )
                     if reduced_results and reduced_popt is not None:
                         rss_reduced = float(np.sum(
@@ -1110,7 +1446,10 @@ class _FitTimeout(Exception):
 
 def _resolve_boundary_truncations(components, chunks, time_arr, corrected_signal,
                                    interp_data, all_heatmaps,
-                                   heatmap_threshold, heatmap_distance):
+                                   heatmap_threshold, heatmap_distance,
+                                   mu_bound_factor=1.5,
+                                   fat_threshold_frac=0.5,
+                                   valley_threshold_frac=0.5):
     """
     Detect EMG components truncated at chunk boundaries and re-fit them
     using merged super-chunks.
@@ -1208,13 +1547,16 @@ def _resolve_boundary_truncations(components, chunks, time_arr, corrected_signal
         apex_rts = deduped
 
         # Group and fit
-        fit_groups = _group_nearby_apexes(apex_rts, t_merged, s_merged)
+        fit_groups = _group_nearby_apexes(apex_rts, t_merged, s_merged,
+                                          valley_threshold_frac=valley_threshold_frac)
         for sub_rts, sub_si, sub_ei in fit_groups:
             sub_t = t_merged[sub_si:sub_ei + 1]
             sub_s = s_merged[sub_si:sub_ei + 1]
             if len(sub_t) < 4:
                 continue
-            emg_fits, _ = _deconvolve_chunk(sub_t, sub_s, sub_rts)
+            emg_fits, _ = _deconvolve_chunk(sub_t, sub_s, sub_rts,
+                                            mu_bound_factor=mu_bound_factor,
+                                            fat_threshold_frac=fat_threshold_frac)
             if not emg_fits:
                 continue
             for fit in emg_fits:
@@ -1302,7 +1644,7 @@ def integrate_emg_components(components, x, corrected_y, baseline_y, area_factor
             compound_id=compound_id,
             peak_number=i + 1,
             retention_time=comp.retention_time,
-            integrator='emg',
+            integrator='py',
             width=width,
             area=area,
             start_time=t_start,
@@ -1323,6 +1665,81 @@ def integrate_emg_components(components, x, corrected_y, baseline_y, area_factor
         ret_times.append(comp.retention_time)
         integrated_areas.append(area)
         integration_bounds.append((t_start, t_end))
+
+    return {
+        'peaks': peaks_list,
+        'x_peaks': x_peaks,
+        'y_peaks': y_peaks,
+        'baseline_peaks': baseline_peaks,
+        'retention_times': ret_times,
+        'integrated_areas': integrated_areas,
+        'integration_bounds': integration_bounds,
+        'peaks_list': peaks_list,
+    }
+
+
+def integrate_deconv_components(components, x, corrected_y, baseline_y, area_factor):
+    """
+    Convert DeconvComponent list → integration result dict
+    compatible with Integrator.integrate() output.
+
+    Parameters
+    ----------
+    components : list of DeconvComponent
+    x : 1-D array — full time axis
+    corrected_y : 1-D array — baseline-corrected signal
+    baseline_y : 1-D array — baseline
+    area_factor : float — ChemStation area scaling factor
+
+    Returns
+    -------
+    dict with keys: peaks, x_peaks, y_peaks, baseline_peaks,
+                    retention_times, integrated_areas, integration_bounds, peaks_list
+    """
+    from logic.integration import Peak, Integrator
+
+    peaks_list = []
+    x_peaks = []
+    y_peaks = []
+    baseline_peaks = []
+    ret_times = []
+    integrated_areas = []
+    integration_bounds = []
+
+    for i, comp in enumerate(components):
+        si = max(0, min(comp.start_index, len(x) - 1))
+        ei = max(0, min(comp.end_index, len(x) - 1))
+        if ei <= si:
+            continue
+
+        area = comp.area * area_factor
+        width = comp.end_time - comp.start_time
+        compound_id = Integrator.identify_compound(comp.retention_time)
+
+        peak = Peak(
+            compound_id=compound_id,
+            peak_number=i + 1,
+            retention_time=comp.retention_time,
+            integrator='py',
+            width=width,
+            area=area,
+            start_time=comp.start_time,
+            end_time=comp.end_time,
+            start_index=si,
+            end_index=ei,
+        )
+
+        x_peak = x[si:ei + 1]
+        y_peak = corrected_y[si:ei + 1]
+        baseline_peak = baseline_y[si:ei + 1]
+
+        peaks_list.append(peak)
+        x_peaks.append(x_peak)
+        y_peaks.append(y_peak)
+        baseline_peaks.append(baseline_peak)
+        ret_times.append(comp.retention_time)
+        integrated_areas.append(area)
+        integration_bounds.append((comp.start_time, comp.end_time))
 
     return {
         'peaks': peaks_list,

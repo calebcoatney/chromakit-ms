@@ -89,25 +89,102 @@ def scrape_metadata_from_d_directory(d_path: str, detector: str = "FID1A") -> Di
         }
 
 
-def export_integration_results_to_json(peaks: List[Any], d_path: str, 
+def _build_processing_metadata(processing_params: Optional[Dict]) -> Optional[Dict]:
+    """Build a serialisable summary of the processing parameters.
+
+    Only includes sections that are enabled / non-default so the JSON stays
+    readable.
+    """
+    if not processing_params:
+        return None
+
+    meta: Dict[str, Any] = {}
+
+    # --- Smoothing ---
+    sm = processing_params.get('smoothing', {})
+    if sm.get('enabled'):
+        meta['smoothing'] = {
+            'method': sm.get('method', 'savgol'),
+            'window_length': sm.get('window_length'),
+            'poly_order': sm.get('poly_order'),
+        }
+
+    # --- Baseline ---
+    bl = processing_params.get('baseline', {})
+    if bl.get('enabled'):
+        bl_info: Dict[str, Any] = {'algorithm': bl.get('algorithm', 'snip')}
+        algo = bl_info['algorithm']
+        if algo == 'snip':
+            bl_info['max_half_window'] = bl.get('max_half_window')
+        elif algo == 'als':
+            bl_info['lam'] = bl.get('lam')
+            bl_info['p'] = bl.get('p')
+        elif algo == 'arpls':
+            bl_info['lam'] = bl.get('lam')
+        elif algo == 'iarpls':
+            bl_info['lam'] = bl.get('lam')
+        meta['baseline'] = bl_info
+
+    # --- Peak detection ---
+    pk = processing_params.get('peaks', {})
+    if pk.get('enabled'):
+        pk_info: Dict[str, Any] = {
+            'mode': pk.get('mode', 'classical'),
+            'min_prominence': pk.get('min_prominence'),
+            'min_width': pk.get('min_width'),
+        }
+        meta['peak_detection'] = pk_info
+
+    # --- Deconvolution (only when mode == deconvolution) ---
+    if pk.get('mode') == 'deconvolution':
+        dc = processing_params.get('deconvolution', {})
+        dc_info: Dict[str, Any] = {
+            'splitting_method': dc.get('splitting_method', 'geometric'),
+            'heatmap_threshold': dc.get('heatmap_threshold'),
+            'pre_fit_signal_threshold': dc.get('pre_fit_signal_threshold'),
+            'min_area_frac': dc.get('min_area_frac'),
+            'valley_threshold_frac': dc.get('valley_threshold_frac'),
+        }
+        windows = dc.get('windows', [])
+        if windows:
+            dc_info['windows'] = windows
+        method = dc.get('splitting_method', 'geometric')
+        if method == 'emg':
+            dc_info['mu_bound_factor'] = dc.get('mu_bound_factor')
+            dc_info['fat_threshold_frac'] = dc.get('fat_threshold_frac')
+            dc_info['dedup_sigma_factor'] = dc.get('dedup_sigma_factor')
+        else:
+            dc_info['dedup_rt_tolerance'] = dc.get('dedup_rt_tolerance')
+        meta['deconvolution'] = dc_info
+
+    # Strip None values for cleanliness
+    def _strip_none(d):
+        return {k: (_strip_none(v) if isinstance(v, dict) else v)
+                for k, v in d.items() if v is not None}
+    return _strip_none(meta) or None
+
+
+def export_integration_results_to_json(peaks: List[Any], d_path: str,
                                       detector: str = "FID1A",
-                                      quantitation_settings: Optional[Dict] = None) -> bool:
+                                      quantitation_settings: Optional[Dict] = None,
+                                      processing_params: Optional[Dict] = None) -> bool:
     """
     Export integration results to JSON file with metadata.
-    
+
     Args:
         peaks: List of Peak objects from integration
         d_path: Path to the .D directory
         detector: Detector name (usually auto-detected, fallback "FID1A")
         quantitation_settings: Optional dict with quantitation settings and results
-        
+        processing_params: Optional dict of processing parameters (smoothing, baseline, peaks, deconvolution)
+
     Returns:
         True if successful, False otherwise
     """
     try:
         # Scrape metadata from the .D directory
         metadata = scrape_metadata_from_d_directory(d_path, detector)
-        
+
         # Build the result data structure
         result_data = {
             'sample_id': metadata['sample_id'],
@@ -118,7 +195,12 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
             'notebook': metadata['notebook'],
             'peaks': []
         }
-        
+
+        # Add processing parameters metadata
+        proc_meta = _build_processing_metadata(processing_params)
+        if proc_meta:
+            result_data['processing_parameters'] = proc_meta
+
         # Add quantitation settings if provided
         if quantitation_settings:
             result_data['quantitation'] = quantitation_settings
@@ -212,18 +294,20 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
         return False
 
 
-def update_json_with_ms_search_results(peaks: List[Any], d_path: str, 
+def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
                                      detector: str = "FID1A",
-                                     quantitation_settings: Optional[Dict] = None) -> bool:
+                                     quantitation_settings: Optional[Dict] = None,
+                                     processing_params: Optional[Dict] = None) -> bool:
     """
     Update existing JSON file with MS search results.
-    
+
     Args:
         peaks: List of Peak objects with MS search results
         d_path: Path to the .D directory
         detector: Detector name (usually auto-detected, fallback "FID1A")
         quantitation_settings: Optional quantitation settings to include in export
-        
+        processing_params: Optional dict of processing parameters
+
     Returns:
         True if successful, False otherwise
     """
@@ -326,11 +410,16 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
         
         # Update the peaks data
         result_data['peaks'] = updated_peaks
-        
+
+        # Add or update processing parameters
+        proc_meta = _build_processing_metadata(processing_params)
+        if proc_meta:
+            result_data['processing_parameters'] = proc_meta
+
         # Add or update quantitation settings if provided
         if quantitation_settings:
             result_data['quantitation'] = quantitation_settings
-        
+
         # Write updated JSON file
         with open(result_file_path, 'w') as f:
             json.dump(result_data, f, indent=4)

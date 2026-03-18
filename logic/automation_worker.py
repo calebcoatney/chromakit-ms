@@ -538,10 +538,12 @@ class AutomationWorker(QRunnable):
                             detector = self.app.data_handler.current_detector if hasattr(self.app.data_handler, 'current_detector') else 'Unknown'
                             
                             # Update JSON with MS search results
+                            proc_params = self.app.parameters_frame.get_parameters() if hasattr(self.app, 'parameters_frame') else None
                             json_success = update_json_with_ms_search_results(
-                                self.app.integrated_peaks, 
-                                current_dir, 
-                                detector
+                                self.app.integrated_peaks,
+                                current_dir,
+                                detector,
+                                processing_params=proc_params,
                             )
                             
                             if json_success:
@@ -629,10 +631,12 @@ class AutomationWorker(QRunnable):
                     detector = self.app.data_handler.current_detector
                 
                 # Export using the new module
+                proc_params = self.app.parameters_frame.get_parameters() if hasattr(self.app, 'parameters_frame') else None
                 success = export_integration_results_to_json(
                     integration_results.get('peaks', []),
                     data_dir_path,
-                    detector
+                    detector,
+                    processing_params=proc_params,
                 )
             
             if success:

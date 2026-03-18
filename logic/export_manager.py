@@ -69,11 +69,12 @@ class ExportManager:
             return self.settings.value("export/during_batch", True, type=bool)       # Default: ON
         return False
         
-    def export_results(self, peaks: List[Any], d_path: str, trigger_type: str, 
+    def export_results(self, peaks: List[Any], d_path: str, trigger_type: str,
                       detector: Optional[str] = None, is_update: bool = False,
-                      quantitation_settings: Optional[dict] = None) -> dict:
+                      quantitation_settings: Optional[dict] = None,
+                      processing_params: Optional[dict] = None) -> dict:
         """Export results in the configured formats based on trigger type and settings.
-        
+
         Args:
             peaks: List of Peak objects
             d_path: Path to the .D directory
@@ -81,27 +82,35 @@ class ExportManager:
             detector: Detector name (if None, will get from app.data_handler)
             is_update: True if this is an update to existing results, False for new export
             quantitation_settings: Optional quantitation settings to include in export
-            
+            processing_params: Optional processing parameters to include in JSON metadata
+
         Returns:
             dict: Status of exports {'json': bool, 'csv': bool, 'messages': list}
         """
         result = {'json': False, 'csv': False, 'messages': []}
-        
+
+        # Get processing params from app if not provided
+        if processing_params is None and self.app and hasattr(self.app, 'parameters_frame'):
+            try:
+                processing_params = self.app.parameters_frame.get_parameters()
+            except Exception:
+                pass
+
         # Get detector name if not provided
         if detector is None and self.app and hasattr(self.app, 'data_handler'):
             detector = getattr(self.app.data_handler, 'current_detector', 'Unknown')
         elif detector is None:
             detector = 'Unknown'
-        
+
         # Export JSON if enabled for this trigger
         if self.should_export_json(trigger_type):
             try:
                 if is_update:
                     from logic.json_exporter import update_json_with_ms_search_results
-                    success = update_json_with_ms_search_results(peaks, d_path, detector, quantitation_settings)
+                    success = update_json_with_ms_search_results(peaks, d_path, detector, quantitation_settings, processing_params)
                 else:
                     from logic.json_exporter import export_integration_results_to_json
-                    success = export_integration_results_to_json(peaks, d_path, detector, quantitation_settings)
+                    success = export_integration_results_to_json(peaks, d_path, detector, quantitation_settings, processing_params)
                 
                 result['json'] = success
                 if success:
