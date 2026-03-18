@@ -1,218 +1,285 @@
 /**
  * ChromatogramPlot Component
- * 
- * Displays chromatogram data using Plotly with interactive controls.
- * Shows baseline, peaks, and shaded integration areas.
- * Preserves zoom state when data updates.
+ *
+ * Enhanced interactive chromatogram viewer with:
+ * - Peak click selection + highlight
+ * - Distinctly colored integration shading (tab20 colormap)
+ * - Optional TIC subplot (dual y-axis)
+ * - Peak annotations (compound names, RT labels)
+ * - Shoulder/negative peak visual indicators
+ * - Zoom/pan state preservation
  */
 import React, { useState, useCallback, useMemo } from 'react';
 import Plot from 'react-plotly.js';
 
-const ChromatogramPlot = ({ 
-  data, 
-  processedData, 
-  integrationResults,
-  showCorrectedSignal = false,
-  showBaseline = true 
-}) => {
-  // Store zoom/pan state
-  const [xAxisRange, setXAxisRange] = useState(null);
-  const [yAxisRange, setYAxisRange] = useState(null);
+// tab20-style distinct colors for integration areas
+const PEAK_COLORS = [
+  '#1f77b4','#aec7e8','#ff7f0e','#ffbb78','#2ca02c',
+  '#98df8a','#d62728','#ff9896','#9467bd','#c5b0d5',
+  '#8c564b','#c49c94','#e377c2','#f7b6d2','#7f7f7f',
+  '#c7c7c7','#bcbd22','#dbdb8d','#17becf','#9edae5',
+];
 
-  // Callback to capture layout updates (zoom/pan events)
+const ChromatogramPlot = ({
+  data,
+  processedData,
+  integrationResults,
+  ticData,
+  showCorrectedSignal = false,
+  showBaseline = true,
+  onPeakClick,
+  selectedPeakIndex,
+}) => {
+  const [xRange, setXRange] = useState(null);
+  const [yRange, setYRange] = useState(null);
+  const [showTIC, setShowTIC] = useState(false);
+
   const handleRelayout = useCallback((event) => {
-    console.log('Relayout event:', event); // Debug logging
-    
-    // Capture zoom/pan state for x-axis
-    if (event['xaxis.range[0]'] !== undefined && event['xaxis.range[1]'] !== undefined) {
-      const newRange = [event['xaxis.range[0]'], event['xaxis.range[1]']];
-      setXAxisRange(newRange);
-      console.log('Saved x range:', newRange);
-    } else if (event['xaxis.autorange'] === true) {
-      setXAxisRange(null);
-      console.log('X autorange enabled');
+    if (event['xaxis.range[0]'] !== undefined) {
+      setXRange([event['xaxis.range[0]'], event['xaxis.range[1]']]);
+    } else if (event['xaxis.autorange']) {
+      setXRange(null);
     }
-    
-    // Capture zoom/pan state for y-axis
-    if (event['yaxis.range[0]'] !== undefined && event['yaxis.range[1]'] !== undefined) {
-      const newRange = [event['yaxis.range[0]'], event['yaxis.range[1]']];
-      setYAxisRange(newRange);
-      console.log('Saved y range:', newRange);
-    } else if (event['yaxis.autorange'] === true) {
-      setYAxisRange(null);
-      console.log('Y autorange enabled');
+    if (event['yaxis.range[0]'] !== undefined) {
+      setYRange([event['yaxis.range[0]'], event['yaxis.range[1]']]);
+    } else if (event['yaxis.autorange']) {
+      setYRange(null);
     }
   }, []);
 
-  // Prepare traces for plotting
-  const getTraces = () => {
-    const traces = [];
+  // Handle click on plot to select nearest peak
+  const handleClick = useCallback((event) => {
+    if (!onPeakClick || !integrationResults?.peaks?.length) return;
+    const point = event.points?.[0];
+    if (!point) return;
+    const clickX = point.x;
 
-    if (!data && !processedData) {
-      return traces;
-    }
+    let closestIdx = -1;
+    let minDist = Infinity;
+    integrationResults.peaks.forEach((peak, i) => {
+      const inBounds = peak.start_time <= clickX && clickX <= peak.end_time;
+      const dist = Math.abs(peak.retention_time - clickX);
+      if ((inBounds || dist < 0.05) && dist < minDist) {
+        minDist = dist;
+        closestIdx = i;
+      }
+    });
+    if (closestIdx >= 0) onPeakClick(closestIdx);
+  }, [onPeakClick, integrationResults]);
+
+  const traces = useMemo(() => {
+    const t = [];
+    if (!data && !processedData) return t;
 
     const x = processedData?.x || data?.x || [];
     const baseline = processedData?.baseline_y || [];
-    
-    // Determine which y values to show based on showCorrectedSignal
+
+    // Choose signal to display
     let y;
     if (showCorrectedSignal && processedData?.corrected_y) {
-      // Show corrected signal (signal - baseline)
       y = processedData.corrected_y;
     } else if (processedData?.smoothed_y) {
-      // Show smoothed signal (with baseline separately)
       y = processedData.smoothed_y;
     } else if (processedData?.original_y) {
-      // Show original signal (no smoothing)
       y = processedData.original_y;
     } else {
-      // Fallback to original data
       y = data?.y || [];
     }
 
-    // Main chromatogram trace
-    traces.push({
-      x: x,
-      y: y,
-      type: 'scatter',
-      mode: 'lines',
+    // ── Integration area shading (drawn first so signal is on top) ──
+    if (integrationResults?.peaks?.length > 0) {
+      integrationResults.peaks.forEach((peak, i) => {
+        if (peak.start_index == null || peak.end_index == null) return;
+        const si = peak.start_index;
+        const ei = peak.end_index;
+        const peakX = x.slice(si, ei + 1);
+        const peakY = y.slice(si, ei + 1);
+        const peakBL = showCorrectedSignal
+          ? peakX.map(() => 0)
+          : baseline.slice(si, ei + 1);
+
+        const colorIdx = (i * 7) % PEAK_COLORS.length;
+        const color = PEAK_COLORS[colorIdx];
+        const isSelected = selectedPeakIndex === i;
+        const isShoulder = peak.is_shoulder;
+        const isNegative = peak.type === 'negative';
+
+        let fillColor = color;
+        if (isNegative) fillColor = '#00bcd4';
+
+        t.push({
+          x: [...peakX, ...[...peakX].reverse()],
+          y: [...peakY, ...[...peakBL].reverse()],
+          fill: 'toself',
+          fillcolor: isSelected
+            ? fillColor.replace(')', ', 0.6)').replace('rgb', 'rgba') || `${fillColor}99`
+            : `${fillColor}4D`,
+          line: {
+            width: isSelected ? 2 : (isShoulder ? 1 : 0),
+            color: isSelected ? '#000' : (isShoulder ? '#e91e63' : undefined),
+            dash: isShoulder ? 'dot' : undefined,
+          },
+          showlegend: false,
+          hoverinfo: 'skip',
+          type: 'scatter',
+        });
+      });
+    }
+
+    // ── Main signal ──
+    t.push({
+      x, y,
+      type: 'scatter', mode: 'lines',
       name: showCorrectedSignal ? 'Corrected Signal' : 'Chromatogram',
-      line: { color: '#667eea', width: 2 },
-      hovertemplate: 'Time: %{x:.3f} min<br>Intensity: %{y:.2f}<extra></extra>'
+      line: { color: '#667eea', width: 1.5 },
+      hovertemplate: 'RT: %{x:.3f} min<br>Intensity: %{y:.1f}<extra></extra>',
     });
 
-    // Baseline trace
-    // If showing corrected signal, baseline is at zero (corrected - baseline = baseline - baseline = 0)
-    // If showing uncorrected signal, show the actual baseline
+    // ── Baseline ──
     if (showBaseline && baseline.length > 0) {
-      const baselineY = showCorrectedSignal 
-        ? baseline.map(() => 0)  // Zero line for corrected signal
-        : baseline;  // Actual baseline for uncorrected signal
-
-      traces.push({
-        x: x,
-        y: baselineY,
-        type: 'scatter',
-        mode: 'lines',
+      t.push({
+        x,
+        y: showCorrectedSignal ? baseline.map(() => 0) : baseline,
+        type: 'scatter', mode: 'lines',
         name: 'Baseline',
         line: { color: '#f56565', width: 1, dash: 'dash' },
-        hovertemplate: 'Time: %{x:.3f} min<br>Baseline: %{y:.2f}<extra></extra>'
+        hovertemplate: 'RT: %{x:.3f} min<br>Baseline: %{y:.1f}<extra></extra>',
       });
     }
 
-    // Peak markers (if peaks detected)
-    if (processedData?.peaks_x && processedData.peaks_x.length > 0) {
+    // ── Peak markers ──
+    if (processedData?.peaks_x?.length > 0) {
       const peakX = processedData.peaks_x;
-      let peakY = processedData.peaks_y;
+      const peakY = (showCorrectedSignal && processedData.corrected_peaks_y)
+        ? processedData.corrected_peaks_y
+        : processedData.peaks_y;
+      const meta = processedData.peak_metadata || [];
 
-      // If showing corrected signal, adjust peak heights
-      if (showCorrectedSignal && processedData.corrected_peaks_y) {
-        peakY = processedData.corrected_peaks_y;
+      // Separate shoulders from regular peaks
+      const regularIdx = [];
+      const shoulderIdx = [];
+      meta.forEach((m, i) => {
+        if (m?.is_shoulder) shoulderIdx.push(i);
+        else regularIdx.push(i);
+      });
+
+      // Regular peaks
+      if (regularIdx.length > 0 || meta.length === 0) {
+        const indices = meta.length > 0 ? regularIdx : peakX.map((_, i) => i);
+        t.push({
+          x: indices.map(i => peakX[i]),
+          y: indices.map(i => peakY[i]),
+          type: 'scatter', mode: 'markers',
+          name: 'Peaks',
+          marker: { color: '#48bb78', size: 8, symbol: 'diamond' },
+          hovertemplate: 'RT: %{x:.3f} min<br>Height: %{y:.1f}<extra></extra>',
+        });
       }
 
-      traces.push({
-        x: peakX,
-        y: peakY,
-        type: 'scatter',
-        mode: 'markers',
-        name: 'Peaks',
-        marker: { 
-          color: '#48bb78', 
-          size: 10,
-          symbol: 'diamond'
-        },
-        hovertemplate: 'RT: %{x:.3f} min<br>Intensity: %{y:.2f}<extra></extra>'
+      // Shoulder peaks
+      if (shoulderIdx.length > 0) {
+        t.push({
+          x: shoulderIdx.map(i => peakX[i]),
+          y: shoulderIdx.map(i => peakY[i]),
+          type: 'scatter', mode: 'markers',
+          name: 'Shoulders',
+          marker: { color: '#e91e63', size: 7, symbol: 'triangle-up' },
+          hovertemplate: 'Shoulder RT: %{x:.3f} min<br>Height: %{y:.1f}<extra></extra>',
+        });
+      }
+    }
+
+    // ── Peak annotations (compound names) ──
+    // Handled via layout.annotations below
+
+    // ── TIC subplot ──
+    if (showTIC && ticData?.x?.length > 0) {
+      t.push({
+        x: ticData.x,
+        y: ticData.y,
+        type: 'scatter', mode: 'lines',
+        name: 'TIC',
+        yaxis: 'y2',
+        line: { color: '#ed8936', width: 1 },
+        hovertemplate: 'RT: %{x:.3f} min<br>TIC: %{y:.1f}<extra></extra>',
       });
     }
 
-    // Integration areas (shaded regions between baseline and signal)
-    if (integrationResults?.peaks && integrationResults.peaks.length > 0) {
-      integrationResults.peaks.forEach((peak, index) => {
-        if (peak.start_index !== undefined && peak.end_index !== undefined) {
-          const startIdx = peak.start_index;
-          const endIdx = peak.end_index;
-          
-          // Create x values for the shaded area
-          const peakX = x.slice(startIdx, endIdx + 1);
-          const peakY = y.slice(startIdx, endIdx + 1);
-          
-          // Baseline for shaded area
-          const peakBaseline = showCorrectedSignal
-            ? peakX.map(() => 0)  // Zero for corrected signal
-            : baseline.slice(startIdx, endIdx + 1);  // Actual baseline for uncorrected
+    return t;
+  }, [data, processedData, integrationResults, showCorrectedSignal, showBaseline, showTIC, ticData, selectedPeakIndex]);
 
-          // Create filled area between baseline and chromatogram
-          traces.push({
-            x: [...peakX, ...peakX.slice().reverse()],
-            y: [...peakY, ...peakBaseline.slice().reverse()],
-            fill: 'toself',
-            fillcolor: `rgba(72, 187, 120, 0.3)`,
-            line: { width: 0 },
-            showlegend: false,
-            hoverinfo: 'skip',
-            type: 'scatter'
-          });
-        }
-      });
-    }
+  // Build annotations for integrated peaks with compound names
+  const annotations = useMemo(() => {
+    if (!integrationResults?.peaks?.length) return [];
+    return integrationResults.peaks
+      .filter(p => p.match_name || p.compound_id)
+      .map(p => ({
+        x: p.retention_time,
+        y: p.height || 0,
+        text: p.match_name || p.compound_id || '',
+        showarrow: true,
+        arrowhead: 0,
+        arrowcolor: '#718096',
+        ax: 0, ay: -30,
+        font: { size: 9, color: '#4a5568' },
+        bgcolor: 'rgba(255,255,255,0.8)',
+        borderpad: 2,
+      }));
+  }, [integrationResults]);
 
-    return traces;
-  };
-
-  const traces = getTraces();
-
-  // Memoize layout to prevent unnecessary re-creation
   const layout = useMemo(() => {
-    const baseLayout = {
+    const l = {
       autosize: true,
-      height: 500,
-      margin: { l: 60, r: 40, t: 40, b: 60 },
+      height: showTIC && ticData?.x?.length ? 600 : 450,
+      margin: { l: 60, r: showTIC ? 60 : 40, t: 30, b: 50 },
       xaxis: {
         title: 'Time (min)',
-        showgrid: true,
-        gridcolor: '#e2e8f0',
-        zeroline: false
+        showgrid: true, gridcolor: '#edf2f7', zeroline: false,
       },
       yaxis: {
         title: 'Intensity',
-        showgrid: true,
-        gridcolor: '#e2e8f0',
-        zeroline: true
+        showgrid: true, gridcolor: '#edf2f7', zeroline: true,
+        domain: showTIC && ticData?.x?.length ? [0.3, 1] : [0, 1],
       },
       hovermode: 'closest',
       showlegend: true,
       legend: {
-        x: 1,
-        xanchor: 'right',
-        y: 1,
-        bgcolor: 'rgba(255, 255, 255, 0.8)',
-        bordercolor: '#e2e8f0',
-        borderwidth: 1
+        x: 1, xanchor: 'right', y: 1,
+        bgcolor: 'rgba(255,255,255,0.85)',
+        bordercolor: '#e2e8f0', borderwidth: 1,
+        font: { size: 11 },
       },
       plot_bgcolor: 'white',
-      paper_bgcolor: 'white'
+      paper_bgcolor: 'white',
+      annotations,
     };
 
-    // Apply saved zoom state
-    if (xAxisRange) {
-      baseLayout.xaxis.range = xAxisRange;
-      baseLayout.xaxis.autorange = false;
-    }
-    if (yAxisRange) {
-      baseLayout.yaxis.range = yAxisRange;
-      baseLayout.yaxis.autorange = false;
+    // TIC y-axis
+    if (showTIC && ticData?.x?.length) {
+      l.yaxis2 = {
+        title: 'TIC Intensity',
+        showgrid: true, gridcolor: '#feebc8', zeroline: false,
+        domain: [0, 0.25],
+        anchor: 'x',
+      };
     }
 
-    return baseLayout;
-  }, [xAxisRange, yAxisRange]);
+    // Preserve zoom
+    if (xRange) { l.xaxis.range = xRange; l.xaxis.autorange = false; }
+    if (yRange) { l.yaxis.range = yRange; l.yaxis.autorange = false; }
+
+    return l;
+  }, [xRange, yRange, showTIC, ticData, annotations]);
+
+  // Counts
+  const peakCount = processedData?.peaks_x?.length || 0;
+  const shoulderCount = processedData?.peak_metadata?.filter(m => m?.is_shoulder).length || 0;
+  const integratedCount = integrationResults?.total_peaks || 0;
 
   if (traces.length === 0) {
     return (
       <div className="card">
-        <div className="card-header">
-          <h2>📈 Chromatogram</h2>
-        </div>
+        <div className="card-header"><h2>📈 Chromatogram</h2></div>
         <div className="card-body">
           <div className="text-center text-muted" style={{ padding: '3rem' }}>
             Load a file to view chromatogram
@@ -222,20 +289,25 @@ const ChromatogramPlot = ({
     );
   }
 
-  // Count peaks
-  const peakCount = processedData?.peaks_x?.length || 0;
-  const integratedCount = integrationResults?.total_peaks || 0;
-
   return (
     <div className="card">
-      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
         <h2>📈 Chromatogram</h2>
-        <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-          {peakCount > 0 && `${peakCount} peaks detected`}
-          {integratedCount > 0 && ` | ${integratedCount} integrated`}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          <span>
+            {peakCount > 0 && `${peakCount} peaks`}
+            {shoulderCount > 0 && ` (${shoulderCount} shoulders)`}
+            {integratedCount > 0 && ` · ${integratedCount} integrated`}
+          </span>
+          {ticData?.x?.length > 0 && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', fontSize: '0.8rem' }}>
+              <input type="checkbox" checked={showTIC} onChange={(e) => setShowTIC(e.target.checked)} />
+              TIC
+            </label>
+          )}
         </div>
       </div>
-      <div className="card-body" style={{ padding: '0.5rem' }}>
+      <div className="card-body" style={{ padding: '0.25rem' }}>
         <Plot
           data={traces}
           layout={layout}
@@ -245,14 +317,12 @@ const ChromatogramPlot = ({
             modeBarButtonsToRemove: ['lasso2d', 'select2d'],
             displaylogo: false,
             toImageButtonOptions: {
-              format: 'png',
-              filename: 'chromatogram',
-              height: 800,
-              width: 1200,
-              scale: 2
-            }
+              format: 'png', filename: 'chromatogram',
+              height: 800, width: 1200, scale: 2,
+            },
           }}
           onRelayout={handleRelayout}
+          onClick={handleClick}
           style={{ width: '100%', height: '100%' }}
         />
       </div>

@@ -26,6 +26,7 @@ function App() {
   const [error, setError] = useState(null);
   const [availableDetectors, setAvailableDetectors] = useState([]);
   const [currentDetector, setCurrentDetector] = useState(null);
+  const [selectedPeakIndex, setSelectedPeakIndex] = useState(null);
 
   // Health check on mount + interval
   useEffect(() => {
@@ -221,8 +222,11 @@ function App() {
             data={fileData?.chromatogram}
             processedData={processedData}
             integrationResults={integrationResults}
+            ticData={fileData?.tic}
             showCorrectedSignal={currentParams?.baseline?.show_corrected || false}
             showBaseline={true}
+            onPeakClick={(idx) => setSelectedPeakIndex(idx)}
+            selectedPeakIndex={selectedPeakIndex}
           />
 
           {/* Integrate button */}
@@ -246,6 +250,8 @@ function App() {
             <PeakTable
               integrationResults={integrationResults}
               onIntegrate={handleIntegrate}
+              onPeakClick={(idx) => setSelectedPeakIndex(idx)}
+              selectedPeakIndex={selectedPeakIndex}
               disabled={loading}
             />
           )}
