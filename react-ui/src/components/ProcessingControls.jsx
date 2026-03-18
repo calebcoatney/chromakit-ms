@@ -27,7 +27,6 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
       method: 'arpls',
       lambda: 1e4,
       asymmetry: 0.01,
-      align_tic: false,
       break_points: [],
       fastchrom: { half_window: 0, smooth_half_window: 0 },
     },
@@ -301,12 +300,6 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
             </div>
           </>
         )}
-
-        <div className="form-check mb-2">
-          <input type="checkbox" id="align-tic" checked={params.baseline.align_tic}
-            onChange={(e) => updateSection('baseline', { align_tic: e.target.checked })} />
-          <label htmlFor="align-tic" className="form-label" style={{ marginBottom: 0 }}>Align TIC to FID</label>
-        </div>
 
         {/* Break points */}
         <div style={{ marginTop: '0.5rem' }}>
