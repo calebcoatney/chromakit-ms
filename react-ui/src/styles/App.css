@@ -96,34 +96,104 @@ body {
   margin-top: 0.25rem;
 }
 
-/* Main Layout */
+/* Main Layout — 3-column: file tree | plot+buttons | tabbed panels */
 .main-content {
   flex: 1;
   display: flex;
-  gap: 1rem;
-  padding: 1rem;
-  max-width: 1600px;
-  margin: 0 auto;
+  gap: 0.75rem;
+  padding: 0.75rem;
   width: 100%;
+  overflow: hidden;
+  height: calc(100vh - 90px);
 }
 
-/* Sidebar */
-.sidebar {
-  width: 320px;
+/* Left sidebar — file browser */
+.sidebar-left {
+  width: 260px;
+  min-width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+/* Center panel — plot + button bar + results */
+.center-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+}
+
+/* Right panel — tabbed params/MS/RT/quant */
+.sidebar-right {
+  width: 360px;
+  min-width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Button bar below plot */
+.button-bar {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
   background: var(--surface-color);
   border-radius: 8px;
   box-shadow: var(--shadow);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
-/* Main Panel */
-.main-panel {
+.button-bar .spacer {
   flex: 1;
+}
+
+/* Tab widget for right panel */
+.tab-bar {
   display: flex;
-  flex-direction: column;
-  gap: 1rem;
+  border-bottom: 2px solid var(--border-color);
+  background: var(--surface-color);
+  border-radius: 8px 8px 0 0;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.tab-bar button {
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-bar button.active {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+  font-weight: 600;
+}
+
+.tab-bar button:hover:not(.active) {
+  color: var(--text-color);
+}
+
+.tab-content {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--surface-color);
+  border-radius: 0 0 8px 8px;
+  box-shadow: var(--shadow);
 }
 
 /* Card Component */
@@ -348,13 +418,28 @@ body {
 }
 
 /* Responsive */
+@media (max-width: 1200px) {
+  .sidebar-right {
+    width: 300px;
+    min-width: 280px;
+  }
+}
+
 @media (max-width: 1024px) {
   .main-content {
     flex-direction: column;
+    height: auto;
+    overflow: visible;
   }
-  
-  .sidebar {
+
+  .sidebar-left,
+  .sidebar-right {
     width: 100%;
+    min-width: unset;
+  }
+
+  .center-panel {
+    min-height: 500px;
   }
 }
 
