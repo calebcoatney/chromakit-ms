@@ -1396,28 +1396,34 @@ class ChromaKitApp(QMainWindow):
             # Check for valid data (no UI messaging)
             if not hasattr(self, 'current_processed') or self.current_processed is None:
                 return None
-            
+
             # Check if peak detection is enabled (positive or negative, no UI messaging)
             params = self.parameters_frame.get_parameters()
             peaks_enabled = params['peaks']['enabled']
             neg_peaks_enabled = params.get('negative_peaks', {}).get('enabled', False)
             if not peaks_enabled and not neg_peaks_enabled:
                 return None
-            
-            # Extract peak groups from parameters
-            peak_groups = params.get('integration', {}).get('peak_groups', [])
-            
-            # Perform integration - CORE FUNCTIONALITY WITHOUT UI UPDATES
-            integration_results = self.processor.integrate_peaks(
-                processed_data=self.current_processed,
-                ms_data=ms_data,
-                quality_options=quality_options,
-                chemstation_area_factor=self.area_factor,
-                peak_groups=peak_groups if peak_groups else None
-            )
-            
+
+            peak_mode = params['peaks'].get('mode', 'classical')
+
+            if peak_mode == 'deconvolution':
+                # EMG-based integration from cached deconvolution components
+                integration_results = self._integrate_deconvolution()
+            else:
+                # Extract peak groups from parameters
+                peak_groups = params.get('integration', {}).get('peak_groups', [])
+
+                # Perform integration - CORE FUNCTIONALITY WITHOUT UI UPDATES
+                integration_results = self.processor.integrate_peaks(
+                    processed_data=self.current_processed,
+                    ms_data=ms_data,
+                    quality_options=quality_options,
+                    chemstation_area_factor=self.area_factor,
+                    peak_groups=peak_groups if peak_groups else None
+                )
+
             # Check if integration was successful
-            if not integration_results['peaks']:
+            if not integration_results or not integration_results['peaks']:
                 return None
 
             # Apply RT matching to peaks if enabled
@@ -1425,15 +1431,33 @@ class ChromaKitApp(QMainWindow):
 
             # Store integration results
             self.integration_results = integration_results
-            
+
             # Store peaks separately for easier access
             self.integrated_peaks = integration_results['peaks']
-            
+
             return integration_results
-            
+
         except Exception as e:
             print(f"Error in integrate_peaks_no_ui: {str(e)}")
+            traceback.print_exc()
             return None
+
+    def _integrate_deconvolution(self):
+        """Integrate peaks using cached EMG deconvolution components."""
+        from logic.deconvolution import integrate_emg_components
+
+        processed = self.current_processed
+        visible_components = processed.get('fitted_curves', [])
+        if not visible_components:
+            return None
+
+        return integrate_emg_components(
+            visible_components,
+            processed['x'],
+            processed['corrected_y'],
+            processed['baseline_y'],
+            self.area_factor,
+        )
     
     def _apply_rt_matching_to_peaks(self, peaks):
         """Apply RT table matching to integrated peaks."""
@@ -1899,9 +1923,20 @@ class ChromaKitApp(QMainWindow):
             msg_parts = []
             
             if params['smoothing']['enabled']:
-                med_kernel = params['smoothing']['median_filter']['kernel_size']
-                sg_window = params['smoothing']['savgol_filter']['window_length']
-                msg_parts.append(f"Smoothing (med={med_kernel}, sg={sg_window})")
+                smooth_parts = []
+                if params['smoothing'].get('median_enabled', False):
+                    mk = params['smoothing'].get('median_kernel', 5)
+                    smooth_parts.append(f"med={mk}")
+                smooth_method = params['smoothing'].get('method', 'whittaker')
+                if smooth_method == 'savgol':
+                    sg_w = params['smoothing'].get('savgol_window', 3)
+                    sg_p = params['smoothing'].get('savgol_polyorder', 1)
+                    smooth_parts.append(f"SG w={sg_w}, p={sg_p}")
+                else:
+                    smooth_lam = params['smoothing']['lambda']
+                    smooth_d = params['smoothing'].get('diff_order', 1)
+                    smooth_parts.append(f"\u03bb={smooth_lam:.0e}, d={smooth_d}")
+                msg_parts.append(f"Smoothing ({', '.join(smooth_parts)})")
             
             # Always include baseline info since we're always applying baseline correction
             msg_parts.append(f"{method_name} baseline (λ={lambda_val:.0f})")
@@ -1926,17 +1961,18 @@ class ChromaKitApp(QMainWindow):
         if x is None or y is None:
             print("No data to process")
             return
-            
+
         if len(x) != len(y):
             print(f"Data length mismatch: x={len(x)}, y={len(y)}")
             return
-            
+
         # Data is already interpolated to standard length
         print(f"Processing data with {len(x)} points")
-        
+
         # Get current parameters
         params = self.parameters_frame.get_parameters()
-        
+        peak_mode = params['peaks'].get('mode', 'classical')
+
         # Get MS data range if available
         ms_range = None
         if hasattr(self, 'plot_frame') and hasattr(self.plot_frame, 'tic_data') and self.plot_frame.tic_data is not None:
@@ -1948,19 +1984,91 @@ class ChromaKitApp(QMainWindow):
 
         # Process the data (already interpolated)
         processed = self.processor.process(x, y, params, ms_range)
-        
+
+        # --- Deconvolution mode: replace classical peaks with U-Net pipeline ---
+        if peak_mode == 'deconvolution' and params['peaks']['enabled']:
+            self._apply_deconvolution(processed, params)
+
         # Update the chromatogram plot
         self.plot_frame.plot_chromatogram(
             processed,
-            show_corrected=params['baseline']['show_corrected'], 
+            show_corrected=params['baseline']['show_corrected'],
             new_file=new_file
         )
-        
+
         # Force a repaint
         self.plot_frame.canvas.draw_idle()
-        
+
         # Store the processed data for reference
         self.current_processed = processed
+
+    def _apply_deconvolution(self, processed, params):
+        """Run the deconvolution pipeline and inject results into processed data."""
+        from logic.deconvolution import (
+            is_available, run_deconvolution_pipeline, EMGComponent
+        )
+        if not is_available():
+            print("Deconvolution not available (missing torch or model weights)")
+            return
+
+        corrected_y = processed['corrected_y']
+
+        # Cache invalidation: re-run if signal, prominence, or smoothing changed
+        min_prom = params['peaks'].get('min_prominence', 0)
+        smoothing_params = (params['smoothing']
+                            if params['smoothing'].get('enabled', False)
+                            else None)
+        cache_key = (hash(corrected_y.tobytes()), min_prom, str(smoothing_params))
+        if not hasattr(self, '_deconv_cache') or self._deconv_cache.get('key') != cache_key:
+            print(f"Running deconvolution pipeline (min_prominence={min_prom})...")
+            result = run_deconvolution_pipeline(
+                processed['x'], corrected_y,
+                min_prominence=min_prom,
+                smoothing_params=smoothing_params,
+            )
+            self._deconv_cache = {
+                'key': cache_key,
+                'result': result,
+            }
+        else:
+            print("Using cached deconvolution result")
+            result = self._deconv_cache['result']
+
+        if not result.components:
+            processed['peaks_x'] = np.array([])
+            processed['peaks_y'] = np.array([])
+            processed['peak_metadata'] = []
+            processed['fitted_curves'] = []
+            return
+
+        visible = result.components
+
+        # Inject into processed data
+        if visible:
+            peaks_x = np.array([c.retention_time for c in visible])
+            # Get y values at apex positions from the corrected signal
+            peaks_y = np.array([
+                corrected_y[int(np.argmin(np.abs(processed['x'] - c.retention_time)))]
+                for c in visible
+            ])
+        else:
+            peaks_x = np.array([])
+            peaks_y = np.array([])
+
+        processed['peaks_x'] = peaks_x
+        processed['peaks_y'] = peaks_y
+        processed['fitted_curves'] = visible  # list of EMGComponent
+        processed['peak_metadata'] = [
+            {
+                'x': c.retention_time,
+                'y': c.peak_height,
+                'type': 'peak',
+                'is_shoulder': False,
+                'is_negative': False,
+                'index': int(np.argmin(np.abs(processed['x'] - c.retention_time))),
+            }
+            for c in visible
+        ]
 
     def debug_data(self):
         """Print debug information about current data."""

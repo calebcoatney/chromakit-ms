@@ -30,13 +30,13 @@ class ParametersFrame(QWidget):
         self.current_params = {
             'smoothing': {
                 'enabled': False,
-                'median_filter': {
-                    'kernel_size': 9
-                },
-                'savgol_filter': {
-                    'window_length': 15,
-                    'polyorder': 2
-                }
+                'method': 'whittaker',
+                'median_enabled': False,
+                'median_kernel': 5,
+                'lambda': 1e-1,
+                'diff_order': 1,
+                'savgol_window': 3,
+                'savgol_polyorder': 1
             },
             'baseline': {
                 'show_corrected': False,
@@ -52,6 +52,7 @@ class ParametersFrame(QWidget):
             },
             'peaks': {
                 'enabled': False,
+                'mode': 'classical',  # 'classical' or 'deconvolution'
                 'min_prominence': 1e5,  # Changed from 0.5 to 1e5
                 'min_height': 0.0,
                 'min_width': 0.0,
@@ -130,61 +131,150 @@ class ParametersFrame(QWidget):
         self.smoothing_enabled.setChecked(self.current_params['smoothing']['enabled'])
         self.smoothing_enabled.stateChanged.connect(self._on_smoothing_toggled)
         form_layout.addRow(self.smoothing_enabled)
-        
-        # Median filter kernel size
-        median_container = QWidget()
-        median_layout = QHBoxLayout(median_container)
-        median_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.median_slider = QSlider(Qt.Horizontal)
-        self.median_slider.setMinimum(3)
-        self.median_slider.setMaximum(31)  # Changed from 101 to 31 as requested
-        self.median_slider.setValue(self.current_params['smoothing']['median_filter']['kernel_size'])
-        self.median_slider.setSingleStep(2)  # Only odd values
-        self.median_slider.setPageStep(2)
-        self.median_slider.setTickInterval(2)
-        self.median_slider.setTickPosition(QSlider.TicksBelow)
-        self.median_slider.valueChanged.connect(self._on_median_kernel_changed)
-        
-        self.median_spinbox = QSpinBox()
-        self.median_spinbox.setMinimum(3)
-        self.median_spinbox.setMaximum(31)  # Changed from 101 to 31 as requested
-        self.median_spinbox.setValue(self.current_params['smoothing']['median_filter']['kernel_size'])
-        self.median_spinbox.setSingleStep(2)
-        self.median_spinbox.valueChanged.connect(self.median_slider.setValue)
-        
-        median_layout.addWidget(self.median_slider, 3)
-        median_layout.addWidget(self.median_spinbox, 1)
-        
-        form_layout.addRow("Median Filter Size:", median_container)
-        
-        # Savitzky-Golay window size
-        savgol_container = QWidget()
-        savgol_layout = QHBoxLayout(savgol_container)
-        savgol_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.savgol_slider = QSlider(Qt.Horizontal)
-        self.savgol_slider.setMinimum(5)
-        self.savgol_slider.setMaximum(51)  # Changed from 201 to 51 as requested
-        self.savgol_slider.setValue(self.current_params['smoothing']['savgol_filter']['window_length'])
-        self.savgol_slider.setSingleStep(2)
-        self.savgol_slider.setPageStep(2)
-        self.savgol_slider.setTickInterval(2)
-        self.savgol_slider.setTickPosition(QSlider.TicksBelow)
-        self.savgol_slider.valueChanged.connect(self._on_savgol_window_changed)
-        
-        self.savgol_spinbox = QSpinBox()
-        self.savgol_spinbox.setMinimum(5)
-        self.savgol_spinbox.setMaximum(51)  # Changed from 201 to 51 as requested
-        self.savgol_spinbox.setValue(self.current_params['smoothing']['savgol_filter']['window_length'])
-        self.savgol_spinbox.setSingleStep(2)
-        self.savgol_spinbox.valueChanged.connect(self.savgol_slider.setValue)
-        
-        savgol_layout.addWidget(self.savgol_slider, 3)
-        savgol_layout.addWidget(self.savgol_spinbox, 1)
-        
-        form_layout.addRow("Savitzky-Golay Window:", savgol_container)
-        
+
+        # Method selector
+        self.smooth_method_combo = QComboBox()
+        self.smooth_method_combo.addItem("Whittaker", "whittaker")
+        self.smooth_method_combo.addItem("Savitzky-Golay", "savgol")
+        self.smooth_method_combo.setCurrentIndex(0)
+        self.smooth_method_combo.currentIndexChanged.connect(self._on_smooth_method_changed)
+        form_layout.addRow("Method:", self.smooth_method_combo)
+
+        # --- Median pre-filter (shared by both methods) ---
+        self.median_enabled = QCheckBox("Median Pre-filter")
+        self.median_enabled.setChecked(self.current_params['smoothing']['median_enabled'])
+        self.median_enabled.stateChanged.connect(self._on_median_toggled)
+        form_layout.addRow(self.median_enabled)
+
+        self.median_kernel_container = QWidget()
+        median_kernel_layout = QHBoxLayout(self.median_kernel_container)
+        median_kernel_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.median_kernel_slider = QSlider(Qt.Horizontal)
+        self.median_kernel_slider.setMinimum(3)
+        self.median_kernel_slider.setMaximum(31)
+        self.median_kernel_slider.setValue(self.current_params['smoothing']['median_kernel'])
+        self.median_kernel_slider.setSingleStep(2)
+        self.median_kernel_slider.setPageStep(2)
+        self.median_kernel_slider.setTickInterval(2)
+        self.median_kernel_slider.setTickPosition(QSlider.TicksBelow)
+        self.median_kernel_slider.valueChanged.connect(self._on_median_kernel_changed)
+
+        self.median_kernel_spinbox = QSpinBox()
+        self.median_kernel_spinbox.setMinimum(3)
+        self.median_kernel_spinbox.setMaximum(31)
+        self.median_kernel_spinbox.setValue(self.current_params['smoothing']['median_kernel'])
+        self.median_kernel_spinbox.setSingleStep(2)
+        self.median_kernel_spinbox.valueChanged.connect(self.median_kernel_slider.setValue)
+
+        median_kernel_layout.addWidget(self.median_kernel_slider, 3)
+        median_kernel_layout.addWidget(self.median_kernel_spinbox, 1)
+
+        self.median_kernel_row_label = QLabel("Median kernel:")
+        form_layout.addRow(self.median_kernel_row_label, self.median_kernel_container)
+
+        # --- Whittaker controls ---
+
+        # Lambda (smoothing penalty) - log10 scale slider
+        self.smooth_lam_container = QWidget()
+        smooth_lam_layout = QHBoxLayout(self.smooth_lam_container)
+        smooth_lam_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.smooth_lam_slider = QSlider(Qt.Horizontal)
+        self.smooth_lam_slider.setMinimum(-3)
+        self.smooth_lam_slider.setMaximum(6)
+        default_log = int(round(np.log10(self.current_params['smoothing']['lambda'])))
+        self.smooth_lam_slider.setValue(default_log)
+        self.smooth_lam_slider.setSingleStep(1)
+        self.smooth_lam_slider.setPageStep(1)
+        self.smooth_lam_slider.setTickInterval(1)
+        self.smooth_lam_slider.setTickPosition(QSlider.TicksBelow)
+        self.smooth_lam_slider.valueChanged.connect(self._on_smooth_lambda_changed)
+
+        self.smooth_lam_spinbox = QSpinBox()
+        self.smooth_lam_spinbox.setMinimum(-3)
+        self.smooth_lam_spinbox.setMaximum(6)
+        self.smooth_lam_spinbox.setValue(default_log)
+        self.smooth_lam_spinbox.setSingleStep(1)
+        self.smooth_lam_spinbox.valueChanged.connect(self.smooth_lam_slider.setValue)
+
+        self.smooth_lam_label = QLabel(f"\u03bb = 10^{default_log}")
+
+        smooth_lam_layout.addWidget(self.smooth_lam_slider, 3)
+        smooth_lam_layout.addWidget(self.smooth_lam_spinbox, 1)
+        smooth_lam_layout.addWidget(self.smooth_lam_label, 1)
+
+        form_layout.addRow("Smoothing \u03bb:", self.smooth_lam_container)
+
+        # Diff order combo (1 = slope penalty, 2 = curvature penalty)
+        self.smooth_diff_order_combo = QComboBox()
+        self.smooth_diff_order_combo.addItem("d=1 (slope)", 1)
+        self.smooth_diff_order_combo.addItem("d=2 (curvature)", 2)
+        self.smooth_diff_order_combo.setCurrentIndex(0)
+        self.smooth_diff_order_combo.currentIndexChanged.connect(self._on_smooth_diff_order_changed)
+        self.smooth_diff_order_row_label = QLabel("Penalty order:")
+        form_layout.addRow(self.smooth_diff_order_row_label, self.smooth_diff_order_combo)
+
+        # --- Savitzky-Golay controls ---
+
+        # Window length
+        self.savgol_window_container = QWidget()
+        savgol_window_layout = QHBoxLayout(self.savgol_window_container)
+        savgol_window_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.savgol_window_slider = QSlider(Qt.Horizontal)
+        self.savgol_window_slider.setMinimum(3)
+        self.savgol_window_slider.setMaximum(51)
+        self.savgol_window_slider.setValue(self.current_params['smoothing']['savgol_window'])
+        self.savgol_window_slider.setSingleStep(2)
+        self.savgol_window_slider.setPageStep(2)
+        self.savgol_window_slider.setTickInterval(2)
+        self.savgol_window_slider.setTickPosition(QSlider.TicksBelow)
+        self.savgol_window_slider.valueChanged.connect(self._on_savgol_window_changed)
+
+        self.savgol_window_spinbox = QSpinBox()
+        self.savgol_window_spinbox.setMinimum(3)
+        self.savgol_window_spinbox.setMaximum(51)
+        self.savgol_window_spinbox.setValue(self.current_params['smoothing']['savgol_window'])
+        self.savgol_window_spinbox.setSingleStep(2)
+        self.savgol_window_spinbox.valueChanged.connect(self.savgol_window_slider.setValue)
+
+        savgol_window_layout.addWidget(self.savgol_window_slider, 3)
+        savgol_window_layout.addWidget(self.savgol_window_spinbox, 1)
+
+        self.savgol_window_row_label = QLabel("Window length:")
+        form_layout.addRow(self.savgol_window_row_label, self.savgol_window_container)
+
+        # Polynomial order
+        self.savgol_polyorder_container = QWidget()
+        savgol_poly_layout = QHBoxLayout(self.savgol_polyorder_container)
+        savgol_poly_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.savgol_polyorder_slider = QSlider(Qt.Horizontal)
+        self.savgol_polyorder_slider.setMinimum(1)
+        self.savgol_polyorder_slider.setMaximum(5)
+        self.savgol_polyorder_slider.setValue(self.current_params['smoothing']['savgol_polyorder'])
+        self.savgol_polyorder_slider.setSingleStep(1)
+        self.savgol_polyorder_slider.setTickInterval(1)
+        self.savgol_polyorder_slider.setTickPosition(QSlider.TicksBelow)
+        self.savgol_polyorder_slider.valueChanged.connect(self._on_savgol_polyorder_changed)
+
+        self.savgol_polyorder_spinbox = QSpinBox()
+        self.savgol_polyorder_spinbox.setMinimum(1)
+        self.savgol_polyorder_spinbox.setMaximum(5)
+        self.savgol_polyorder_spinbox.setValue(self.current_params['smoothing']['savgol_polyorder'])
+        self.savgol_polyorder_spinbox.setSingleStep(1)
+        self.savgol_polyorder_spinbox.valueChanged.connect(self.savgol_polyorder_slider.setValue)
+
+        savgol_poly_layout.addWidget(self.savgol_polyorder_slider, 3)
+        savgol_poly_layout.addWidget(self.savgol_polyorder_spinbox, 1)
+
+        self.savgol_polyorder_row_label = QLabel("Polynomial order:")
+        form_layout.addRow(self.savgol_polyorder_row_label, self.savgol_polyorder_container)
+
+        # Hide savgol controls by default (whittaker is selected)
+        self._update_smoothing_method_visibility()
+
         # Enable/disable controls based on initial state
         self._update_smoothing_controls_state()
         
@@ -357,13 +447,29 @@ class ParametersFrame(QWidget):
         """Initialize peak detection controls"""
         peaks_group = QGroupBox("Peak Detection")
         form_layout = QFormLayout(peaks_group)
-        
+
         # Enable/disable checkbox
         self.peaks_enabled = QCheckBox("Enable Peak Detection")
         self.peaks_enabled.setChecked(self.current_params['peaks']['enabled'])
         self.peaks_enabled.stateChanged.connect(self._on_peaks_toggled)
         form_layout.addRow(self.peaks_enabled)
-        
+
+        # Peak detection mode combo box
+        self.peak_mode_combo = QComboBox()
+        self.peak_mode_combo.addItem("Classical", "classical")
+        self.peak_mode_combo.addItem("Deconvolution (U-Net)", "deconvolution")
+
+        # Grey out deconvolution if not available
+        from logic.deconvolution import is_available as deconv_available
+        if not deconv_available():
+            model = self.peak_mode_combo.model()
+            item = model.item(1)
+            item.setEnabled(False)
+            item.setToolTip("Requires PyTorch and model weights in cache/gc_heatmap_unet.pth")
+
+        self.peak_mode_combo.currentIndexChanged.connect(self._on_peak_mode_changed)
+        form_layout.addRow("Detection Mode:", self.peak_mode_combo)
+
         # Direct entry box for prominence with validation
         self.prominence_entry = QLineEdit()
         self.prominence_entry.setText(str(self.current_params['peaks']['min_prominence']))
@@ -807,30 +913,59 @@ class ParametersFrame(QWidget):
         # Only show fastchrom controls for fastchrom
         self.fastchrom_container.setVisible(method == "fastchrom")
     
+    def _update_smoothing_method_visibility(self):
+        """Show/hide controls based on selected smoothing method and median toggle"""
+        is_whittaker = self.smooth_method_combo.currentData() == 'whittaker'
+        median_on = self.median_enabled.isChecked()
+        # Median kernel (only visible when median is checked)
+        self.median_kernel_container.setVisible(median_on)
+        self.median_kernel_row_label.setVisible(median_on)
+        # Whittaker controls
+        self.smooth_lam_container.setVisible(is_whittaker)
+        self.smooth_lam_label.setVisible(is_whittaker)
+        self.smooth_diff_order_combo.setVisible(is_whittaker)
+        self.smooth_diff_order_row_label.setVisible(is_whittaker)
+        # Savgol controls
+        self.savgol_window_container.setVisible(not is_whittaker)
+        self.savgol_window_row_label.setVisible(not is_whittaker)
+        self.savgol_polyorder_container.setVisible(not is_whittaker)
+        self.savgol_polyorder_row_label.setVisible(not is_whittaker)
+
     def _update_smoothing_controls_state(self):
         """Update enabled state of smoothing controls"""
         enabled = self.smoothing_enabled.isChecked()
-        self.median_slider.setEnabled(enabled)
-        self.median_spinbox.setEnabled(enabled)
-        self.savgol_slider.setEnabled(enabled)
-        self.savgol_spinbox.setEnabled(enabled)
+        median_enabled = enabled and self.median_enabled.isChecked()
+        self.smooth_method_combo.setEnabled(enabled)
+        self.median_enabled.setEnabled(enabled)
+        self.median_kernel_slider.setEnabled(median_enabled)
+        self.median_kernel_spinbox.setEnabled(median_enabled)
+        self.smooth_lam_slider.setEnabled(enabled)
+        self.smooth_lam_spinbox.setEnabled(enabled)
+        self.smooth_diff_order_combo.setEnabled(enabled)
+        self.savgol_window_slider.setEnabled(enabled)
+        self.savgol_window_spinbox.setEnabled(enabled)
+        self.savgol_polyorder_slider.setEnabled(enabled)
+        self.savgol_polyorder_spinbox.setEnabled(enabled)
     
     def _update_peaks_controls_state(self):
         """Update enabled state of peaks controls"""
         enabled = self.peaks_enabled.isChecked()
+        is_deconv = self.current_params['peaks']['mode'] == 'deconvolution'
         self.prominence_entry.setEnabled(enabled)
-    
+        self.peak_mode_combo.setEnabled(enabled)
+
     def _update_shoulder_controls_state(self):
         """Update enabled state of shoulder controls"""
         shoulder_enabled = self.shoulders_enabled.isChecked()
         peak_enabled = self.peaks_enabled.isChecked()
-        
-        # Shoulder detection requires peak detection to be enabled
-        overall_enabled = shoulder_enabled and peak_enabled
-        
-        # Enable shoulder checkbox only if peaks are enabled
-        self.shoulders_enabled.setEnabled(peak_enabled)
-        
+        is_deconv = self.current_params['peaks']['mode'] == 'deconvolution'
+
+        # Shoulder detection requires classical mode and peak detection enabled
+        overall_enabled = shoulder_enabled and peak_enabled and not is_deconv
+
+        # Disable shoulder checkbox entirely in deconvolution mode
+        self.shoulders_enabled.setEnabled(peak_enabled and not is_deconv)
+
         # Enable/disable all shoulder detection controls
         self.shoulder_sensitivity_slider.setEnabled(overall_enabled)
         self.shoulder_sensitivity_spinbox.setEnabled(overall_enabled)
@@ -849,44 +984,86 @@ class ParametersFrame(QWidget):
         self._update_smoothing_controls_state()
         self.parameters_changed.emit(self.current_params)
     
+    def _on_smooth_lambda_changed(self, value):
+        """Handle smoothing lambda change (log10 scale)"""
+        # Update spinbox without triggering its signal
+        if self.smooth_lam_spinbox.value() != value:
+            self.smooth_lam_spinbox.blockSignals(True)
+            self.smooth_lam_spinbox.setValue(value)
+            self.smooth_lam_spinbox.blockSignals(False)
+
+        self.smooth_lam_label.setText(f"\u03bb = 10^{value}")
+        self.current_params['smoothing']['lambda'] = 10 ** value
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_smooth_diff_order_changed(self, index):
+        """Handle smoothing diff order change"""
+        diff_order = self.smooth_diff_order_combo.currentData()
+        self.current_params['smoothing']['diff_order'] = diff_order
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_median_toggled(self, state):
+        """Handle median pre-filter toggle"""
+        enabled = bool(state)
+        self.current_params['smoothing']['median_enabled'] = enabled
+        self._update_smoothing_controls_state()
+        self._update_smoothing_method_visibility()
+        self.parameters_changed.emit(self.current_params)
+
     def _on_median_kernel_changed(self, value):
         """Handle median kernel size change"""
-        # Ensure value is odd
         if value % 2 == 0:
             value += 1
-            self.median_slider.blockSignals(True)
-            self.median_slider.setValue(value)
-            self.median_slider.blockSignals(False)
-        
-        # Update spinbox without triggering its signal
-        if self.median_spinbox.value() != value:
-            self.median_spinbox.blockSignals(True)
-            self.median_spinbox.setValue(value)
-            self.median_spinbox.blockSignals(False)
-        
-        # Update parameters
-        self.current_params['smoothing']['median_filter']['kernel_size'] = value
+            self.median_kernel_slider.blockSignals(True)
+            self.median_kernel_slider.setValue(value)
+            self.median_kernel_slider.blockSignals(False)
+        if self.median_kernel_spinbox.value() != value:
+            self.median_kernel_spinbox.blockSignals(True)
+            self.median_kernel_spinbox.setValue(value)
+            self.median_kernel_spinbox.blockSignals(False)
+        self.current_params['smoothing']['median_kernel'] = value
         self.parameters_changed.emit(self.current_params)
-    
+
+    def _on_smooth_method_changed(self, index):
+        """Handle smoothing method change"""
+        method = self.smooth_method_combo.currentData()
+        self.current_params['smoothing']['method'] = method
+        self._update_smoothing_method_visibility()
+        self.parameters_changed.emit(self.current_params)
+
     def _on_savgol_window_changed(self, value):
         """Handle Savitzky-Golay window size change"""
-        # Ensure value is odd
         if value % 2 == 0:
             value += 1
-            self.savgol_slider.blockSignals(True)
-            self.savgol_slider.setValue(value)
-            self.savgol_slider.blockSignals(False)
-        
-        # Update spinbox without triggering its signal
-        if self.savgol_spinbox.value() != value:
-            self.savgol_spinbox.blockSignals(True)
-            self.savgol_spinbox.setValue(value)
-            self.savgol_spinbox.blockSignals(False)
-        
-        # Update parameters
-        self.current_params['smoothing']['savgol_filter']['window_length'] = value
+            self.savgol_window_slider.blockSignals(True)
+            self.savgol_window_slider.setValue(value)
+            self.savgol_window_slider.blockSignals(False)
+        if self.savgol_window_spinbox.value() != value:
+            self.savgol_window_spinbox.blockSignals(True)
+            self.savgol_window_spinbox.setValue(value)
+            self.savgol_window_spinbox.blockSignals(False)
+        # Clamp polyorder below window
+        if self.current_params['smoothing']['savgol_polyorder'] >= value:
+            new_order = value - 1
+            self.savgol_polyorder_slider.setValue(new_order)
+        self.current_params['smoothing']['savgol_window'] = value
         self.parameters_changed.emit(self.current_params)
-    
+
+    def _on_savgol_polyorder_changed(self, value):
+        """Handle Savitzky-Golay polynomial order change"""
+        window = self.current_params['smoothing']['savgol_window']
+        if value >= window:
+            value = window - 1
+            self.savgol_polyorder_slider.blockSignals(True)
+            self.savgol_polyorder_slider.setValue(value)
+            self.savgol_polyorder_slider.blockSignals(False)
+        if self.savgol_polyorder_spinbox.value() != value:
+            self.savgol_polyorder_spinbox.blockSignals(True)
+            self.savgol_polyorder_spinbox.setValue(value)
+            self.savgol_polyorder_spinbox.blockSignals(False)
+        self.current_params['smoothing']['savgol_polyorder'] = value
+        self.parameters_changed.emit(self.current_params)
+
     def _on_baseline_display_toggled(self, state):
         """Handle baseline display mode toggle"""
         show_corrected = bool(state)
@@ -951,6 +1128,30 @@ class ParametersFrame(QWidget):
         self.current_params['peaks']['enabled'] = enabled
         self._update_peaks_controls_state()
         self._update_shoulder_controls_state()  # Also update shoulder controls
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_peak_mode_changed(self, index):
+        """Handle peak detection mode change."""
+        mode = self.peak_mode_combo.currentData()
+        self.current_params['peaks']['mode'] = mode
+
+        # Set sensible prominence default for each mode
+        if mode == 'deconvolution':
+            self.current_params['peaks']['min_prominence'] = 0.01
+            self.prominence_entry.setText('0.01')
+            self.prominence_entry.setToolTip(
+                'Fraction of signal range (0-1). '
+                'E.g. 0.01 = keep peaks above 1% of signal range.'
+            )
+        else:
+            self.current_params['peaks']['min_prominence'] = 1e5
+            self.prominence_entry.setText('100000.0')
+            self.prominence_entry.setToolTip(
+                'Absolute prominence threshold for scipy find_peaks.'
+            )
+
+        self._update_peaks_controls_state()
+        self._update_shoulder_controls_state()
         self.parameters_changed.emit(self.current_params)
     
     def _on_ms_baseline_clicked(self):

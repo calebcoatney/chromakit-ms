@@ -220,13 +220,13 @@ class ChromatogramProcessor:
         self.default_params = {
             'smoothing': {
                 'enabled': False,
-                'median_filter': {
-                    'kernel_size': 5
-                },
-                'savgol_filter': {
-                    'window_length': 11,
-                    'polyorder': 3
-                }
+                'method': 'whittaker',
+                'median_enabled': False,
+                'median_kernel': 5,
+                'lambda': 1e-1,
+                'diff_order': 1,
+                'savgol_window': 3,
+                'savgol_polyorder': 1
             },
             'baseline': {
                 'show_corrected': False,
@@ -389,57 +389,47 @@ class ChromatogramProcessor:
         }
     
     def _apply_smoothing(self, y, smoothing_params):
-        """Apply smoothing to the data using median and Savitzky-Golay filters."""
-        # Get parameters
-        med_kernel = smoothing_params['median_filter']['kernel_size']
-        sg_window = smoothing_params['savgol_filter']['window_length']
-        sg_order = smoothing_params['savgol_filter']['polyorder']
-        
-        data_length = len(y)
-        print(f"Applying smoothing with med_kernel={med_kernel}, sg_window={sg_window}, sg_order={sg_order}")
-        
-        # Ensure parameters are valid for the data length
-        if med_kernel >= data_length:
-            med_kernel = min(data_length - 1, 7)
-            if med_kernel % 2 == 0:
-                med_kernel -= 1
-            print(f"Adjusted median kernel to {med_kernel} for data length {data_length}")
-        elif med_kernel % 2 == 0:
-            med_kernel += 1  # Make sure it's odd
-        
-        if sg_window >= data_length:
-            sg_window = min(data_length - 1, 11)
-            if sg_window % 2 == 0:
-                sg_window -= 1
-            print(f"Adjusted Savitzky-Golay window to {sg_window} for data length {data_length}")
-        elif sg_window % 2 == 0:
-            sg_window += 1  # Make sure it's odd
-        
-        # Make sure polynomial order is less than window size
-        if sg_order >= sg_window:
-            sg_order = sg_window - 1
-            print(f"Adjusted polynomial order to {sg_order} for window {sg_window}")
-        
+        """Apply smoothing using the selected method.
+
+        Optional median pre-filter removes spike noise before the main smoother.
+        Whittaker: asls with p=0.9 so points above the fit (peaks) get high
+        weight (preserved) while points below (noise) get low weight.
+        Savitzky-Golay: local polynomial fit via scipy.signal.savgol_filter.
+        """
+        method = smoothing_params.get('method', 'whittaker')
         try:
-            # Apply median filter - this removes spike noise
-            y_med = medfilt(y, kernel_size=med_kernel)
-            
-            # Apply Savitzky-Golay filter - this smooths the curve
-            y_smooth = savgol_filter(y_med, window_length=sg_window, polyorder=sg_order)
-            
-            # Calculate differences to show the effect
-            orig_vs_med_diff = np.max(np.abs(y - y_med))
-            med_vs_sg_diff = np.max(np.abs(y_med - y_smooth))
-            print(f"Original vs median filter - max diff: {orig_vs_med_diff:.2f}")
-            print(f"Median vs S-G filter - max diff: {med_vs_sg_diff:.2f}")
-            
-            if orig_vs_med_diff < 1.0 and med_vs_sg_diff < 1.0:
-                print("Warning: Smoothing effect is very small - might not be visible")
-            
-            return y_smooth
+            # Optional median pre-filter for spike removal
+            if smoothing_params.get('median_enabled', False):
+                kernel = smoothing_params.get('median_kernel', 5)
+                if kernel % 2 == 0:
+                    kernel += 1
+                if kernel >= len(y):
+                    kernel = min(len(y) - 1, 5)
+                    if kernel % 2 == 0:
+                        kernel -= 1
+                y = medfilt(y, kernel_size=kernel)
+
+            if method == 'savgol':
+                window = smoothing_params.get('savgol_window', 3)
+                polyorder = smoothing_params.get('savgol_polyorder', 1)
+                data_length = len(y)
+                if window >= data_length:
+                    window = min(data_length - 1, 3)
+                if window % 2 == 0:
+                    window += 1
+                if polyorder >= window:
+                    polyorder = window - 1
+                return savgol_filter(y, window_length=window, polyorder=polyorder)
+            else:
+                lam = smoothing_params.get('lambda', 1e-1)
+                diff_order = smoothing_params.get('diff_order', 1)
+                smoothed_y, _ = self.baseline_fitter.asls(
+                    data=y, lam=lam, p=0.9, diff_order=diff_order
+                )
+                return smoothed_y
         except Exception as e:
             print(f"Smoothing failed: {str(e)}")
-            return y  # Return original data if smoothing fails
+            return y
     
     def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None):
         """Apply baseline correction using the specified method.
