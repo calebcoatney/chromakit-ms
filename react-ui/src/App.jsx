@@ -1,6 +1,6 @@
 /**
  * Main App Component
- * 
+ *
  * Orchestrates all components and manages application state.
  * Processes chromatogram in real-time as parameters change.
  */
@@ -10,11 +10,11 @@ import FileBrowser from './components/FileBrowser';
 import ProcessingControls from './components/ProcessingControls';
 import ChromatogramPlot from './components/ChromatogramPlot';
 import PeakTable from './components/PeakTable';
-import { checkHealth, loadFile, processChromato, integratePeaks } from './services/api';
+import * as api from './services/api.ts';
 import './styles/App.css';
 
 function App() {
-  // State management
+  // State
   const [apiStatus, setApiStatus] = useState({ connected: false });
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileData, setFileData] = useState(null);
@@ -24,25 +24,25 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState(null);
+  const [availableDetectors, setAvailableDetectors] = useState([]);
+  const [currentDetector, setCurrentDetector] = useState(null);
 
-  // Check API health on mount
+  // Health check on mount + interval
   useEffect(() => {
-    const checkAPIHealth = async () => {
+    const check = async () => {
       try {
-        await checkHealth();
+        await api.checkHealth();
         setApiStatus({ connected: true });
-      } catch (err) {
+      } catch {
         setApiStatus({ connected: false });
       }
     };
-
-    checkAPIHealth();
-    // Check every 30 seconds
-    const interval = setInterval(checkAPIHealth, 30000);
-    return () => clearInterval(interval);
+    check();
+    const id = setInterval(check, 30000);
+    return () => clearInterval(id);
   }, []);
 
-  // Handle file selection
+  // File selection
   const handleFileSelect = async (file) => {
     setSelectedFile(file);
     setFileData(null);
@@ -52,8 +52,10 @@ function App() {
     setLoading(true);
 
     try {
-      const data = await loadFile(file.path);
+      const data = await api.loadFile(file.path);
       setFileData(data);
+      setAvailableDetectors(data.available_detectors || []);
+      setCurrentDetector(data.current_detector || null);
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to load file');
     } finally {
@@ -61,28 +63,44 @@ function App() {
     }
   };
 
-  // Handle real-time parameter changes
+  // Detector change
+  const handleDetectorChange = async (detector) => {
+    if (!selectedFile) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.loadFile(selectedFile.path, detector);
+      setFileData(data);
+      setCurrentDetector(detector);
+      setProcessedData(null);
+      setIntegrationResults(null);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to switch detector');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Real-time parameter changes → process
   const handleParametersChange = useCallback(async (params) => {
     if (!fileData || processing) return;
 
     setCurrentParams(params);
-    setIntegrationResults(null); // Clear integration when parameters change
+    setIntegrationResults(null);
     setProcessing(true);
     setError(null);
 
     try {
-      // Prepare MS range if TIC data is available
       const msRange = fileData.has_ms && fileData.tic.x.length > 0
         ? [Math.min(...fileData.tic.x), Math.max(...fileData.tic.x)]
-        : null;
+        : undefined;
 
-      const data = await processChromato({
-        x: fileData.chromatogram.x,
-        y: fileData.chromatogram.y,
+      const data = await api.processChromato(
+        fileData.chromatogram.x,
+        fileData.chromatogram.y,
         params,
-        ms_range: msRange
-      });
-
+        msRange,
+      );
       setProcessedData(data);
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to process chromatogram');
@@ -91,20 +109,21 @@ function App() {
     }
   }, [fileData, processing]);
 
-  // Handle peak integration
+  // Integration
   const handleIntegrate = async () => {
     if (!processedData) return;
-
     setIntegrationResults(null);
     setError(null);
     setLoading(true);
 
     try {
-      const data = await integratePeaks({
-        processed_data: processedData,
-        chemstation_area_factor: 0.0784
-      });
-
+      const peakGroups = currentParams?.integration?.peak_groups;
+      const data = await api.integratePeaks(
+        processedData,
+        0.0784,
+        undefined,
+        peakGroups?.length ? peakGroups : undefined,
+      );
       setIntegrationResults(data);
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to integrate peaks');
@@ -113,10 +132,26 @@ function App() {
     }
   };
 
+  // Navigation
+  const handleNavigate = async (direction) => {
+    setError(null);
+    try {
+      const resp = direction === 'next'
+        ? await fetch('/api/navigate/next').then(r => r.json())
+        : await fetch('/api/navigate/previous').then(r => r.json());
+
+      if (resp.file_path) {
+        handleFileSelect({ name: resp.file_path.split('/').pop(), path: resp.file_path });
+      }
+    } catch (err) {
+      setError('Navigation failed');
+    }
+  };
+
   return (
     <div className="app">
       <Header apiStatus={apiStatus} />
-      
+
       <div className="main-content">
         {/* Sidebar */}
         <aside className="sidebar">
@@ -125,18 +160,16 @@ function App() {
 
         {/* Main Panel */}
         <main className="main-panel">
-          {/* Error Display */}
+          {/* Error */}
           {error && (
-            <div className="status-indicator error">
-              ⚠️ {error}
-            </div>
+            <div className="status-indicator error">⚠️ {error}</div>
           )}
 
-          {/* Selected File Info */}
+          {/* File info bar */}
           {selectedFile && (
             <div className="card">
               <div className="card-body">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                   <div>
                     <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>
                       📄 {selectedFile.name}
@@ -145,14 +178,31 @@ function App() {
                       {fileData ? (
                         <>
                           {fileData.chromatogram.x.length} points
-                          {fileData.has_ms && ` | MS data available (${fileData.tic.x.length} scans)`}
+                          {currentDetector && ` | ${currentDetector}`}
+                          {fileData.has_ms && ` | MS (${fileData.tic.x.length} scans)`}
                         </>
-                      ) : (
-                        'Loading...'
-                      )}
+                      ) : 'Loading...'}
                     </div>
                   </div>
-                  {loading && <div className="spinner"></div>}
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    {/* Detector selector */}
+                    {availableDetectors.length > 1 && (
+                      <select
+                        className="form-control"
+                        style={{ width: 'auto', minWidth: '100px' }}
+                        value={currentDetector || ''}
+                        onChange={(e) => handleDetectorChange(e.target.value)}
+                      >
+                        {availableDetectors.map((d) => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                    )}
+                    {/* Navigation buttons */}
+                    <button className="btn btn-sm btn-secondary" onClick={() => handleNavigate('previous')} title="Previous sample">◀</button>
+                    <button className="btn btn-sm btn-secondary" onClick={() => handleNavigate('next')} title="Next sample">▶</button>
+                    {loading && <div className="spinner"></div>}
+                  </div>
                 </div>
               </div>
             </div>
@@ -166,7 +216,7 @@ function App() {
             />
           )}
 
-          {/* Chromatogram Plot */}
+          {/* Plot */}
           <ChromatogramPlot
             data={fileData?.chromatogram}
             processedData={processedData}
@@ -175,8 +225,8 @@ function App() {
             showBaseline={true}
           />
 
-          {/* Integrate Peaks Button */}
-          {processedData && processedData.peaks_x && processedData.peaks_x.length > 0 && !integrationResults && (
+          {/* Integrate button */}
+          {processedData && processedData.peaks_x?.length > 0 && !integrationResults && (
             <div className="card">
               <div className="card-body">
                 <button
@@ -191,7 +241,7 @@ function App() {
             </div>
           )}
 
-          {/* Peak Integration Table */}
+          {/* Results table */}
           {integrationResults && (
             <PeakTable
               integrationResults={integrationResults}
@@ -200,7 +250,7 @@ function App() {
             />
           )}
 
-          {/* No Data Message */}
+          {/* Welcome */}
           {!selectedFile && !loading && (
             <div className="card">
               <div className="card-body text-center" style={{ padding: '3rem' }}>
