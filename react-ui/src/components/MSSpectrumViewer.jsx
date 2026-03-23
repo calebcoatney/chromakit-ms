@@ -1,30 +1,26 @@
 /**
- * MSSpectrumViewer Component
- *
- * Interactive mass spectrum viewer mirroring the desktop MSFrame:
- * - Stick plot of m/z vs intensity
- * - RT input with "Extract" button
- * - m/z shift control
- * - Peak click → auto-extract spectrum
- * - MS library search results display
+ * MSSpectrumViewer Component — interactive mass spectrum stick plot with search.
  */
 import React, { useState, useCallback, useMemo } from 'react';
 import Plot from 'react-plotly.js';
 
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
 const MSSpectrumViewer = ({
-  spectrum,          // { rt, mz: number[], intensities: number[] } | null
-  searchResults,     // MSSearchResult[] | null
-  selectedPeakRT,    // auto-fill RT from peak selection
-  hasMS,             // whether file has MS data
-  onExtractSpectrum, // (rt: number) => void
-  onSearchSpectrum,  // () => void
+  spectrum,
+  searchResults,
+  selectedPeakRT,
+  hasMS,
+  onExtractSpectrum,
+  onSearchSpectrum,
   searching,
   disabled,
 }) => {
   const [rtInput, setRtInput] = useState('');
   const [mzShift, setMzShift] = useState(0);
 
-  // Sync RT input when a peak is selected
   React.useEffect(() => {
     if (selectedPeakRT != null) {
       setRtInput(selectedPeakRT.toFixed(3));
@@ -38,7 +34,6 @@ const MSSpectrumViewer = ({
     }
   }, [rtInput, onExtractSpectrum]);
 
-  // Normalize intensities for display
   const normalizedData = useMemo(() => {
     if (!spectrum?.mz?.length) return null;
     const maxI = Math.max(...spectrum.intensities);
@@ -51,7 +46,6 @@ const MSSpectrumViewer = ({
     return { mz: shiftedMz, intensities: norm };
   }, [spectrum, mzShift]);
 
-  // Build Plotly traces — stick plot using thin bars
   const traces = useMemo(() => {
     if (!normalizedData) return [];
     return [{
@@ -59,85 +53,69 @@ const MSSpectrumViewer = ({
       y: normalizedData.intensities,
       type: 'bar',
       width: 0.6,
-      marker: { color: '#3182ce' },
+      marker: { color: cssVar('--primary-color') || '#4f6bed' },
       hovertemplate: 'm/z: %{x}<br>Intensity: %{y:.1f}%<extra></extra>',
     }];
   }, [normalizedData]);
 
   const layout = useMemo(() => {
+    const plotBg = cssVar('--plot-bg') || 'white';
+    const paperBg = cssVar('--plot-paper') || 'white';
+    const gridColor = cssVar('--plot-grid') || '#eef1f5';
+    const textColor = cssVar('--plot-text') || '#4a5568';
     const minMz = normalizedData ? Math.max(1, Math.min(...normalizedData.mz) - 5) : 1;
     const maxMz = normalizedData ? Math.max(...normalizedData.mz) + 5 : 150;
     return {
       autosize: true,
-      height: 250,
-      margin: { l: 40, r: 15, t: 30, b: 40 },
+      height: 220,
+      margin: { l: 35, r: 10, t: 25, b: 35 },
       xaxis: {
-        title: 'm/z',
+        title: { text: 'm/z', font: { size: 10, color: textColor } },
         range: [minMz, maxMz],
-        showgrid: true, gridcolor: '#edf2f7',
+        showgrid: true, gridcolor: gridColor,
+        tickfont: { size: 9, color: textColor },
       },
       yaxis: {
-        title: 'Rel. Intensity (%)',
+        title: { text: 'Rel. %', font: { size: 10, color: textColor } },
         range: [0, 105],
         showgrid: false,
         showticklabels: false,
       },
       title: spectrum?.rt != null
-        ? { text: `Spectrum at RT ${spectrum.rt.toFixed(3)} min${mzShift ? ` (shift: ${mzShift})` : ''}`, font: { size: 12 } }
+        ? { text: `RT ${spectrum.rt.toFixed(3)} min${mzShift ? ` (shift: ${mzShift})` : ''}`, font: { size: 11, color: textColor } }
         : undefined,
-      plot_bgcolor: 'white',
-      paper_bgcolor: 'white',
+      plot_bgcolor: plotBg,
+      paper_bgcolor: paperBg,
       bargap: 0.1,
     };
   }, [normalizedData, spectrum, mzShift]);
 
-  if (!hasMS) {
-    return null;
-  }
+  if (!hasMS) return null;
 
   return (
-    <div className="card">
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="card-header">
-        <h2>🔬 Mass Spectrum</h2>
+        <h2>Mass Spectrum</h2>
       </div>
       <div className="card-body">
-
-        {/* RT input + controls */}
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+        {/* Controls row */}
+        <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
           <label className="form-label" style={{ marginBottom: 0, whiteSpace: 'nowrap' }}>RT:</label>
-          <input
-            type="text"
-            className="form-control"
-            style={{ width: '90px' }}
-            value={rtInput}
-            onChange={(e) => setRtInput(e.target.value)}
-            placeholder="e.g. 5.123"
-            onKeyDown={(e) => e.key === 'Enter' && handleExtract()}
-          />
+          <input type="text" className="form-control" style={{ width: '80px' }}
+            value={rtInput} onChange={(e) => setRtInput(e.target.value)}
+            placeholder="5.123" onKeyDown={(e) => e.key === 'Enter' && handleExtract()} />
           <button className="btn btn-sm btn-primary" onClick={handleExtract} disabled={disabled || !rtInput}>
             Extract
           </button>
-
-          <span style={{ margin: '0 0.25rem', color: '#a0aec0' }}>|</span>
-
+          <div className="btn-divider" />
           <label className="form-label" style={{ marginBottom: 0, whiteSpace: 'nowrap' }}>m/z shift:</label>
-          <input
-            type="number"
-            className="form-control"
-            style={{ width: '65px' }}
-            value={mzShift}
-            onChange={(e) => setMzShift(parseInt(e.target.value) || 0)}
-          />
-
+          <input type="number" className="form-control" style={{ width: '55px' }}
+            value={mzShift} onChange={(e) => setMzShift(parseInt(e.target.value) || 0)} />
           {spectrum && onSearchSpectrum && (
             <>
-              <span style={{ margin: '0 0.25rem', color: '#a0aec0' }}>|</span>
-              <button
-                className="btn btn-sm btn-secondary"
-                onClick={onSearchSpectrum}
-                disabled={searching || disabled}
-              >
-                {searching ? '⏳ Searching...' : '🔍 Search Library'}
+              <div className="btn-divider" />
+              <button className="btn btn-sm btn-secondary" onClick={onSearchSpectrum} disabled={searching || disabled}>
+                {searching ? 'Searching...' : 'Search Library'}
               </button>
             </>
           )}
@@ -161,34 +139,34 @@ const MSSpectrumViewer = ({
             style={{ width: '100%' }}
           />
         ) : (
-          <div className="text-center text-muted" style={{ padding: '2rem', fontSize: '0.9rem' }}>
+          <div className="text-center text-muted" style={{ padding: '1.5rem' }}>
             Enter a retention time or click a peak to view its mass spectrum
           </div>
         )}
 
         {/* Search results */}
-        {searchResults && searchResults.length > 0 && (
-          <div style={{ marginTop: '0.75rem' }}>
-            <div style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+        {searchResults?.length > 0 && (
+          <div className="mt-2">
+            <div style={{ fontWeight: 600, fontSize: '0.8rem', marginBottom: '0.375rem' }}>
               Library Search Results
             </div>
-            <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+            <div style={{ maxHeight: '180px', overflowY: 'auto' }}>
+              <table className="data-table">
                 <thead>
-                  <tr style={{ borderBottom: '2px solid var(--border-color)', background: '#f7fafc' }}>
-                    <th style={thStyle}>Compound</th>
-                    <th style={{ ...thStyle, width: '70px' }}>Score</th>
-                    <th style={{ ...thStyle, width: '90px' }}>CAS#</th>
-                    <th style={{ ...thStyle, width: '60px' }}>MW</th>
+                  <tr>
+                    <th>Compound</th>
+                    <th style={{ width: '60px' }}>Score</th>
+                    <th style={{ width: '80px' }}>CAS#</th>
+                    <th style={{ width: '50px' }}>MW</th>
                   </tr>
                 </thead>
                 <tbody>
                   {searchResults.map((r, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                      <td style={tdStyle}>{r.compound_name || r.name}</td>
-                      <td style={tdStyle}>{(r.match_score ?? r.score ?? 0).toFixed(0)}</td>
-                      <td style={tdStyle}>{r.cas_number || r.cas || '—'}</td>
-                      <td style={tdStyle}>{r.molecular_weight?.toFixed(1) ?? '—'}</td>
+                    <tr key={i}>
+                      <td>{r.compound_name || r.name}</td>
+                      <td>{(r.match_score ?? r.score ?? 0).toFixed(0)}</td>
+                      <td>{r.cas_number || r.cas || '\u2014'}</td>
+                      <td>{r.molecular_weight?.toFixed(1) ?? '\u2014'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -200,8 +178,5 @@ const MSSpectrumViewer = ({
     </div>
   );
 };
-
-const thStyle = { padding: '0.4rem 0.5rem', textAlign: 'left', fontWeight: 600 };
-const tdStyle = { padding: '0.4rem 0.5rem' };
 
 export default MSSpectrumViewer;

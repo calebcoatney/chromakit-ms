@@ -1,14 +1,5 @@
 /**
  * EditAssignmentDialog — assign a compound identity to a peak.
- *
- * Props:
- *   open (bool)
- *   onClose ()
- *   onAssign (compound: { name, cas, formula })
- *   peak (object with rt, area, etc.)
- *   compoundList (string[] — all known compound names for autocomplete)
- *   allFilesLoaded (bool — show cross-file options)
- *   onApplyToFiles (compoundName, rt, tolerance, similarityThreshold)
  */
 import React, { useState, useEffect, useMemo } from 'react';
 
@@ -36,7 +27,6 @@ const EditAssignmentDialog = ({
     return compoundList.filter(c => c.toLowerCase().includes(q)).slice(0, 50);
   }, [query, compoundList]);
 
-  // Auto-select on exact or single match
   useEffect(() => {
     if (filtered.length === 1) {
       setSelected(filtered[0]);
@@ -59,40 +49,31 @@ const EditAssignmentDialog = ({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '460px' }}>
         <div className="modal-header">
-          <h3>🏷️ Edit Assignment</h3>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <h3>Edit Assignment</h3>
+          <button className="modal-close" onClick={onClose}>&times;</button>
         </div>
         <div className="modal-body">
           {peak && (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-              Peak at RT {peak.rt?.toFixed(3)} min — Area: {peak.area?.toExponential(2)}
+            <p className="text-muted text-sm mb-2">
+              Peak at RT {peak.retention_time?.toFixed(3) ?? peak.rt?.toFixed(3)} min &mdash; Area: {peak.area?.toExponential(2)}
             </p>
           )}
 
           <div className="form-group">
-            <label>Search Compound (min 3 chars)</label>
+            <label className="form-label">Search Compound (min 3 chars)</label>
             <input className="form-control" value={query}
               onChange={e => { setQuery(e.target.value); setSelected(null); }}
-              placeholder="Type compound name…" autoFocus />
+              placeholder="Type compound name..." autoFocus />
           </div>
 
           {filtered.length > 0 && !selected && (
-            <div style={{
-              maxHeight: '200px', overflowY: 'auto', border: '1px solid var(--border-color)',
-              borderRadius: '6px', marginBottom: '0.75rem',
-            }}>
+            <div className="compound-list mb-2">
               {filtered.map(name => (
                 <div key={name}
+                  className={`compound-item${selected === name ? ' selected' : ''}`}
                   onClick={() => { setSelected(name); setQuery(name); }}
-                  style={{
-                    padding: '0.4rem 0.75rem', cursor: 'pointer',
-                    background: selected === name ? 'var(--accent-color)' : 'transparent',
-                    color: selected === name ? 'white' : 'var(--text-color)',
-                  }}
-                  onMouseEnter={e => e.target.style.background = selected === name ? 'var(--accent-color)' : 'var(--hover-bg)'}
-                  onMouseLeave={e => e.target.style.background = selected === name ? 'var(--accent-color)' : 'transparent'}
                 >
                   {name}
                 </div>
@@ -101,32 +82,28 @@ const EditAssignmentDialog = ({
           )}
 
           {selected && (
-            <div style={{
-              padding: '0.5rem 0.75rem', background: 'var(--success-bg, #f0fff4)',
-              border: '1px solid var(--success-color, #48bb78)', borderRadius: '6px',
-              marginBottom: '0.75rem', fontSize: '0.85rem',
-            }}>
-              ✅ Selected: <strong>{selected}</strong>
+            <div className="selected-indicator">
+              Selected: <strong>{selected}</strong>
             </div>
           )}
 
           {allFilesLoaded && (
             <>
-              <hr style={{ margin: '0.75rem 0', borderColor: 'var(--border-color)' }} />
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.5rem' }}>
+              <div className="divider" />
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', cursor: 'pointer', marginBottom: '0.375rem', fontSize: '0.8rem' }}>
                 <input type="checkbox" checked={applyToFiles} onChange={e => setApplyToFiles(e.target.checked)} />
                 Apply to other loaded files
               </label>
               {applyToFiles && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                <div className="grid-2">
                   <div className="form-group">
-                    <label>RT Tolerance (min)</label>
+                    <label className="form-label">RT Tolerance (min)</label>
                     <input type="number" className="form-control" value={tolerance}
                       onChange={e => setTolerance(parseFloat(e.target.value) || 0.05)}
                       step="0.01" min="0.01" max="1.0" />
                   </div>
                   <div className="form-group">
-                    <label>Similarity Threshold</label>
+                    <label className="form-label">Similarity Threshold</label>
                     <input type="number" className="form-control" value={similarityThreshold}
                       onChange={e => setSimilarityThreshold(parseFloat(e.target.value) || 0.7)}
                       step="0.05" min="0.1" max="1.0" />

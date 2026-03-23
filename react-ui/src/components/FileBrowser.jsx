@@ -1,7 +1,5 @@
 /**
- * FileBrowser Component
- * 
- * Allows users to browse directories and select .D files from the server.
+ * FileBrowser Component — browse directories and select .D files from the server.
  */
 import React, { useState, useEffect } from 'react';
 import { browseDirectory } from '../services/api';
@@ -20,7 +18,6 @@ const FileBrowser = ({ onFileSelect }) => {
   const loadDirectory = async (path) => {
     setLoading(true);
     setError(null);
-    
     try {
       const data = await browseDirectory(path);
       setEntries(data.entries || []);
@@ -42,106 +39,56 @@ const FileBrowser = ({ onFileSelect }) => {
   };
 
   const handleGoUp = () => {
-    if (parentPath) {
-      loadDirectory(parentPath);
-    }
+    if (parentPath) loadDirectory(parentPath);
   };
 
   return (
-    <div className="card" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="card-header">
-        <h2>📁 File Browser</h2>
+        <h2>Files</h2>
       </div>
-      
-      <div className="card-body" style={{ flex: 1, overflow: 'auto' }}>
-        {/* Current Path */}
-        <div className="mb-2">
-          <div className="form-label">Current Path:</div>
-          <div style={{ 
-            fontSize: '0.875rem', 
-            color: 'var(--text-secondary)',
-            wordBreak: 'break-all'
-          }}>
-            {currentPath}
-          </div>
-        </div>
 
-        {/* Parent Directory Button */}
+      <div className="card-body" style={{ flex: 1, overflow: 'auto' }}>
+        <div className="file-browser-path">{currentPath}</div>
+
         {parentPath && (
-          <button 
-            className="btn btn-secondary btn-sm mb-2" 
-            onClick={handleGoUp}
-            disabled={loading}
-          >
-            ⬆️ Parent Directory
+          <button className="btn btn-secondary btn-sm mb-2 full-width" onClick={handleGoUp} disabled={loading}>
+            Parent Directory
           </button>
         )}
 
-        {/* Loading State */}
         {loading && (
           <div className="loading-container">
-            <div className="spinner"></div>
-            <div className="text-muted">Loading directory...</div>
+            <div className="spinner" />
+            <span>Loading...</span>
           </div>
         )}
 
-        {/* Error State */}
         {error && (
-          <div className="status-indicator error mb-2">
-            ⚠️ {error}
-          </div>
+          <div className="status-indicator-banner error mb-2">{error}</div>
         )}
 
-        {/* Directory Entries */}
         {!loading && !error && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <div>
             {entries.length === 0 ? (
-              <div className="text-center text-muted">
-                No files or directories found
+              <div className="text-center text-muted" style={{ padding: '1rem' }}>
+                No files found
               </div>
             ) : (
               entries.map((entry, index) => (
-                <div
-                  key={index}
-                  onClick={() => handleEntryClick(entry)}
-                  style={{
-                    padding: '0.75rem',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--primary-color)';
-                    e.currentTarget.style.backgroundColor = 'rgba(102, 126, 234, 0.05)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--border-color)';
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  <span style={{ fontSize: '1.25rem' }}>
-                    {entry.type === 'directory' ? '📂' : '📄'}
+                <div key={index} className="file-entry" onClick={() => handleEntryClick(entry)}>
+                  <span className="file-entry-icon">
+                    {entry.type === 'directory' ? '\u25B8' : '\u25AB'}
                   </span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 500 }}>
-                      {entry.name}
-                    </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="file-entry-name">{entry.name}</div>
                     {entry.format && (
-                      <div style={{ 
-                        fontSize: '0.75rem', 
-                        color: 'var(--text-secondary)' 
-                      }}>
-                        {entry.format}
-                      </div>
+                      <div className="file-entry-format">{entry.format}</div>
                     )}
                   </div>
-                  <span style={{ color: 'var(--text-secondary)' }}>
-                    {entry.type === 'directory' ? '→' : ''}
-                  </span>
+                  {entry.type === 'directory' && (
+                    <span className="file-entry-arrow">&rsaquo;</span>
+                  )}
                 </div>
               ))
             )}

@@ -6,7 +6,7 @@
  *   Center: Plot + button bar + results table
  *   Right: Tabbed panels (Parameters, MS, RT Table, Quantitation)
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Header from './components/Header';
 import FileBrowser from './components/FileBrowser';
 import ProcessingControls from './components/ProcessingControls';
@@ -23,10 +23,10 @@ import * as api from './services/api.ts';
 import './styles/App.css';
 
 const RIGHT_TABS = [
-  { id: 'params', label: '⚙️ Parameters' },
-  { id: 'ms', label: '🔬 MS' },
-  { id: 'rt', label: '📋 RT Table' },
-  { id: 'quant', label: '⚗️ Quantitation' },
+  { id: 'params', label: 'Parameters' },
+  { id: 'ms', label: 'MS' },
+  { id: 'rt', label: 'RT Table' },
+  { id: 'quant', label: 'Quantitation' },
 ];
 
 function App() {
@@ -47,6 +47,9 @@ function App() {
   const [msSearchResults, setMsSearchResults] = useState(null);
   const [msSearching, setMsSearching] = useState(false);
 
+  // Navigation
+  const [navInfo, setNavInfo] = useState({ index: -1, count: 0 });
+
   // Right panel tab
   const [activeTab, setActiveTab] = useState('params');
 
@@ -64,7 +67,14 @@ function App() {
   const [quantCalc, setQuantCalc] = useState({});
   const [rtSettings, setRtSettings] = useState({});
 
-  // ── Health check ──
+  // Compound list for assignment dialog
+  const [compoundList, setCompoundList] = useState([]);
+
+  // Debounce ref for processing
+  const processTimerRef = useRef(null);
+  const processingRef = useRef(false);
+
+  // Health check
   useEffect(() => {
     const check = async () => {
       try {
@@ -79,12 +89,45 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  // ── File selection ──
-  const handleFileSelect = async (file) => {
+  // Fetch compound list from assignments on mount
+  useEffect(() => {
+    const fetchCompounds = async () => {
+      try {
+        const resp = await api.getAssignments();
+        const names = Object.values(resp.assignments || {})
+          .map(a => a.compound_name)
+          .filter(Boolean);
+        const unique = [...new Set(names)];
+        if (unique.length > 0) setCompoundList(unique);
+      } catch {
+        // Assignments endpoint may not have data yet — that's fine
+      }
+    };
+    fetchCompounds();
+  }, []);
+
+  // Update compound list when integration results change
+  useEffect(() => {
+    if (!integrationResults?.peaks) return;
+    const peakNames = integrationResults.peaks
+      .map(p => p.match_name || p.compound_id || p.compound_name)
+      .filter(Boolean);
+    if (peakNames.length > 0) {
+      setCompoundList(prev => {
+        const combined = new Set([...prev, ...peakNames]);
+        return [...combined];
+      });
+    }
+  }, [integrationResults]);
+
+  // File selection
+  const handleFileSelect = useCallback(async (file) => {
     setSelectedFile(file);
     setFileData(null);
     setProcessedData(null);
     setIntegrationResults(null);
+    setSelectedPeakIndex(null);
+    setSpectrum(null);
     setError(null);
     setLoading(true);
     try {
@@ -97,10 +140,10 @@ function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  // ── Detector change ──
-  const handleDetectorChange = async (detector) => {
+  // Detector change
+  const handleDetectorChange = useCallback(async (detector) => {
     if (!selectedFile) return;
     setLoading(true);
     setError(null);
@@ -115,32 +158,50 @@ function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedFile]);
 
-  // ── Process ──
-  const handleParametersChange = useCallback(async (params) => {
-    if (!fileData || processing) return;
+  // Process (debounced)
+  const handleParametersChange = useCallback((params) => {
+    if (!fileData) return;
     setCurrentParams(params);
     setIntegrationResults(null);
-    setProcessing(true);
-    setError(null);
-    try {
-      const msRange = fileData.has_ms && fileData.tic.x.length > 0
-        ? [Math.min(...fileData.tic.x), Math.max(...fileData.tic.x)]
-        : undefined;
-      const data = await api.processChromato(
-        fileData.chromatogram.x, fileData.chromatogram.y, params, msRange,
-      );
-      setProcessedData(data);
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to process chromatogram');
-    } finally {
-      setProcessing(false);
-    }
-  }, [fileData, processing]);
 
-  // ── Integrate ──
-  const handleIntegrate = async () => {
+    // Cancel any pending process call
+    if (processTimerRef.current) {
+      clearTimeout(processTimerRef.current);
+    }
+
+    processTimerRef.current = setTimeout(async () => {
+      if (processingRef.current) return;
+      processingRef.current = true;
+      setProcessing(true);
+      setError(null);
+      try {
+        const msRange = fileData.has_ms && fileData.tic.x.length > 0
+          ? [Math.min(...fileData.tic.x), Math.max(...fileData.tic.x)]
+          : undefined;
+        const data = await api.processChromato(
+          fileData.chromatogram.x, fileData.chromatogram.y, params, msRange,
+        );
+        setProcessedData(data);
+      } catch (err) {
+        setError(err.response?.data?.detail || 'Failed to process chromatogram');
+      } finally {
+        setProcessing(false);
+        processingRef.current = false;
+      }
+    }, 400);
+  }, [fileData]);
+
+  // Clean up timer on unmount
+  useEffect(() => {
+    return () => {
+      if (processTimerRef.current) clearTimeout(processTimerRef.current);
+    };
+  }, []);
+
+  // Integrate
+  const handleIntegrate = useCallback(async () => {
     if (!processedData) return;
     setIntegrationResults(null);
     setError(null);
@@ -157,21 +218,23 @@ function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [processedData, currentParams]);
 
-  // ── Spectrum ──
-  const handleExtractSpectrum = async (rt) => {
+  // Spectrum
+  const handleExtractSpectrum = useCallback(async (rt) => {
     if (!selectedFile) return;
     try {
       const data = await api.extractSpectrum(selectedFile.path, rt);
       setSpectrum(data);
       setMsSearchResults(null);
+      // Switch to MS tab when spectrum is extracted
+      setActiveTab('ms');
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to extract spectrum');
     }
-  };
+  }, [selectedFile]);
 
-  const handleSearchSpectrum = async () => {
+  const handleSearchSpectrum = useCallback(async () => {
     if (!spectrum) return;
     setMsSearching(true);
     try {
@@ -186,83 +249,100 @@ function App() {
     } finally {
       setMsSearching(false);
     }
-  };
+  }, [spectrum]);
 
-  // ── Peak selection ──
-  const handlePeakSelect = (idx) => {
+  // Peak selection
+  const handlePeakSelect = useCallback((idx) => {
     setSelectedPeakIndex(idx);
     if (fileData?.has_ms && integrationResults?.peaks?.[idx]) {
       const rt = integrationResults.peaks[idx].retention_time;
       handleExtractSpectrum(rt);
     }
-  };
+  }, [fileData, integrationResults, handleExtractSpectrum]);
 
-  // ── Navigation ──
-  const handleNavigate = async (direction) => {
+  // Navigation
+  const handleNavigate = useCallback(async (direction) => {
     setError(null);
     try {
       const resp = direction === 'next'
         ? await fetch('/api/navigate/next').then(r => r.json())
         : await fetch('/api/navigate/previous').then(r => r.json());
+      if (resp.current_index != null) {
+        setNavInfo({ index: resp.current_index, count: resp.available_count || 0 });
+      }
       if (resp.file_path) {
         handleFileSelect({ name: resp.file_path.split('/').pop(), path: resp.file_path });
       }
     } catch {
       setError('Navigation failed');
     }
-  };
+  }, [handleFileSelect]);
 
-  // ── Scaling ──
-  const handleScalingApply = (signal, area) => {
+  // Scaling
+  const handleScalingApply = useCallback((signal, area) => {
     setScalingFactors({ signal, area });
     api.setScalingFactors(signal, area).catch(() => {});
-  };
+  }, []);
 
-  // ── Assignment ──
-  const handleAssign = (compound) => {
+  // Assignment
+  const handleAssign = useCallback((compound) => {
     if (selectedPeakIndex == null || !integrationResults) return;
     const peaks = [...integrationResults.peaks];
     peaks[selectedPeakIndex] = { ...peaks[selectedPeakIndex], compound_name: compound.name };
     setIntegrationResults({ ...integrationResults, peaks });
-  };
+
+    // Also save to server
+    const peak = peaks[selectedPeakIndex];
+    if (peak.retention_time != null) {
+      api.saveAssignment(peak.retention_time, compound.name).catch(() => {});
+    }
+  }, [selectedPeakIndex, integrationResults]);
+
+  const selectedPeak = integrationResults?.peaks?.[selectedPeakIndex];
 
   return (
     <div className="app">
       <Header apiStatus={apiStatus} />
 
       <div className="main-content">
-        {/* ═══ LEFT: File Browser ═══ */}
+        {/* LEFT: File Browser */}
         <aside className="sidebar-left">
           <FileBrowser onFileSelect={handleFileSelect} />
         </aside>
 
-        {/* ═══ CENTER: Plot + Buttons + Results ═══ */}
+        {/* CENTER: Plot + Buttons + Results */}
         <main className="center-panel">
           {/* Error banner */}
           {error && (
-            <div className="status-indicator error" style={{ cursor: 'pointer' }} onClick={() => setError(null)}>
-              ⚠️ {error} <span style={{ marginLeft: '0.5rem', opacity: 0.6 }}>✕</span>
+            <div className="status-indicator-banner error" onClick={() => setError(null)}>
+              {error}
+              <span style={{ marginLeft: 'auto', opacity: 0.6 }}>&times;</span>
             </div>
           )}
 
-          {/* File info */}
+          {/* File info bar */}
           {selectedFile && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.25rem 0', fontSize: '0.875rem', flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 600 }}>📄 {selectedFile.name}</span>
+            <div className="file-info-bar">
+              <span className="file-info-name">{selectedFile.name}</span>
               {fileData && (
-                <span className="text-muted">
+                <span className="file-info-meta">
                   {fileData.chromatogram.x.length} pts
-                  {currentDetector && ` · ${currentDetector}`}
-                  {fileData.has_ms && ` · MS`}
+                  {currentDetector && ` \u00B7 ${currentDetector}`}
+                  {fileData.has_ms && ' \u00B7 MS'}
+                </span>
+              )}
+              {navInfo.count > 0 && (
+                <span className="file-info-meta">
+                  File {navInfo.index + 1} of {navInfo.count}
                 </span>
               )}
               {availableDetectors.length > 1 && (
-                <select className="form-control" style={{ width: 'auto', minWidth: '90px', padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                <select className="form-control file-info-detector"
                   value={currentDetector || ''} onChange={e => handleDetectorChange(e.target.value)}>
                   {availableDetectors.map(d => <option key={d} value={d}>{d}</option>)}
                 </select>
               )}
-              {loading && <div className="spinner" style={{ width: '1.2rem', height: '1.2rem', borderWidth: '2px' }}></div>}
+              {loading && <div className="spinner" />}
             </div>
           )}
 
@@ -278,24 +358,48 @@ function App() {
             selectedPeakIndex={selectedPeakIndex}
           />
 
-          {/* Button bar (mirrors desktop ButtonFrame) */}
+          {/* Button bar */}
           {selectedFile && (
             <div className="button-bar">
-              <button className="btn btn-sm btn-secondary" onClick={() => setShowExportSettings(true)} title="Export Settings">📁 Export</button>
-              <button className="btn btn-sm btn-secondary" onClick={() => handleNavigate('previous')} title="Previous sample">◀ Back</button>
-              <button className="btn btn-sm btn-secondary" onClick={() => handleNavigate('next')} title="Next sample">Next ▶</button>
+              {/* Navigation group */}
+              <button className="btn btn-sm btn-secondary" onClick={() => handleNavigate('previous')} title="Previous sample">Back</button>
+              <button className="btn btn-sm btn-secondary" onClick={() => handleNavigate('next')} title="Next sample">Next</button>
+              <div className="btn-divider" />
+              {/* Action group */}
               <button className="btn btn-sm btn-success" onClick={handleIntegrate}
                 disabled={!processedData || loading || !processedData?.peaks_x?.length}
                 title="Integrate detected peaks">
-                {loading ? '⏳' : '📈'} Integrate
+                Integrate
               </button>
+              <button className="btn btn-sm btn-secondary" onClick={() => setShowExportSettings(true)} title="Export Settings">Export</button>
               <div className="spacer" />
-              <button className="btn btn-sm btn-secondary" onClick={() => setShowScaling(true)} title="Scaling Factors">⚖️</button>
+              {/* Tools group */}
+              <button className="btn btn-sm btn-icon btn-secondary" onClick={() => setShowScaling(true)} title="Scaling Factors">S</button>
               {fileData?.has_ms && (
-                <button className="btn btn-sm btn-secondary" onClick={() => setShowMSOptions(true)} title="MS Options">🔬</button>
+                <button className="btn btn-sm btn-icon btn-secondary" onClick={() => setShowMSOptions(true)} title="MS Options">MS</button>
               )}
-              {selectedPeakIndex != null && (
-                <button className="btn btn-sm btn-secondary" onClick={() => setShowEditAssign(true)} title="Edit Assignment">🏷️</button>
+            </div>
+          )}
+
+          {/* Peak actions bar (shown when a peak is selected) */}
+          {selectedPeak && (
+            <div className="peak-actions">
+              <span className="peak-actions-label">
+                Peak {selectedPeak.peak_number || selectedPeakIndex + 1} at RT {selectedPeak.retention_time?.toFixed(3)}
+              </span>
+              {fileData?.has_ms && (
+                <button className="btn btn-sm btn-secondary"
+                  onClick={() => handleExtractSpectrum(selectedPeak.retention_time)}>
+                  View Spectrum
+                </button>
+              )}
+              <button className="btn btn-sm btn-secondary" onClick={() => setShowEditAssign(true)}>
+                Assign Compound
+              </button>
+              {selectedPeak.match_name && (
+                <span className="text-sm text-muted" style={{ marginLeft: '0.25rem' }}>
+                  Current: {selectedPeak.match_name}
+                </span>
               )}
             </div>
           )}
@@ -313,17 +417,16 @@ function App() {
 
           {/* Welcome screen */}
           {!selectedFile && !loading && (
-            <div className="card" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div className="card-body text-center" style={{ padding: '3rem' }}>
-                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📁</div>
-                <h3 style={{ marginBottom: '0.5rem' }}>Welcome to ChromaKit-MS</h3>
-                <p className="text-muted">Select a .D file from the browser to begin analysis</p>
+            <div className="card welcome-screen">
+              <div className="welcome-content">
+                <h3>ChromaKit-MS</h3>
+                <p>Select a .D file from the browser to begin analysis</p>
               </div>
             </div>
           )}
         </main>
 
-        {/* ═══ RIGHT: Tabbed Panels ═══ */}
+        {/* RIGHT: Tabbed Panels */}
         <aside className="sidebar-right">
           <div className="tab-bar">
             {RIGHT_TABS.map(t => (
@@ -371,12 +474,12 @@ function App() {
         </aside>
       </div>
 
-      {/* ── Dialogs ── */}
+      {/* Dialogs */}
       <ScalingFactorsDialog open={showScaling} onClose={() => setShowScaling(false)}
         onApply={handleScalingApply} initialSignal={scalingFactors.signal} initialArea={scalingFactors.area} />
       <ExportSettingsDialog open={showExportSettings} onClose={() => setShowExportSettings(false)} />
       <EditAssignmentDialog open={showEditAssign} onClose={() => setShowEditAssign(false)}
-        onAssign={handleAssign} peak={integrationResults?.peaks?.[selectedPeakIndex]} compoundList={[]} />
+        onAssign={handleAssign} peak={selectedPeak} compoundList={compoundList} />
       <MSOptionsDialog open={showMSOptions} onClose={() => setShowMSOptions(false)}
         onApply={opts => setMsOptions(opts)} initialOptions={msOptions} />
     </div>

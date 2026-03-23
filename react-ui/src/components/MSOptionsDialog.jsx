@@ -1,32 +1,22 @@
 /**
- * MSOptionsDialog — multi-section MS library search configuration.
- *
- * Props:
- *   open (bool)
- *   onClose ()
- *   onApply (options: object)
- *   initialOptions (object, optional)
+ * MSOptionsDialog — multi-tab MS library search configuration.
  */
 import React, { useState, useEffect } from 'react';
 
 const STORAGE_KEY = 'chromakit-ms-options';
 
 const DEFAULTS = {
-  // General
   searchMethod: 'vector',
   hybridMethod: 'auto',
   fullMsBaseline: false,
-  // Extraction
   extractionMethod: 'apex',
   rangePoints: 5,
   midpointWindow: 50,
   weightByTic: false,
-  // Background subtraction
   backgroundEnabled: false,
   subtractionMethod: 'left_bound',
   subtractionWeight: 0.5,
   intensityThreshold: 0.01,
-  // Search algorithm
   similarity: 'cosine',
   weighting: 'nist',
   unmatchedPeaks: 'keep_all',
@@ -34,7 +24,6 @@ const DEFAULTS = {
   clusters: 3,
   intensityPower: 0.5,
   topN: 10,
-  // Quality checks
   qualityEnabled: false,
   checkAsymmetry: true,
   checkCoherence: true,
@@ -76,7 +65,7 @@ const MSOptionsDialog = ({ open, onClose, onApply, initialOptions }) => {
 
   const inputRow = (label, key, props = {}) => (
     <div className="form-group" key={key}>
-      <label>{label}</label>
+      <label className="form-label">{label}</label>
       <input className="form-control" value={opts[key]}
         onChange={e => u(key, props.type === 'number' ? parseFloat(e.target.value) : e.target.value)}
         {...props} />
@@ -85,7 +74,7 @@ const MSOptionsDialog = ({ open, onClose, onApply, initialOptions }) => {
 
   const selectRow = (label, key, options) => (
     <div className="form-group" key={key}>
-      <label>{label}</label>
+      <label className="form-label">{label}</label>
       <select className="form-control" value={opts[key]} onChange={e => u(key, e.target.value)}>
         {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
@@ -93,7 +82,7 @@ const MSOptionsDialog = ({ open, onClose, onApply, initialOptions }) => {
   );
 
   const checkRow = (label, key) => (
-    <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.4rem' }}>
+    <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', cursor: 'pointer', marginBottom: '0.3rem', fontSize: '0.8rem' }}>
       <input type="checkbox" checked={opts[key]} onChange={e => u(key, e.target.checked)} />
       {label}
     </label>
@@ -101,25 +90,21 @@ const MSOptionsDialog = ({ open, onClose, onApply, initialOptions }) => {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '550px' }}>
+      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
         <div className="modal-header">
-          <h3>🔬 MS Search Options</h3>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <h3>MS Search Options</h3>
+          <button className="modal-close" onClick={onClose}>&times;</button>
         </div>
 
-        {/* Tab bar */}
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', padding: '0 1rem' }}>
+        <div className="modal-tab-bar">
           {tabs.map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)} style={{
-              padding: '0.5rem 0.75rem', background: 'none', border: 'none', cursor: 'pointer',
-              borderBottom: tab === id ? '2px solid var(--accent-color)' : '2px solid transparent',
-              color: tab === id ? 'var(--accent-color)' : 'var(--text-muted)',
-              fontWeight: tab === id ? 600 : 400, fontSize: '0.85rem',
-            }}>{label}</button>
+            <button key={id} onClick={() => setTab(id)} className={tab === id ? 'active' : ''}>
+              {label}
+            </button>
           ))}
         </div>
 
-        <div className="modal-body" style={{ minHeight: '280px' }}>
+        <div className="modal-body" style={{ minHeight: '250px' }}>
           {tab === 'general' && <>
             {selectRow('Search Method', 'searchMethod', [['vector', 'Vector'], ['word2vec', 'Word2Vec'], ['hybrid', 'Hybrid']])}
             {opts.searchMethod === 'hybrid' && selectRow('Hybrid Method', 'hybridMethod', [['auto', 'Auto'], ['fast', 'Fast'], ['ensemble', 'Ensemble']])}
@@ -174,7 +159,7 @@ const MSOptionsDialog = ({ open, onClose, onApply, initialOptions }) => {
 
         <div className="modal-footer">
           <button className="btn btn-secondary" onClick={() => setOpts({ ...DEFAULTS })}>Restore Defaults</button>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.375rem' }}>
             <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
             <button className="btn btn-primary" onClick={handleApply}>Apply</button>
           </div>

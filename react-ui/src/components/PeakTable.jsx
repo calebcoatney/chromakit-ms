@@ -1,7 +1,5 @@
 /**
- * PeakTable Component
- *
- * Displays integration results with CSV export and peak selection.
+ * PeakTable Component — integration results with CSV/JSON export and peak selection.
  */
 import React, { useCallback } from 'react';
 
@@ -11,7 +9,6 @@ const PeakTable = ({ integrationResults, onIntegrate, onPeakClick, selectedPeakI
   const { peaks, total_peaks, integrated_areas } = integrationResults;
   const totalArea = integrated_areas?.reduce((sum, a) => sum + a, 0) || 0;
 
-  // CSV export
   const handleExportCSV = useCallback(() => {
     if (!peaks?.length) return;
     const headers = ['Peak #', 'RT (min)', 'Area', '% Area', 'Width (min)', 'Compound'];
@@ -36,7 +33,6 @@ const PeakTable = ({ integrationResults, onIntegrate, onPeakClick, selectedPeakI
     URL.revokeObjectURL(url);
   }, [peaks, totalArea]);
 
-  // JSON export
   const handleExportJSON = useCallback(() => {
     if (!peaks?.length) return;
     const json = JSON.stringify({ total_peaks, peaks }, null, 2);
@@ -51,75 +47,60 @@ const PeakTable = ({ integrationResults, onIntegrate, onPeakClick, selectedPeakI
 
   return (
     <div className="card">
-      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-        <h2>📊 Peak Integration Results</h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.85rem' }}>
-          <span style={{ color: 'var(--text-secondary)' }}>
-            {total_peaks} peaks · Total: {totalArea.toFixed(1)}
-          </span>
-          <button className="btn btn-sm btn-secondary" onClick={handleExportCSV} title="Export CSV">📄 CSV</button>
-          <button className="btn btn-sm btn-secondary" onClick={handleExportJSON} title="Export JSON">📋 JSON</button>
+      <div className="card-header">
+        <h2>Integration Results</h2>
+        <div className="card-header-meta">
+          <span>{total_peaks} peaks &middot; Total: {totalArea.toFixed(1)}</span>
+          <button className="btn btn-sm btn-secondary" onClick={handleExportCSV} title="Export CSV">CSV</button>
+          <button className="btn btn-sm btn-secondary" onClick={handleExportJSON} title="Export JSON">JSON</button>
         </div>
       </div>
-      <div className="card-body" style={{ padding: 0 }}>
-        <div style={{ overflowX: 'auto', maxHeight: '400px' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead style={{ position: 'sticky', top: 0, background: '#f7fafc', borderBottom: '2px solid var(--border-color)' }}>
-              <tr>
-                <th style={thStyle}>#</th>
-                <th style={thStyle}>RT (min)</th>
-                <th style={thStyle}>Area</th>
-                <th style={thStyle}>% Area</th>
-                <th style={thStyle}>Width</th>
-                <th style={thStyle}>Compound</th>
-              </tr>
-            </thead>
-            <tbody>
-              {peaks?.length > 0 ? peaks.map((peak, i) => {
-                const pct = totalArea > 0 ? ((peak.area / totalArea) * 100).toFixed(2) : '0.00';
-                const isSelected = selectedPeakIndex === i;
-                return (
-                  <tr key={i}
-                    onClick={() => onPeakClick?.(i)}
-                    style={{
-                      borderBottom: '1px solid var(--border-color)',
-                      backgroundColor: isSelected ? '#ebf8ff' : 'transparent',
-                      cursor: onPeakClick ? 'pointer' : 'default',
-                      transition: 'background-color 0.15s',
-                    }}
-                    onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.backgroundColor = '#f7fafc'; }}
-                    onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                  >
-                    <td style={tdStyle}>{peak.peak_number || i + 1}</td>
-                    <td style={tdStyle}>{peak.retention_time?.toFixed(3) ?? 'N/A'}</td>
-                    <td style={tdStyle}>{peak.area?.toFixed(2) ?? 'N/A'}</td>
-                    <td style={tdStyle}>{pct}%</td>
-                    <td style={tdStyle}>{peak.width?.toFixed(4) ?? 'N/A'}</td>
-                    <td style={tdStyle}>{peak.match_name || peak.compound_id || '—'}</td>
-                  </tr>
-                );
-              }) : (
-                <tr>
-                  <td colSpan="6" style={{ ...tdStyle, textAlign: 'center', padding: '2rem' }}>
-                    <span className="text-muted">No peaks detected</span>
-                  </td>
+      <div style={{ overflowX: 'auto', maxHeight: '350px' }}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>RT (min)</th>
+              <th>Area</th>
+              <th>% Area</th>
+              <th>Width</th>
+              <th>Compound</th>
+            </tr>
+          </thead>
+          <tbody>
+            {peaks?.length > 0 ? peaks.map((peak, i) => {
+              const pct = totalArea > 0 ? ((peak.area / totalArea) * 100).toFixed(2) : '0.00';
+              const isSelected = selectedPeakIndex === i;
+              return (
+                <tr key={i}
+                  className={`clickable${isSelected ? ' selected' : ''}`}
+                  onClick={() => onPeakClick?.(i)}
+                >
+                  <td>{peak.peak_number || i + 1}</td>
+                  <td>{peak.retention_time?.toFixed(3) ?? 'N/A'}</td>
+                  <td>{peak.area?.toFixed(2) ?? 'N/A'}</td>
+                  <td>{pct}%</td>
+                  <td>{peak.width?.toFixed(4) ?? 'N/A'}</td>
+                  <td>{peak.match_name || peak.compound_id || '\u2014'}</td>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div style={{ padding: '0.75rem 1rem', borderTop: '1px solid var(--border-color)' }}>
-          <button className="btn btn-success" onClick={onIntegrate} disabled={disabled} style={{ width: '100%' }}>
-            {disabled ? '⏳ Integrating...' : '🔄 Re-integrate Peaks'}
-          </button>
-        </div>
+              );
+            }) : (
+              <tr>
+                <td colSpan="6" className="text-center text-muted" style={{ padding: '1.5rem' }}>
+                  No peaks detected
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ padding: '0.5rem 0.75rem', borderTop: '1px solid var(--border-color)' }}>
+        <button className="btn btn-success full-width" onClick={onIntegrate} disabled={disabled}>
+          {disabled ? 'Integrating...' : 'Re-integrate'}
+        </button>
       </div>
     </div>
   );
 };
-
-const thStyle = { padding: '0.6rem 0.75rem', textAlign: 'left', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-color)' };
-const tdStyle = { padding: '0.5rem 0.75rem', fontSize: '0.85rem', color: 'var(--text-color)' };
 
 export default PeakTable;

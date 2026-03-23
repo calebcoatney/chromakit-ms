@@ -1,9 +1,5 @@
 /**
  * ExportSettingsDialog — configure export triggers and file formats.
- *
- * Props:
- *   open (bool)
- *   onClose ()
  */
 import React, { useState, useEffect } from 'react';
 
@@ -32,9 +28,8 @@ const CSV_FORMATS = [
 ];
 
 function loadSettings() {
-  try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
-  } catch { return { ...DEFAULTS }; }
+  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
+  catch { return { ...DEFAULTS }; }
 }
 
 function persistSettings(s) {
@@ -52,30 +47,26 @@ const ExportSettingsDialog = ({ open, onClose }) => {
 
   const update = (key, val) => setSettings(prev => ({ ...prev, [key]: val }));
 
-  const handleSave = () => {
-    persistSettings(settings);
-    onClose();
-  };
-
+  const handleSave = () => { persistSettings(settings); onClose(); };
   const handleRestore = () => setSettings({ ...DEFAULTS });
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h3>📁 Export Settings</h3>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <h3>Export Settings</h3>
+          <button className="modal-close" onClick={onClose}>&times;</button>
         </div>
         <div className="modal-body">
           <h4>Auto-Export Triggers</h4>
-          <div style={{ display: 'grid', gap: '0.4rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'grid', gap: '0.3rem', marginBottom: '0.75rem' }}>
             {[
               ['afterIntegration', 'After Integration'],
               ['afterMsSearch', 'After MS Search'],
               ['afterAssignment', 'After Assignment'],
               ['afterBatch', 'After Batch Processing'],
             ].map(([key, label]) => (
-              <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+              <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', cursor: 'pointer', fontSize: '0.8rem' }}>
                 <input type="checkbox" checked={settings[key]} onChange={e => update(key, e.target.checked)} />
                 {label}
               </label>
@@ -83,12 +74,12 @@ const ExportSettingsDialog = ({ open, onClose }) => {
           </div>
 
           <h4>Export Formats</h4>
-          <div style={{ display: 'grid', gap: '0.4rem', marginBottom: '1rem' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+          <div style={{ display: 'grid', gap: '0.3rem', marginBottom: '0.75rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', cursor: 'pointer', fontSize: '0.8rem' }}>
               <input type="checkbox" checked={settings.jsonEnabled} onChange={e => update('jsonEnabled', e.target.checked)} />
               JSON
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', cursor: 'pointer', fontSize: '0.8rem' }}>
               <input type="checkbox" checked={settings.csvEnabled} onChange={e => update('csvEnabled', e.target.checked)} />
               CSV
             </label>
@@ -96,14 +87,14 @@ const ExportSettingsDialog = ({ open, onClose }) => {
 
           <h4>Filename Formats</h4>
           <div className="form-group">
-            <label>JSON Filename</label>
+            <label className="form-label">JSON Filename</label>
             <select className="form-control" value={settings.jsonFilenameFormat}
               onChange={e => update('jsonFilenameFormat', e.target.value)}>
               {JSON_FORMATS.map(f => <option key={f} value={f}>{f}</option>)}
             </select>
           </div>
           <div className="form-group">
-            <label>CSV Filename</label>
+            <label className="form-label">CSV Filename</label>
             <select className="form-control" value={settings.csvFilenameFormat}
               onChange={e => update('csvFilenameFormat', e.target.value)}>
               {CSV_FORMATS.map(f => <option key={f} value={f}>{f}</option>)}
@@ -112,7 +103,7 @@ const ExportSettingsDialog = ({ open, onClose }) => {
         </div>
         <div className="modal-footer">
           <button className="btn btn-secondary" onClick={handleRestore}>Restore Defaults</button>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.375rem' }}>
             <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
             <button className="btn btn-primary" onClick={handleSave}>Save</button>
           </div>

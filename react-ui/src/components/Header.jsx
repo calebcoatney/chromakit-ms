@@ -1,7 +1,5 @@
 /**
- * Header Component
- *
- * App title, API status, and theme toggle.
+ * Header Component — slim app bar with title, API status, and theme toggle.
  */
 import React, { useState, useEffect } from 'react';
 
@@ -17,34 +15,19 @@ const Header = ({ apiStatus }) => {
 
   return (
     <header className="header">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h1>🧪 ChromaKit-MS</h1>
-          <p>GC-MS Data Analysis Platform</p>
+      <span className="header-title">ChromaKit-MS</span>
+      <div className="header-actions">
+        <div className={`status-indicator ${apiStatus?.connected ? 'success' : 'error'}`}>
+          <span className={`status-dot ${apiStatus?.connected ? 'success' : 'error'}`} />
+          {apiStatus?.connected ? 'Connected' : 'Disconnected'}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <button
-            onClick={() => setDark(!dark)}
-            style={{
-              background: 'rgba(255,255,255,0.2)',
-              border: '1px solid rgba(255,255,255,0.3)',
-              borderRadius: '6px',
-              padding: '0.4rem 0.75rem',
-              color: 'white',
-              cursor: 'pointer',
-              fontSize: '0.85rem',
-            }}
-            title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {dark ? '☀️ Light' : '🌙 Dark'}
-          </button>
-          {apiStatus && (
-            <div className={`status-indicator ${apiStatus.connected ? 'success' : 'error'}`}>
-              <span className={`status-dot ${apiStatus.connected ? 'success' : 'error'}`}></span>
-              {apiStatus.connected ? 'API Connected' : 'API Disconnected'}
-            </div>
-          )}
-        </div>
+        <button
+          className="theme-toggle"
+          onClick={() => setDark(!dark)}
+          title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {dark ? 'Light' : 'Dark'}
+        </button>
       </div>
     </header>
   );

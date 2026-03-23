@@ -208,6 +208,23 @@ export async function saveAssignment(
   });
 }
 
+// ─── Scaling Factors ────────────────────────────────────────────────
+
+export async function setScalingFactors(
+  signalFactor: number,
+  areaFactor: number
+): Promise<void> {
+  await api.post('/scaling', {
+    signal_factor: signalFactor,
+    area_factor: areaFactor,
+  });
+}
+
+export async function getScalingFactors(): Promise<ScalingFactors> {
+  const { data } = await api.get('/scaling');
+  return data;
+}
+
 // ─── MS Baseline Correction ─────────────────────────────────────────
 
 export async function correctMSBaseline(

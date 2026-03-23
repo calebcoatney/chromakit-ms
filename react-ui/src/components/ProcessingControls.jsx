@@ -8,6 +8,45 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 
+/**
+ * A text input that displays numbers in scientific notation (e.g. 1e5)
+ * and commits the parsed value on blur or Enter.
+ */
+const SciInput = ({ value, onChange, ...props }) => {
+  const format = (v) => {
+    if (v == null || v === 0) return '0';
+    if (Math.abs(v) >= 1000 || (Math.abs(v) > 0 && Math.abs(v) < 0.01)) {
+      return v.toExponential().replace(/\.?0+e/, 'e').replace('e+', 'e');
+    }
+    return String(v);
+  };
+  const [text, setText] = useState(() => format(value));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setText(format(value));
+  }, [value, focused]);
+
+  const commit = () => {
+    const v = parseFloat(text);
+    if (!isNaN(v) && v >= 0) onChange(v);
+    else setText(format(value));
+  };
+
+  return (
+    <input
+      type="text"
+      className="form-control"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => { setFocused(false); commit(); }}
+      onKeyDown={(e) => { if (e.key === 'Enter') { e.target.blur(); } }}
+      {...props}
+    />
+  );
+};
+
 const LAM_METHODS = new Set(['asls', 'airpls', 'arpls', 'mixture_model', 'irsqr']);
 
 const ProcessingControls = ({ onParametersChange, disabled }) => {
@@ -87,7 +126,6 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
 
   const ensureOdd = (v) => (v % 2 === 0 ? v + 1 : v);
 
-  // Computed
   const methodUsesLambda = LAM_METHODS.has(params.baseline.method);
   const isFastchrom = params.baseline.method === 'fastchrom';
   const lambdaExponent = Math.round(Math.log10(params.baseline.lambda));
@@ -97,12 +135,10 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
 
   // Range filter helpers
   const addRangeFilter = () => {
-    const current = [...params.peaks.range_filters, [0, 0]];
-    updateSection('peaks', { range_filters: current });
+    updateSection('peaks', { range_filters: [...params.peaks.range_filters, [0, 0]] });
   };
   const removeRangeFilter = (idx) => {
-    const current = params.peaks.range_filters.filter((_, i) => i !== idx);
-    updateSection('peaks', { range_filters: current });
+    updateSection('peaks', { range_filters: params.peaks.range_filters.filter((_, i) => i !== idx) });
   };
   const updateRangeFilter = (idx, pos, value) => {
     const current = [...params.peaks.range_filters];
@@ -113,12 +149,10 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
 
   // Peak group helpers
   const addPeakGroup = () => {
-    const current = [...params.integration.peak_groups, [0, 0]];
-    updateSection('integration', { peak_groups: current });
+    updateSection('integration', { peak_groups: [...params.integration.peak_groups, [0, 0]] });
   };
   const removePeakGroup = (idx) => {
-    const current = params.integration.peak_groups.filter((_, i) => i !== idx);
-    updateSection('integration', { peak_groups: current });
+    updateSection('integration', { peak_groups: params.integration.peak_groups.filter((_, i) => i !== idx) });
   };
   const updatePeakGroup = (idx, pos, value) => {
     const current = [...params.integration.peak_groups];
@@ -129,12 +163,10 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
 
   // Break point helpers
   const addBreakPoint = () => {
-    const bp = [...params.baseline.break_points, { time: 0, tolerance: 0.5 }];
-    updateSection('baseline', { break_points: bp });
+    updateSection('baseline', { break_points: [...params.baseline.break_points, { time: 0, tolerance: 0.5 }] });
   };
   const removeBreakPoint = (idx) => {
-    const bp = params.baseline.break_points.filter((_, i) => i !== idx);
-    updateSection('baseline', { break_points: bp });
+    updateSection('baseline', { break_points: params.baseline.break_points.filter((_, i) => i !== idx) });
   };
   const updateBreakPoint = (idx, key, value) => {
     const bp = [...params.baseline.break_points];
@@ -144,12 +176,10 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
 
   // Deconvolution window helpers
   const addDeconvWindow = () => {
-    const w = [...params.deconvolution.windows, [0, 0]];
-    updateSection('deconvolution', { windows: w });
+    updateSection('deconvolution', { windows: [...params.deconvolution.windows, [0, 0]] });
   };
   const removeDeconvWindow = (idx) => {
-    const w = params.deconvolution.windows.filter((_, i) => i !== idx);
-    updateSection('deconvolution', { windows: w });
+    updateSection('deconvolution', { windows: params.deconvolution.windows.filter((_, i) => i !== idx) });
   };
   const updateDeconvWindow = (idx, pos, value) => {
     const w = [...params.deconvolution.windows];
@@ -172,20 +202,20 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
   };
 
   return (
-    <div style={{ padding: '0.75rem' }}>
+    <div style={{ padding: '0.5rem' }}>
 
-      {/* ─── SIGNAL SMOOTHING ─── */}
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>Signal Smoothing</legend>
+      {/* Signal Smoothing */}
+      <fieldset className="param-fieldset">
+        <legend className="param-legend">Signal Smoothing</legend>
 
-        <div className="form-check mb-2">
+        <div className="form-check">
           <input type="checkbox" id="smoothing-enabled"
             checked={params.smoothing.enabled}
             onChange={(e) => updateSection('smoothing', { enabled: e.target.checked })} />
-          <label htmlFor="smoothing-enabled" className="form-label" style={{ marginBottom: 0 }}>Enable</label>
+          <label htmlFor="smoothing-enabled">Enable</label>
         </div>
 
-        <div style={{ opacity: params.smoothing.enabled ? 1 : 0.4, pointerEvents: params.smoothing.enabled ? 'auto' : 'none' }}>
+        <div className={params.smoothing.enabled ? '' : 'param-disabled'}>
           <div className="form-group">
             <label className="form-label">Method</label>
             <select className="form-control" value={params.smoothing.method}
@@ -195,10 +225,10 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
             </select>
           </div>
 
-          <div className="form-check mb-2">
+          <div className="form-check">
             <input type="checkbox" id="median-enabled" checked={params.smoothing.median_enabled}
               onChange={(e) => updateSection('smoothing', { median_enabled: e.target.checked })} />
-            <label htmlFor="median-enabled" className="form-label" style={{ marginBottom: 0 }}>Median Pre-Filter</label>
+            <label htmlFor="median-enabled">Median Pre-Filter</label>
           </div>
           {params.smoothing.median_enabled && (
             <div className="form-group">
@@ -245,35 +275,35 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
         </div>
       </fieldset>
 
-      {/* ─── BASELINE CORRECTION ─── */}
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>Baseline Correction</legend>
+      {/* Baseline Correction */}
+      <fieldset className="param-fieldset">
+        <legend className="param-legend">Baseline Correction</legend>
 
-        <div className="form-check mb-2">
+        <div className="form-check">
           <input type="checkbox" id="baseline-show-corrected" checked={params.baseline.show_corrected}
             onChange={(e) => updateSection('baseline', { show_corrected: e.target.checked })} />
-          <label htmlFor="baseline-show-corrected" className="form-label" style={{ marginBottom: 0 }}>Show Corrected Signal</label>
+          <label htmlFor="baseline-show-corrected">Show Corrected Signal</label>
         </div>
 
         <div className="form-group">
           <label className="form-label">Algorithm</label>
           <select className="form-control" value={params.baseline.method}
             onChange={(e) => updateSection('baseline', { method: e.target.value })}>
-            <option value="asls">ASLS – Asymmetric Least Squares</option>
-            <option value="arpls">ARPLS – Asymmetrically Reweighted</option>
-            <option value="airpls">AirPLS – Adaptive Iteratively Reweighted</option>
-            <option value="imodpoly">IModPoly – Improved Modified Polynomial</option>
-            <option value="modpoly">ModPoly – Modified Polynomial</option>
-            <option value="snip">SNIP – Statistics-sensitive Non-linear</option>
-            <option value="mixture_model">Mixture Model (spline)</option>
-            <option value="irsqr">IRSQR – Reweighted Spline Quantile</option>
+            <option value="asls">ASLS</option>
+            <option value="arpls">ARPLS</option>
+            <option value="airpls">AirPLS</option>
+            <option value="imodpoly">IModPoly</option>
+            <option value="modpoly">ModPoly</option>
+            <option value="snip">SNIP</option>
+            <option value="mixture_model">Mixture Model</option>
+            <option value="irsqr">IRSQR</option>
             <option value="fastchrom">FastChrom</option>
           </select>
         </div>
 
         {methodUsesLambda && (
           <div className="form-group">
-            <label className="form-label">Lambda (λ): 10<sup>{lambdaExponent}</sup></label>
+            <label className="form-label">&lambda;: 10<sup>{lambdaExponent}</sup></label>
             <input type="range" className="form-control" min="2" max="12" step="1"
               value={lambdaExponent}
               onChange={(e) => updateSection('baseline', { lambda: Math.pow(10, parseInt(e.target.value)) })} />
@@ -302,26 +332,22 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
         )}
 
         {/* Break points */}
-        <div style={{ marginTop: '0.5rem' }}>
-          <span style={{ cursor: 'pointer', fontSize: '0.85rem', fontWeight: 500 }}
-            onClick={() => setShowBreakPoints(!showBreakPoints)}>
-            {showBreakPoints ? '▼' : '▶'} Break Points
+        <div className="mt-1">
+          <span className="param-legend-toggle" onClick={() => setShowBreakPoints(!showBreakPoints)}>
+            {showBreakPoints ? '\u25BC' : '\u25B6'} Break Points
           </span>
           {showBreakPoints && (
-            <div style={{ marginTop: '0.5rem' }}>
-              <div className="text-muted mb-2" style={{ fontSize: '0.75rem' }}>
-                Segment the baseline at specific time points.
-              </div>
+            <div className="mt-1">
+              <div className="form-hint mb-1">Segment the baseline at specific time points.</div>
               {params.baseline.break_points.map((bp, idx) => (
-                <div key={idx} style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem', alignItems: 'center' }}>
-                  <input type="number" className="form-control" style={{ width: '70px' }}
-                    step="0.1" value={bp.time} placeholder="Time"
+                <div key={idx} className="inline-row">
+                  <input type="number" className="form-control" step="0.1" value={bp.time} placeholder="Time"
                     onChange={(e) => updateBreakPoint(idx, 'time', e.target.value)} />
-                  <span style={{ fontSize: '0.75rem' }}>±</span>
-                  <input type="number" className="form-control" style={{ width: '60px' }}
+                  <span className="text-muted">&plusmn;</span>
+                  <input type="number" className="form-control" style={{ width: '55px' }}
                     step="0.1" value={bp.tolerance} placeholder="Tol"
                     onChange={(e) => updateBreakPoint(idx, 'tolerance', e.target.value)} />
-                  <button className="btn btn-sm btn-danger" onClick={() => removeBreakPoint(idx)}>✕</button>
+                  <button className="btn btn-sm btn-danger" onClick={() => removeBreakPoint(idx)}>&times;</button>
                 </div>
               ))}
               <button className="btn btn-sm btn-secondary" onClick={addBreakPoint}>+ Add</button>
@@ -330,17 +356,17 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
         </div>
       </fieldset>
 
-      {/* ─── PEAK DETECTION ─── */}
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>Peak Detection</legend>
+      {/* Peak Detection */}
+      <fieldset className="param-fieldset">
+        <legend className="param-legend">Peak Detection</legend>
 
-        <div className="form-check mb-2">
+        <div className="form-check">
           <input type="checkbox" id="peaks-enabled" checked={params.peaks.enabled}
             onChange={(e) => updateSection('peaks', { enabled: e.target.checked })} />
-          <label htmlFor="peaks-enabled" className="form-label" style={{ marginBottom: 0 }}>Enable</label>
+          <label htmlFor="peaks-enabled">Enable</label>
         </div>
 
-        <div style={{ opacity: params.peaks.enabled ? 1 : 0.4, pointerEvents: params.peaks.enabled ? 'auto' : 'none' }}>
+        <div className={params.peaks.enabled ? '' : 'param-disabled'}>
           <div className="form-group">
             <label className="form-label">Mode</label>
             <select className="form-control" value={params.peaks.mode}
@@ -352,66 +378,57 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
 
           <div className="form-group">
             <label className="form-label">Min Prominence</label>
-            <input type="text" className="form-control" value={params.peaks.min_prominence}
-              onChange={(e) => {
-                const v = parseFloat(e.target.value);
-                if (!isNaN(v) && v >= 0) updateSection('peaks', { min_prominence: v });
-              }} placeholder="e.g. 1e5" />
+            <SciInput value={params.peaks.min_prominence}
+              onChange={(v) => updateSection('peaks', { min_prominence: v })}
+              placeholder="e.g. 1e5" />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+          <div className="grid-2">
             <div className="form-group">
               <label className="form-label">Min Height</label>
-              <input type="text" className="form-control" value={params.peaks.min_height}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  if (!isNaN(v) && v >= 0) updateSection('peaks', { min_height: v });
-                }} placeholder="0" />
+              <SciInput value={params.peaks.min_height}
+                onChange={(v) => updateSection('peaks', { min_height: v })}
+                placeholder="0" />
             </div>
             <div className="form-group">
               <label className="form-label">Min Width</label>
-              <input type="text" className="form-control" value={params.peaks.min_width}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  if (!isNaN(v) && v >= 0) updateSection('peaks', { min_width: v });
-                }} placeholder="0" />
+              <SciInput value={params.peaks.min_width}
+                onChange={(v) => updateSection('peaks', { min_width: v })}
+                placeholder="0" />
             </div>
           </div>
 
           {/* Deconvolution controls */}
           {isDeconv && (
-            <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: 'var(--hover-bg)', borderRadius: '6px' }}>
+            <div className="param-subsection">
               <div className="form-group">
                 <label className="form-label">Splitting Method</label>
                 <select className="form-control" value={params.deconvolution.splitting_method}
                   onChange={(e) => updateSection('deconvolution', { splitting_method: e.target.value })}>
                   <option value="geometric">Geometric</option>
-                  <option value="emg">EMG (Exponentially Modified Gaussian)</option>
+                  <option value="emg">EMG</option>
                 </select>
               </div>
 
-              {/* Deconv windows */}
-              <div className="text-muted mb-1" style={{ fontSize: '0.75rem' }}>Deconvolution Windows (optional)</div>
+              <div className="form-hint mb-1">Deconvolution Windows (optional)</div>
               {params.deconvolution.windows.map((w, idx) => (
-                <div key={idx} style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem', alignItems: 'center' }}>
-                  <input type="number" className="form-control" style={{ width: '70px' }}
-                    step="0.1" value={w[0]} onChange={(e) => updateDeconvWindow(idx, 0, e.target.value)} />
-                  <span>–</span>
-                  <input type="number" className="form-control" style={{ width: '70px' }}
-                    step="0.1" value={w[1]} onChange={(e) => updateDeconvWindow(idx, 1, e.target.value)} />
-                  <button className="btn btn-sm btn-danger" onClick={() => removeDeconvWindow(idx)}>✕</button>
+                <div key={idx} className="inline-row">
+                  <input type="number" className="form-control" step="0.1" value={w[0]}
+                    onChange={(e) => updateDeconvWindow(idx, 0, e.target.value)} />
+                  <span className="text-muted">&ndash;</span>
+                  <input type="number" className="form-control" step="0.1" value={w[1]}
+                    onChange={(e) => updateDeconvWindow(idx, 1, e.target.value)} />
+                  <button className="btn btn-sm btn-danger" onClick={() => removeDeconvWindow(idx)}>&times;</button>
                 </div>
               ))}
-              <button className="btn btn-sm btn-secondary" onClick={addDeconvWindow} style={{ marginBottom: '0.5rem' }}>+ Add Window</button>
+              <button className="btn btn-sm btn-secondary mb-2" onClick={addDeconvWindow}>+ Add Window</button>
 
-              {/* Advanced deconv */}
               <div>
-                <span style={{ cursor: 'pointer', fontSize: '0.8rem', fontWeight: 500 }}
-                  onClick={() => setShowDeconvAdvanced(!showDeconvAdvanced)}>
-                  {showDeconvAdvanced ? '▼' : '▶'} Advanced
+                <span className="param-legend-toggle" onClick={() => setShowDeconvAdvanced(!showDeconvAdvanced)}>
+                  {showDeconvAdvanced ? '\u25BC' : '\u25B6'} Advanced
                 </span>
                 {showDeconvAdvanced && (
-                  <div style={{ marginTop: '0.5rem' }}>
+                  <div className="mt-1">
                     <div className="form-group">
                       <label className="form-label">Heatmap Threshold: {params.deconvolution.heatmap_threshold}</label>
                       <input type="range" className="form-control" min="0.10" max="0.50" step="0.02"
@@ -439,7 +456,7 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
                     {isEMG && (
                       <>
                         <div className="form-group">
-                          <label className="form-label">μ Bound Factor: {params.deconvolution.mu_bound_factor}</label>
+                          <label className="form-label">&mu; Bound Factor: {params.deconvolution.mu_bound_factor}</label>
                           <input type="range" className="form-control" min="0.5" max="3.0" step="0.1"
                             value={params.deconvolution.mu_bound_factor}
                             onChange={(e) => updateSection('deconvolution', { mu_bound_factor: parseFloat(e.target.value) })} />
@@ -451,7 +468,7 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
                             onChange={(e) => updateSection('deconvolution', { fat_threshold_frac: parseFloat(e.target.value) })} />
                         </div>
                         <div className="form-group">
-                          <label className="form-label">Dedup σ Factor: {params.deconvolution.dedup_sigma_factor}</label>
+                          <label className="form-label">Dedup &sigma; Factor: {params.deconvolution.dedup_sigma_factor}</label>
                           <input type="range" className="form-control" min="0" max="2.0" step="0.1"
                             value={params.deconvolution.dedup_sigma_factor}
                             onChange={(e) => updateSection('deconvolution', { dedup_sigma_factor: parseFloat(e.target.value) })} />
@@ -475,75 +492,69 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
         </div>
       </fieldset>
 
-      {/* ─── NEGATIVE PEAKS ─── */}
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>
-          <span style={{ cursor: 'pointer' }} onClick={() => setShowNegativePeaks(!showNegativePeaks)}>
-            {showNegativePeaks ? '▼' : '▶'} Negative Peaks
+      {/* Negative Peaks */}
+      <fieldset className="param-fieldset">
+        <legend className="param-legend">
+          <span className="param-legend-toggle" onClick={() => setShowNegativePeaks(!showNegativePeaks)}>
+            {showNegativePeaks ? '\u25BC' : '\u25B6'} Negative Peaks
           </span>
         </legend>
         {showNegativePeaks && (
           <>
-            <div className="form-check mb-2">
+            <div className="form-check">
               <input type="checkbox" id="neg-peaks-enabled" checked={params.negative_peaks.enabled}
                 onChange={(e) => updateSection('negative_peaks', { enabled: e.target.checked })} />
-              <label htmlFor="neg-peaks-enabled" className="form-label" style={{ marginBottom: 0 }}>Enable</label>
+              <label htmlFor="neg-peaks-enabled">Enable</label>
             </div>
             {params.negative_peaks.enabled && (
               <div className="form-group">
                 <label className="form-label">Min Prominence</label>
-                <input type="text" className="form-control" value={params.negative_peaks.min_prominence}
-                  onChange={(e) => {
-                    const v = parseFloat(e.target.value);
-                    if (!isNaN(v) && v >= 0) updateSection('negative_peaks', { min_prominence: v });
-                  }} />
+                <SciInput value={params.negative_peaks.min_prominence}
+                  onChange={(v) => updateSection('negative_peaks', { min_prominence: v })} />
               </div>
             )}
           </>
         )}
       </fieldset>
 
-      {/* ─── SHOULDER DETECTION ─── */}
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>
-          <span style={{ cursor: 'pointer' }} onClick={() => setShowShoulderAdvanced(!showShoulderAdvanced)}>
-            {showShoulderAdvanced ? '▼' : '▶'} Shoulder Detection
+      {/* Shoulder Detection */}
+      <fieldset className="param-fieldset">
+        <legend className="param-legend">
+          <span className="param-legend-toggle" onClick={() => setShowShoulderAdvanced(!showShoulderAdvanced)}>
+            {showShoulderAdvanced ? '\u25BC' : '\u25B6'} Shoulder Detection
           </span>
         </legend>
         {showShoulderAdvanced && (
           <>
-            <div className="form-check mb-2">
+            <div className="form-check">
               <input type="checkbox" id="shoulders-enabled" checked={params.shoulders.enabled}
                 disabled={isDeconv || !params.peaks.enabled}
                 onChange={(e) => updateSection('shoulders', { enabled: e.target.checked })} />
-              <label htmlFor="shoulders-enabled" className="form-label" style={{ marginBottom: 0 }}>
+              <label htmlFor="shoulders-enabled">
                 Enable {isDeconv && <span className="text-muted">(classical only)</span>}
               </label>
             </div>
 
-            <div style={{ opacity: params.shoulders.enabled && !isDeconv ? 1 : 0.4, pointerEvents: params.shoulders.enabled && !isDeconv ? 'auto' : 'none' }}>
+            <div className={params.shoulders.enabled && !isDeconv ? '' : 'param-disabled'}>
               <div className="form-group">
                 <label className="form-label">Sensitivity: {params.shoulders.sensitivity}</label>
                 <input type="range" className="form-control" min="1" max="10" step="1"
                   value={params.shoulders.sensitivity}
                   onChange={(e) => updateSection('shoulders', { sensitivity: parseInt(e.target.value) })} />
-                <div className="text-muted" style={{ fontSize: '0.7rem' }}>Higher = more detections</div>
+                <div className="form-hint">Higher = more detections</div>
               </div>
-
               <div className="form-group">
                 <label className="form-label">Apex Distance: {params.shoulders.apex_distance}</label>
                 <input type="range" className="form-control" min="5" max="30" step="1"
                   value={params.shoulders.apex_distance}
                   onChange={(e) => updateSection('shoulders', { apex_distance: parseInt(e.target.value) })} />
               </div>
-
               <div className="form-group">
                 <label className="form-label">Window Length: {params.shoulders.window_length}</label>
                 <input type="range" className="form-control" min="5" max="101" step="2"
                   value={params.shoulders.window_length}
                   onChange={(e) => updateSection('shoulders', { window_length: ensureOdd(parseInt(e.target.value)) })} />
               </div>
-
               <div className="form-group">
                 <label className="form-label">Polynomial Order: {params.shoulders.polyorder}</label>
                 <input type="range" className="form-control" min="1" max="5"
@@ -555,28 +566,24 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
         )}
       </fieldset>
 
-      {/* ─── RANGE FILTERS ─── */}
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>
-          <span style={{ cursor: 'pointer' }} onClick={() => setShowRangeFilters(!showRangeFilters)}>
-            {showRangeFilters ? '▼' : '▶'} Range Filters
+      {/* Range Filters */}
+      <fieldset className="param-fieldset">
+        <legend className="param-legend">
+          <span className="param-legend-toggle" onClick={() => setShowRangeFilters(!showRangeFilters)}>
+            {showRangeFilters ? '\u25BC' : '\u25B6'} Range Filters
           </span>
         </legend>
         {showRangeFilters && (
           <>
-            <div className="text-muted mb-2" style={{ fontSize: '0.75rem' }}>
-              Only keep peaks within these time ranges (minutes).
-            </div>
+            <div className="form-hint mb-1">Only keep peaks within these time ranges (minutes).</div>
             {params.peaks.range_filters.map((rf, idx) => (
-              <div key={idx} style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem', alignItems: 'center' }}>
-                <input type="number" className="form-control" style={{ width: '70px' }}
-                  step="0.1" value={rf[0]} placeholder="Start"
+              <div key={idx} className="inline-row">
+                <input type="number" className="form-control" step="0.1" value={rf[0]} placeholder="Start"
                   onChange={(e) => updateRangeFilter(idx, 0, e.target.value)} />
-                <span>–</span>
-                <input type="number" className="form-control" style={{ width: '70px' }}
-                  step="0.1" value={rf[1]} placeholder="End"
+                <span className="text-muted">&ndash;</span>
+                <input type="number" className="form-control" step="0.1" value={rf[1]} placeholder="End"
                   onChange={(e) => updateRangeFilter(idx, 1, e.target.value)} />
-                <button className="btn btn-sm btn-danger" onClick={() => removeRangeFilter(idx)}>✕</button>
+                <button className="btn btn-sm btn-danger" onClick={() => removeRangeFilter(idx)}>&times;</button>
               </div>
             ))}
             <button className="btn btn-sm btn-secondary" onClick={addRangeFilter}>+ Add Range</button>
@@ -584,28 +591,24 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
         )}
       </fieldset>
 
-      {/* ─── PEAK GROUPING ─── */}
-      <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>
-          <span style={{ cursor: 'pointer' }} onClick={() => setShowPeakGrouping(!showPeakGrouping)}>
-            {showPeakGrouping ? '▼' : '▶'} Peak Grouping
+      {/* Peak Grouping */}
+      <fieldset className="param-fieldset">
+        <legend className="param-legend">
+          <span className="param-legend-toggle" onClick={() => setShowPeakGrouping(!showPeakGrouping)}>
+            {showPeakGrouping ? '\u25BC' : '\u25B6'} Peak Grouping
           </span>
         </legend>
         {showPeakGrouping && (
           <>
-            <div className="text-muted mb-2" style={{ fontSize: '0.75rem' }}>
-              Group peaks within time windows into single integration regions.
-            </div>
+            <div className="form-hint mb-1">Group peaks within time windows into single integration regions.</div>
             {params.integration.peak_groups.map((pg, idx) => (
-              <div key={idx} style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem', alignItems: 'center' }}>
-                <input type="number" className="form-control" style={{ width: '70px' }}
-                  step="0.1" value={pg[0]} placeholder="Start"
+              <div key={idx} className="inline-row">
+                <input type="number" className="form-control" step="0.1" value={pg[0]} placeholder="Start"
                   onChange={(e) => updatePeakGroup(idx, 0, e.target.value)} />
-                <span>–</span>
-                <input type="number" className="form-control" style={{ width: '70px' }}
-                  step="0.1" value={pg[1]} placeholder="End"
+                <span className="text-muted">&ndash;</span>
+                <input type="number" className="form-control" step="0.1" value={pg[1]} placeholder="End"
                   onChange={(e) => updatePeakGroup(idx, 1, e.target.value)} />
-                <button className="btn btn-sm btn-danger" onClick={() => removePeakGroup(idx)}>✕</button>
+                <button className="btn btn-sm btn-danger" onClick={() => removePeakGroup(idx)}>&times;</button>
               </div>
             ))}
             <button className="btn btn-sm btn-secondary" onClick={addPeakGroup}>+ Add Group</button>
@@ -615,20 +618,6 @@ const ProcessingControls = ({ onParametersChange, disabled }) => {
 
     </div>
   );
-};
-
-const fieldsetStyle = {
-  border: '1px solid var(--border-color)',
-  borderRadius: '6px',
-  padding: '0.75rem',
-  marginBottom: '0.75rem',
-};
-
-const legendStyle = {
-  fontWeight: 600,
-  fontSize: '0.85rem',
-  padding: '0 0.5rem',
-  color: 'var(--text-color)',
 };
 
 export default ProcessingControls;
