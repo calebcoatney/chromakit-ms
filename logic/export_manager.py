@@ -96,6 +96,17 @@ class ExportManager:
             except Exception:
                 pass
 
+        # Get scaling factors from app
+        scaling_factors = None
+        if self.app:
+            sf = {}
+            if hasattr(self.app, 'signal_factor'):
+                sf['signal_factor'] = self.app.signal_factor
+            if hasattr(self.app, 'area_factor'):
+                sf['area_factor'] = self.app.area_factor
+            if sf:
+                scaling_factors = sf
+
         # Get detector name if not provided
         if detector is None and self.app and hasattr(self.app, 'data_handler'):
             detector = getattr(self.app.data_handler, 'current_detector', 'Unknown')
@@ -107,10 +118,10 @@ class ExportManager:
             try:
                 if is_update:
                     from logic.json_exporter import update_json_with_ms_search_results
-                    success = update_json_with_ms_search_results(peaks, d_path, detector, quantitation_settings, processing_params)
+                    success = update_json_with_ms_search_results(peaks, d_path, detector, quantitation_settings, processing_params, scaling_factors)
                 else:
                     from logic.json_exporter import export_integration_results_to_json
-                    success = export_integration_results_to_json(peaks, d_path, detector, quantitation_settings, processing_params)
+                    success = export_integration_results_to_json(peaks, d_path, detector, quantitation_settings, processing_params, scaling_factors)
                 
                 result['json'] = success
                 if success:

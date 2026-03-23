@@ -275,7 +275,8 @@ class ChromatogramProcessor:
             method=params['baseline']['method'],
             lam=params['baseline']['lambda'],
             fastchrom_params=params['baseline'].get('fastchrom'),
-            break_points=params['baseline'].get('break_points', [])
+            break_points=params['baseline'].get('break_points', []),
+            baseline_offset=params['baseline'].get('baseline_offset', 0.0)
         )
         
         # STEP 3: Find peaks and shoulders using derivative method
@@ -431,7 +432,7 @@ class ChromatogramProcessor:
             print(f"Smoothing failed: {str(e)}")
             return y
     
-    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None):
+    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0):
         """Apply baseline correction using the specified method.
         
         If break_points are provided, the signal is split at each break point
@@ -474,7 +475,8 @@ class ChromatogramProcessor:
                     print(f"  Segment {seg_i + 1}: indices [{seg_start}:{seg_end}], length={len(seg_y)}")
                     # Fit baseline to this segment using the same method/params
                     seg_baseline, seg_corrected = self._apply_baseline_correction_single(
-                        seg_y, method=method, lam=lam, fastchrom_params=fastchrom_params
+                        seg_y, method=method, lam=lam, fastchrom_params=fastchrom_params,
+                        baseline_offset=baseline_offset
                     )
                     baseline_segments.append(seg_baseline)
                     corrected_segments.append(seg_corrected)
@@ -485,9 +487,9 @@ class ChromatogramProcessor:
                     return full_baseline, full_corrected
                 # Fall through to single-segment if something went wrong
         
-        return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params)
+        return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params, baseline_offset=baseline_offset)
     
-    def _apply_baseline_correction_single(self, y, method="asls", lam=1e6, fastchrom_params=None):
+    def _apply_baseline_correction_single(self, y, method="asls", lam=1e6, fastchrom_params=None, baseline_offset=0.0):
         """Apply baseline correction to a single signal segment."""
         # Re-initialize the baseline fitter each time to avoid length mismatch issues
         self.baseline_fitter = Baseline()
@@ -546,6 +548,12 @@ class ChromatogramProcessor:
                 baseline, params = methods[method](y)
                 
             corrected = y - baseline
+            
+            # Apply baseline offset (positive = baseline lower = areas increase)
+            if baseline_offset != 0.0:
+                baseline = baseline - baseline_offset
+                corrected = y - baseline
+            
             print(f"Baseline correction successful!")
             
             return baseline, corrected

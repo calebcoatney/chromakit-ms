@@ -43,6 +43,7 @@ class ParametersFrame(QWidget):
                 'method': 'arpls',  # Changed from 'asls' to 'arpls'
                 'lambda': 1e4,      # Changed from 1e6 to 1e4
                 'asymmetry': 0.01,
+                'baseline_offset': 0.0,
                 'align_tic': False,  # Add alignment option
                 'break_points': [],  # List of {'time': float, 'tolerance': float}
                 'fastchrom': {
@@ -364,6 +365,16 @@ class ParametersFrame(QWidget):
         form_layout.addRow("Lambda (λ):", self.lam_container)
         form_layout.addRow("", self.lam_label)
         
+        # Baseline offset - shifts baseline down (positive) to increase peak areas
+        self.baseline_offset_input = QLineEdit("0.0")
+        self.baseline_offset_input.setToolTip(
+            "Offset subtracted from the computed baseline (in signal units).\n"
+            "Positive values lower the baseline, increasing peak areas.\n"
+            "Useful for matching baseline positions from other integration engines.\n"
+            "Accepts scientific notation (e.g., 1.5e-2)."
+        )
+        self.baseline_offset_input.editingFinished.connect(self._on_baseline_offset_changed)
+        form_layout.addRow("Baseline Offset:", self.baseline_offset_input)
         # FastChrom-specific parameters
         self.fastchrom_container = QWidget()
         fc_layout = QFormLayout(self.fastchrom_container)
@@ -1290,6 +1301,19 @@ class ParametersFrame(QWidget):
         print(f"Lambda changed to 10^{value} = {lambda_value}")
         
         # Emit signal
+        self.parameters_changed.emit(self.current_params)
+    
+    def _on_baseline_offset_changed(self):
+        """Handle baseline offset input change."""
+        text = self.baseline_offset_input.text().strip()
+        try:
+            offset = float(text)
+        except ValueError:
+            # Revert to current value on invalid input
+            offset = self.current_params['baseline'].get('baseline_offset', 0.0)
+            self.baseline_offset_input.setText(str(offset))
+            return
+        self.current_params['baseline']['baseline_offset'] = offset
         self.parameters_changed.emit(self.current_params)
     
     def _on_peaks_toggled(self, state):

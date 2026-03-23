@@ -48,6 +48,7 @@ class BaselineParams(BaseModel):
     method: str = Field(default="arpls", description="asls|arpls|airpls|imodpoly|modpoly|snip|mixture_model|irsqr|fastchrom")
     lambda_: float = Field(default=1e4, alias="lambda")
     asymmetry: float = 0.01
+    baseline_offset: float = Field(default=0.0, description="Offset subtracted from baseline (positive = lower baseline = larger areas)")
     align_tic: bool = Field(default=False, description="Align MS TIC to FID time axis")
     break_points: Optional[List[BreakPoint]] = Field(default=None, description="Break points for segmented baseline")
     fastchrom: Optional[FastchromParams] = None

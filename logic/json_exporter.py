@@ -89,11 +89,11 @@ def scrape_metadata_from_d_directory(d_path: str, detector: str = "FID1A") -> Di
         }
 
 
-def _build_processing_metadata(processing_params: Optional[Dict]) -> Optional[Dict]:
-    """Build a serialisable summary of the processing parameters.
+def _build_processing_metadata(processing_params: Optional[Dict],
+                               scaling_factors: Optional[Dict] = None) -> Optional[Dict]:
+    """Build a serialisable record of the processing parameters.
 
-    Only includes sections that are enabled / non-default so the JSON stays
-    readable.
+    Records every configurable parameter for full reproducibility.
     """
     if not processing_params:
         return None
@@ -102,40 +102,54 @@ def _build_processing_metadata(processing_params: Optional[Dict]) -> Optional[Di
 
     # --- Smoothing ---
     sm = processing_params.get('smoothing', {})
+    sm_info: Dict[str, Any] = {'enabled': sm.get('enabled', False)}
     if sm.get('enabled'):
-        meta['smoothing'] = {
-            'method': sm.get('method', 'savgol'),
-            'window_length': sm.get('window_length'),
-            'poly_order': sm.get('poly_order'),
-        }
+        sm_info['method'] = sm.get('method', 'whittaker')
+        sm_info['median_prefilter'] = sm.get('median_enabled', False)
+        if sm.get('median_enabled'):
+            sm_info['median_kernel'] = sm.get('median_kernel')
+        if sm.get('method') == 'whittaker':
+            sm_info['lambda'] = sm.get('lambda')
+            sm_info['diff_order'] = sm.get('diff_order')
+        elif sm.get('method') == 'savgol':
+            sm_info['savgol_window'] = sm.get('savgol_window')
+            sm_info['savgol_polyorder'] = sm.get('savgol_polyorder')
+    meta['smoothing'] = sm_info
 
     # --- Baseline ---
     bl = processing_params.get('baseline', {})
-    if bl.get('enabled'):
-        bl_info: Dict[str, Any] = {'algorithm': bl.get('algorithm', 'snip')}
-        algo = bl_info['algorithm']
-        if algo == 'snip':
-            bl_info['max_half_window'] = bl.get('max_half_window')
-        elif algo == 'als':
-            bl_info['lam'] = bl.get('lam')
-            bl_info['p'] = bl.get('p')
-        elif algo == 'arpls':
-            bl_info['lam'] = bl.get('lam')
-        elif algo == 'iarpls':
-            bl_info['lam'] = bl.get('lam')
-        meta['baseline'] = bl_info
+    bl_info: Dict[str, Any] = {
+        'method': bl.get('method', 'arpls'),
+        'lambda': bl.get('lambda'),
+        'asymmetry': bl.get('asymmetry'),
+        'baseline_offset': bl.get('baseline_offset', 0.0),
+    }
+    if bl.get('method') == 'fastchrom':
+        fc = bl.get('fastchrom', {})
+        bl_info['fastchrom_half_window'] = fc.get('half_window')
+        bl_info['fastchrom_smooth_half_window'] = fc.get('smooth_half_window')
+    break_points = bl.get('break_points', [])
+    if break_points:
+        bl_info['break_points'] = break_points
+    bl_info['align_tic'] = bl.get('align_tic', False)
+    meta['baseline'] = bl_info
 
     # --- Peak detection ---
     pk = processing_params.get('peaks', {})
+    pk_info: Dict[str, Any] = {
+        'enabled': pk.get('enabled', False),
+    }
     if pk.get('enabled'):
-        pk_info: Dict[str, Any] = {
-            'mode': pk.get('mode', 'classical'),
-            'min_prominence': pk.get('min_prominence'),
-            'min_width': pk.get('min_width'),
-        }
-        meta['peak_detection'] = pk_info
+        pk_info['mode'] = pk.get('mode', 'classical')
+        pk_info['min_prominence'] = pk.get('min_prominence')
+        pk_info['min_height'] = pk.get('min_height')
+        pk_info['min_width'] = pk.get('min_width')
+        range_filters = pk.get('range_filters', [])
+        if range_filters:
+            pk_info['range_filters'] = range_filters
+    meta['peak_detection'] = pk_info
 
-    # --- Deconvolution (only when mode == deconvolution) ---
+    # --- Deconvolution (when mode == deconvolution) ---
     if pk.get('mode') == 'deconvolution':
         dc = processing_params.get('deconvolution', {})
         dc_info: Dict[str, Any] = {
@@ -157,6 +171,33 @@ def _build_processing_metadata(processing_params: Optional[Dict]) -> Optional[Di
             dc_info['dedup_rt_tolerance'] = dc.get('dedup_rt_tolerance')
         meta['deconvolution'] = dc_info
 
+    # --- Negative peaks ---
+    np_params = processing_params.get('negative_peaks', {})
+    np_info: Dict[str, Any] = {'enabled': np_params.get('enabled', False)}
+    if np_params.get('enabled'):
+        np_info['min_prominence'] = np_params.get('min_prominence')
+    meta['negative_peaks'] = np_info
+
+    # --- Shoulder detection ---
+    sh = processing_params.get('shoulders', {})
+    sh_info: Dict[str, Any] = {'enabled': sh.get('enabled', False)}
+    if sh.get('enabled'):
+        sh_info['window_length'] = sh.get('window_length')
+        sh_info['polyorder'] = sh.get('polyorder')
+        sh_info['sensitivity'] = sh.get('sensitivity')
+        sh_info['apex_distance'] = sh.get('apex_distance')
+    meta['shoulders'] = sh_info
+
+    # --- Integration / grouping ---
+    ig = processing_params.get('integration', {})
+    peak_groups = ig.get('peak_groups', [])
+    if peak_groups:
+        meta['integration'] = {'peak_groups': peak_groups}
+
+    # --- Scaling factors (passed separately from app state) ---
+    if scaling_factors:
+        meta['scaling'] = scaling_factors
+
     # Strip None values for cleanliness
     def _strip_none(d):
         return {k: (_strip_none(v) if isinstance(v, dict) else v)
@@ -167,7 +208,8 @@ def _build_processing_metadata(processing_params: Optional[Dict]) -> Optional[Di
 def export_integration_results_to_json(peaks: List[Any], d_path: str,
                                       detector: str = "FID1A",
                                       quantitation_settings: Optional[Dict] = None,
-                                      processing_params: Optional[Dict] = None) -> bool:
+                                      processing_params: Optional[Dict] = None,
+                                      scaling_factors: Optional[Dict] = None) -> bool:
     """
     Export integration results to JSON file with metadata.
 
@@ -197,7 +239,7 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
         }
 
         # Add processing parameters metadata
-        proc_meta = _build_processing_metadata(processing_params)
+        proc_meta = _build_processing_metadata(processing_params, scaling_factors)
         if proc_meta:
             result_data['processing_parameters'] = proc_meta
 
@@ -297,7 +339,8 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
 def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
                                      detector: str = "FID1A",
                                      quantitation_settings: Optional[Dict] = None,
-                                     processing_params: Optional[Dict] = None) -> bool:
+                                     processing_params: Optional[Dict] = None,
+                                     scaling_factors: Optional[Dict] = None) -> bool:
     """
     Update existing JSON file with MS search results.
 
@@ -412,7 +455,7 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
         result_data['peaks'] = updated_peaks
 
         # Add or update processing parameters
-        proc_meta = _build_processing_metadata(processing_params)
+        proc_meta = _build_processing_metadata(processing_params, scaling_factors)
         if proc_meta:
             result_data['processing_parameters'] = proc_meta
 
