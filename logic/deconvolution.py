@@ -41,71 +41,72 @@ def _require_torch():
         )
 
 
-class _ConvBlock1D(nn.Module):
-    """Conv -> BatchNorm -> ReLU  x2"""
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm1d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm1d(out_channels),
-            nn.ReLU(inplace=True),
-        )
-
-    def forward(self, x):
-        return self.block(x)
-
-
-class GCHeatmapUNet(nn.Module):
-    """1D U-Net that maps a normalised chromatogram window → apex heatmap."""
-
-    def __init__(self, in_channels=1, out_channels=1, features=None):
-        super().__init__()
-        if features is None:
-            features = [16, 32, 64, 128]
-        self.encoder = nn.ModuleList()
-        self.decoder = nn.ModuleList()
-        self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
-
-        # Encoder
-        in_c = in_channels
-        for f in features:
-            self.encoder.append(_ConvBlock1D(in_c, f))
-            in_c = f
-
-        # Bottleneck
-        self.bottleneck = _ConvBlock1D(features[-1], features[-1] * 2)
-
-        # Decoder
-        for f in reversed(features):
-            self.decoder.append(
-                nn.ConvTranspose1d(f * 2, f, kernel_size=2, stride=2)
+if _TORCH_AVAILABLE:
+    class _ConvBlock1D(nn.Module):
+        """Conv -> BatchNorm -> ReLU  x2"""
+        def __init__(self, in_channels, out_channels):
+            super().__init__()
+            self.block = nn.Sequential(
+                nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm1d(out_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm1d(out_channels),
+                nn.ReLU(inplace=True),
             )
-            self.decoder.append(_ConvBlock1D(f * 2, f))
 
-        self.final_conv = nn.Sequential(
-            nn.Conv1d(features[0], out_channels, kernel_size=1),
-            nn.Sigmoid(),
-        )
+        def forward(self, x):
+            return self.block(x)
 
-    def forward(self, x):
-        skips = []
-        for down in self.encoder:
-            x = down(x)
-            skips.append(x)
-            x = self.pool(x)
 
-        x = self.bottleneck(x)
-        skips = skips[::-1]
+    class GCHeatmapUNet(nn.Module):
+        """1D U-Net that maps a normalised chromatogram window → apex heatmap."""
 
-        for i in range(0, len(self.decoder), 2):
-            x = self.decoder[i](x)          # upsample
-            x = torch.cat((skips[i // 2], x), dim=1)
-            x = self.decoder[i + 1](x)      # conv block
+        def __init__(self, in_channels=1, out_channels=1, features=None):
+            super().__init__()
+            if features is None:
+                features = [16, 32, 64, 128]
+            self.encoder = nn.ModuleList()
+            self.decoder = nn.ModuleList()
+            self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
 
-        return self.final_conv(x)
+            # Encoder
+            in_c = in_channels
+            for f in features:
+                self.encoder.append(_ConvBlock1D(in_c, f))
+                in_c = f
+
+            # Bottleneck
+            self.bottleneck = _ConvBlock1D(features[-1], features[-1] * 2)
+
+            # Decoder
+            for f in reversed(features):
+                self.decoder.append(
+                    nn.ConvTranspose1d(f * 2, f, kernel_size=2, stride=2)
+                )
+                self.decoder.append(_ConvBlock1D(f * 2, f))
+
+            self.final_conv = nn.Sequential(
+                nn.Conv1d(features[0], out_channels, kernel_size=1),
+                nn.Sigmoid(),
+            )
+
+        def forward(self, x):
+            skips = []
+            for down in self.encoder:
+                x = down(x)
+                skips.append(x)
+                x = self.pool(x)
+
+            x = self.bottleneck(x)
+            skips = skips[::-1]
+
+            for i in range(0, len(self.decoder), 2):
+                x = self.decoder[i](x)          # upsample
+                x = torch.cat((skips[i // 2], x), dim=1)
+                x = self.decoder[i + 1](x)      # conv block
+
+            return self.final_conv(x)
 
 
 # =========================================================================== #

@@ -25,10 +25,8 @@ setup(
         "numpy",
         "scipy",
         "matplotlib",
-        "scipy",
         "pybaselines",
         "rainbow-api",
-        "pybaselines",
         "customtkinter",
         "uvicorn",
         "fastapi",
@@ -37,6 +35,7 @@ setup(
     ],
     extras_require={
         "ms": ["ms-toolkit-nrel"],
+        "deconv": ["torch"],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
