@@ -245,7 +245,7 @@ class ChromatogramProcessor:
             }
         }
     
-    def process(self, x, y, params=None, ms_range=None):
+    def process(self, x, y, params=None, ms_range=None, profile=None):
         """Process chromatogram data with derivative-based peak and shoulder detection.
         
         Args:
@@ -253,9 +253,16 @@ class ChromatogramProcessor:
             y: Y values (intensity)
             params: Processing parameters
             ms_range: Optional tuple of (min_time, max_time) for MS data range
+            profile: Optional SignalProfile for stage gating and defaults
         """
         import numpy as np
         
+        if profile is not None and profile.default_params:
+            merged = dict(profile.default_params)
+            if params:
+                merged.update(params)
+            params = merged
+
         if params is None:
             params = self.default_params
         
@@ -577,7 +584,7 @@ class ChromatogramProcessor:
                 print(f"Fallback baseline also failed: {str(e2)}")
                 return np.zeros_like(y), y
     
-    def integrate_peaks(self, processed_data=None, rt_table=None, chemstation_area_factor=0.0784, ms_data=None, quality_options=None, peak_groups=None):
+    def integrate_peaks(self, processed_data=None, rt_table=None, chemstation_area_factor=0.0784, ms_data=None, quality_options=None, peak_groups=None, profile=None):
         """Integrate peaks in a processed chromatogram.
         
         Args:
@@ -587,6 +594,7 @@ class ChromatogramProcessor:
             ms_data: Optional MS data object for peak quality assessment
             quality_options: Options for peak quality assessment
             peak_groups: Optional list of [start, end] time windows for peak grouping
+            profile: Optional SignalProfile for feature class selection
             
         Returns:
             dict: Dictionary containing integration results
@@ -633,7 +641,8 @@ class ChromatogramProcessor:
             verbose=True,
             ms_data=ms_data,
             quality_options=quality_options,
-            peak_groups=peak_groups
+            peak_groups=peak_groups,
+            profile=profile
         )
         
         return integration_results

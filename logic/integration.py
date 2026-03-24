@@ -291,7 +291,7 @@ class Integrator:
     @staticmethod
     def _apply_peak_grouping(peaks_list, peak_groups, x, y, baseline_y,
                               x_peaks, y_peaks, baseline_peaks,
-                              ret_times, integrated_areas, integration_bounds):
+                              ret_times, integrated_areas, integration_bounds, profile=None):
         """Merge peaks within user-specified group windows into composite peaks.
         
         Args:
@@ -302,11 +302,14 @@ class Integrator:
             baseline_y: Full baseline array
             x_peaks, y_peaks, baseline_peaks: Per-peak data arrays
             ret_times, integrated_areas, integration_bounds: Per-peak summary lists
+            profile: Optional SignalProfile for feature class selection
             
         Returns:
             Tuple of updated (peaks_list, x_peaks, y_peaks, baseline_peaks,
                               ret_times, integrated_areas, integration_bounds)
         """
+        feature_cls = profile.feature_class if (profile is not None and profile.feature_class is not None) else Peak
+
         # Track which peaks get consumed by a group
         consumed_indices = set()
         grouped_peaks = []  # (sort_key, Peak, x_peak, y_peak, baseline_peak)
@@ -351,7 +354,7 @@ class Integrator:
             # Create composite Peak
             width = g_end - g_start
             compound_id = "Group"
-            composite = Peak(
+            composite = feature_cls(
                 compound_id=compound_id,
                 peak_number=0,  # will be re-numbered later
                 retention_time=apex_rt,
@@ -412,7 +415,7 @@ class Integrator:
         return final_peaks, new_x_peaks, new_y_peaks, new_baseline_peaks, new_ret_times, new_areas, new_bounds
     
     @staticmethod
-    def integrate(processed_data, rt_table=None, chemstation_area_factor=0.0784, verbose=True, ms_data=None, quality_options=None, peak_groups=None):
+    def integrate(processed_data, rt_table=None, chemstation_area_factor=0.0784, verbose=True, ms_data=None, quality_options=None, peak_groups=None, profile=None):
         """Integrate peaks in a chromatogram.
         
         Args:
@@ -423,10 +426,12 @@ class Integrator:
             ms_data: Optional MS data object for peak quality assessment
             quality_options: Options for peak quality assessment
             peak_groups: Optional list of [start, end] time windows for peak grouping
+            profile: Optional SignalProfile for feature class selection
             
         Returns:
             dict: Dictionary containing integration results
         """
+        feature_cls = profile.feature_class if (profile is not None and profile.feature_class is not None) else Peak
         # Extract relevant values from the processed data
         x = processed_data['x']
         y = processed_data.get('smoothed_y', processed_data.get('original_y', processed_data.get('corrected_y')))
@@ -743,7 +748,7 @@ class Integrator:
             end_time = x[right_bound]
             width = end_time - start_time
             
-            peak = Peak(compound_id, peak_number, retention_time,
+            peak = feature_cls(compound_id, peak_number, retention_time,
                         integrator, width, area, start_time, end_time,
                         start_index=left_bound, end_index=right_bound)
             
@@ -780,7 +785,8 @@ class Integrator:
                     peaks_list, peak_groups, x, 
                     integration_signal,
                     baseline_y, x_peaks, y_peaks, baseline_peaks, 
-                    ret_times, integrated_areas, integration_bounds
+                    ret_times, integrated_areas, integration_bounds,
+                    profile=profile
                 )
 
         if verbose:
