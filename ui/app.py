@@ -1634,7 +1634,7 @@ class ChromaKitApp(QMainWindow):
         
         for i, peak in enumerate(peaks):
             # Add regular peak data
-            for j, value in enumerate(peak.as_row):
+            for j, value in enumerate(peak.as_row()):
                 item = QTableWidgetItem(str(value))
                 table.setItem(i, j, item)
             
@@ -1692,7 +1692,7 @@ class ChromaKitApp(QMainWindow):
             return
         
         # Create DataFrame from peaks
-        peaks_data = [peak.as_dict for peak in integration_results['peaks']]
+        peaks_data = [peak.as_dict() for peak in integration_results['peaks']]
         df = pd.DataFrame(peaks_data)
         
         # Export to CSV

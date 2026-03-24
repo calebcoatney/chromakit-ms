@@ -204,7 +204,7 @@ async def integrate_peaks(request: IntegrateRequest):
         serialized = serialize_numpy(result)
         peaks_dicts = []
         for peak in result.get('peaks', []):
-            d = peak.as_dict if hasattr(peak, 'as_dict') else peak
+            d = peak.as_dict() if hasattr(peak, 'as_dict') else peak
             peaks_dicts.append(serialize_numpy(d))
 
         return IntegrateResponse(

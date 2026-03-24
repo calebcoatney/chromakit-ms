@@ -3,23 +3,38 @@ from scipy.integrate import simpson
 from scipy.stats import skew
 import pandas as pd
 
-class Peak:
-    """Represents a chromatographic peak with its properties."""
+from logic.feature import Feature
+
+class ChromatographicPeak(Feature):
+    """Chromatographic peak. Subclass of Feature with RT, MS, and quantitation fields.
+
+    All original field names are preserved (retention_time, start_time, etc.).
+    The base Feature.position property is overridden to return retention_time.
+    """
     
     def __init__(self, compound_id, peak_number, retention_time, 
                  integrator, width, area, start_time, end_time,
                  start_index=None, end_index=None):
-        """Initialize a Peak object."""
+        """Initialize a ChromatographicPeak object."""
+        # Initialize Feature base with generic fields
+        super().__init__(
+            feature_id=peak_number,
+            position=retention_time,
+            position_units="min",
+            area=area,
+            width=width,
+            start=start_time,
+            end=end_time,
+            start_index=start_index or 0,
+            end_index=end_index or 0,
+        )
+        # Chromatography-specific fields — names unchanged from original Peak
         self.compound_id = compound_id
         self.peak_number = peak_number
         self.retention_time = retention_time
         self.integrator = integrator
-        self.width = width
-        self.area = area
         self.start_time = start_time
         self.end_time = end_time
-        self.start_index = start_index
-        self.end_index = end_index
         
         # Add MS match properties
         self.compound_name = None
@@ -56,6 +71,10 @@ class Peak:
         self.wt_percent = None  # Weight percentage
     
     @property
+    def position(self) -> float:
+        """Returns retention_time, satisfying the Feature.position interface."""
+        return self.retention_time
+
     def as_row(self):
         """Return peak data as a row for display in a table."""
         return [
@@ -69,7 +88,6 @@ class Peak:
             round(self.end_time, 3)
         ]
     
-    @property
     def as_dict(self):
         """Return a dictionary representation of the peak."""
         result = {
@@ -133,6 +151,12 @@ class Peak:
     def apex_time(self):
         """Get the retention time at the peak apex."""
         return self.retention_time
+
+Peak = ChromatographicPeak  # backward-compatibility alias — no call sites need to change
+
+# Register ChromatographicPeak as the feature_class for gc/gcms profiles
+from logic.signal_profiles import _update_chromatographic_profiles
+_update_chromatographic_profiles(ChromatographicPeak)
 
 class Integrator:
     """Provides functionality for integrating chromatographic peaks."""
@@ -764,7 +788,7 @@ class Integrator:
                 from tabulate import tabulate
                 headers = ['Compound ID', 'Peak #', 'Ret Time',
                          'Integrator', 'Width', 'Area', 'Start Time', 'End Time']
-                print(tabulate([p.as_row for p in peaks_list], headers), end='\n\n')
+                print(tabulate([p.as_row() for p in peaks_list], headers), end='\n\n')
             except ImportError:
                 print("Tabulate package not found. Install with 'pip install tabulate' for better formatting.")
                 # Print in a basic format
