@@ -1,0 +1,406 @@
+================================================================================
+                 CHROMAKIT DESKTOP GUI - FEATURE SUMMARY
+================================================================================
+
+APPLICATION STRUCTURE
+─────────────────────────────────────────────────────────────────────────────
+Main Window (1600x800): ChromaKitApp
+├── Left Panel (250px)     : FileTreeFrame (file browser)
+├── Center Panel (flex)    : PlotFrame + ButtonFrame
+│                            ├── PlotFrame (chromatogram + TIC visualization)
+│                            └── ButtonFrame (Export, Back, Next, Integrate, etc.)
+└── Right Panel (350px)    : Tabbed Widget
+                             ├── Parameters Tab (signal processing controls)
+                             ├── Mass Spectrometry Tab (MS search + results)
+                             ├── RT Table Tab (retention time grouping)
+                             └── Quantitation Tab (Polyarc + IS method)
+
+================================================================================
+MAJOR FEATURES (12 Workflows)
+================================================================================
+
+1. FILE LOADING & NAVIGATION
+   ├─ Open .D directories via file browser
+   ├─ Auto-detect detector channels
+   ├─ Interpolate raw data to 10,000 points
+   ├─ Navigate prev/next samples with Back/Next buttons
+   ├─ Load & display TIC (if MS data present)
+   └─ Status bar shows position (e.g., "1/25 files")
+
+2. SIGNAL PROCESSING (Real-time)
+   ├─ Smoothing Methods: Whittaker, Savitzky-Golay, Median
+   ├─ Baseline Correction: ARPLS, ASLS, AirPLS, FastChrom
+   ├─ Break Points: Manual baseline anchors at specific times
+   ├─ TIC Alignment: Experimental feature
+   ├─ Peak Filtering: Exclude peaks in specific time ranges
+   └─ Live preview as parameters change
+
+3. PEAK INTEGRATION
+   ├─ Peak Detection: Classical (find_peaks) or Deconvolution mode
+   ├─ Positive & Negative Peak Detection
+   ├─ Shoulder Detection (fine structure)
+   ├─ Calculate: Area, Height, Width, Position
+   ├─ Quality Checks: Skewness, Coherence, Saturation detection
+   ├─ RT Matching: Group peaks by RT ranges
+   ├─ Shade integration areas on plot
+   ├─ Auto-export JSON/CSV results
+   └─ Show "View Results" button for detailed review
+
+4. MASS SPECTROMETRY SEARCH
+   ├─ Single Peak Search: Right-click → "Search Library"
+   ├─ Batch Search: "MS Search All" button (all integrated peaks)
+   ├─ Search Methods: Vector, Composite, Hybrid
+   ├─ Extraction: Apex or Apex+Flank
+   ├─ Spectrum Subtraction: Min TIC, weighted subtraction
+   ├─ Similarity Metrics: NIST_GC, Composite
+   ├─ Results: Top N matches (default 5) with scores
+   ├─ Skips Manually Assigned Peaks: Preserves user assignments
+   ├─ Real-time Progress: BatchProgressDialog updates per peak
+   └─ Auto-export with assignments
+
+5. PEAK ASSIGNMENT & EDITING
+   ├─ Manual Assignment: Right-click peak → "Edit Assignment"
+   ├─ Autocomplete: Search library compounds (min 5 chars)
+   ├─ Cross-File Matching: Apply assignment to similar peaks in other files
+   │   ├─ RT Tolerance (±0.05 min default)
+   │   └─ Spectral Similarity (0.7 threshold default)
+   ├─ Spectrum Comparison: View before/after spectra
+   ├─ Auto-update: JSON results updated immediately
+   └─ Manual Assignment Flag: Batch search respects manual picks
+
+6. RETENTION TIME (RT) TABLE
+   ├─ Define RT Ranges: Start time, End time per group
+   ├─ Add/Delete Ranges: Dynamic table editor
+   ├─ Load/Save: Import/export RT tables from file
+   ├─ Apply to Integration: Group peaks by assigned RT range
+   ├─ Notes Field: Optional annotations per range
+   └─ Persist: Saved in JSON results
+
+7. QUANTITATION (Polyarc + Internal Standard)
+   ├─ Internal Standard Selection:
+   │   ├─ Compound name (with MS library search)
+   │   ├─ Formula (auto-filled from library)
+   │   ├─ Molecular Weight (auto-filled)
+   │   ├─ Density (user input)
+   │   └─ Volume Added (µL) (user input)
+   ├─ Sample Preparation:
+   │   ├─ Sample mass (mg)
+   │   ├─ Sample volume (mL)
+   │   └─ Dilution factor
+   ├─ Results: Total carbon (ng), per-compound quantities
+   └─ Persist: Saved with integration results
+
+8. BATCH AUTOMATION (Single Directory)
+   ├─ Process All .D Files: Automatic sequential processing
+   ├─ Workflow per File:
+   │   ├─ Load (10%)
+   │   ├─ Integrate (40%)
+   │   ├─ [Optional] MS Search
+   │   ├─ [Optional] Quantitate
+   │   └─ Export Results
+   ├─ Real-time Progress: AutomationDialog shows all steps
+   ├─ Per-File Progress: Percentage bar + step description
+   ├─ Overall Progress: X of Y files with percentage
+   ├─ Timestamped Log: All operations logged with timestamps
+   ├─ Cancel Anytime: Graceful shutdown
+   ├─ Error Handling: Skip failed files, continue processing
+   └─ Completion Summary: Success/failure counts
+
+9. BATCH MS SEARCH (All Peaks in File)
+   ├─ Search All Integrated Peaks: Single command
+   ├─ Skip Manual Assignments: Preserve user-assigned peaks
+   ├─ Real-time Updates: BatchProgressDialog shows each peak
+   ├─ Per-Peak Results: Match score, compound name, spectrum
+   ├─ Auto-Assign Top Match: Updates peak assignment
+   ├─ Progress Tracking: X of Y peaks searched with percentage
+   ├─ Timestamped Log: All matches logged
+   ├─ Completion Summary: Total matches found
+   └─ Auto-Export: Updated JSON/CSV with new assignments
+
+10. BATCH QUEUE PROCESSING (Multiple Directories)
+    ├─ Setup: BatchJobDialog
+    │   ├─ Add directories (multi-select)
+    │   ├─ Processing options:
+    │   │   ├─ ☑ Peak integration
+    │   │   ├─ ☑ MS search
+    │   │   ├─ ☑ Save JSON
+    │   │   ├─ ☑ Export CSV
+    │   │   └─ ☑ Overwrite existing
+    ├─ Execution: BatchProgressDialog
+    │   ├─ Queue tree: Directory list with status
+    │   ├─ Color-coded Status:
+    │   │   ├─ Gray: Queued
+    │   │   ├─ Blue: Processing
+    │   │   ├─ Green: Completed
+    │   │   ├─ Red: Failed
+    │   │   └─ Orange: Skipped
+    │   ├─ Per-Directory Progress: Percentage bar
+    │   ├─ Overall Progress: X of Y directories
+    │   ├─ Detailed Log: Timestamped per-operation log
+    │   └─ Queue Management (right-click menu):
+    │       ├─ Show Details
+    │       ├─ Skip (queued items)
+    │       ├─ Retry (failed items)
+    │       └─ Remove from Queue
+    └─ Can Add Directories: Add more during processing
+
+11. EXPORT & DATA PERSISTENCE
+    ├─ Auto-Triggers (configurable):
+    │   ├─ After Integration
+    │   ├─ After MS Search
+    │   ├─ After Manual Assignment
+    │   └─ During Batch Processing
+    ├─ Export Formats:
+    │   ├─ JSON: Comprehensive with all metadata
+    │   └─ CSV: RESULTS.CSV for legacy software
+    ├─ Filename Patterns:
+    │   ├─ {notebook} - {detector}.json
+    │   ├─ {sample_id}_results.json
+    │   └─ Customizable patterns
+    ├─ Settings: Persistent via QSettings
+    ├─ Manual Export: "Export" button for on-demand
+    └─ Format Conversion: Tools → JSON ↔ Excel Converter
+
+12. THEME & SETTINGS
+    ├─ Dark/Light Mode Toggle:
+    │   ├─ Updates all UI elements
+    │   ├─ Updates matplotlib color scheme
+    │   ├─ Persists across sessions
+    │   └─ Dark Colors: #23272e background, #4cc2ff plot lines
+    ├─ Detector Selection: Change detector channel per file
+    ├─ Scaling Factors:
+    │   ├─ Signal multiplier (data loading)
+    │   ├─ Area multiplier (integration)
+    │   ├─ Preset manager (save/load configs)
+    │   └─ Match different instrument versions
+    ├─ Parameter Visibility:
+    │   ├─ Show/hide parameter sections
+    │   ├─ Customize for different workflows
+    │   └─ Includes: Smoothing, Baseline, Peaks, Shoulders, etc.
+    └─ All Settings: Persistent via QSettings
+
+================================================================================
+UI COMPONENTS DETAIL
+================================================================================
+
+DIALOGS
+─────────────────────────────────────────────────────────────────────────────
+• DetectorSelectionDialog:     Choose detector channel
+• ExportSettingsDialog:         Configure auto-export triggers & formats
+• ParameterVisibilityDialog:   Show/hide parameter sections
+• ScalingFactorsDialog:         Adjust signal/area factors with presets
+• EditAssignmentDialog:         Assign compound to peak (with cross-file option)
+• BatchJobDialog:               Setup batch queue
+• AutomationDialog:             Show progress during automation
+• BatchProgressDialog:          Manage queue, track multiple directories
+• MSOptionsDialog:              Advanced MS search settings
+• AddToRTTableDialog:           Add peak to RT table
+• RTAssignmentDialog:           Assign peak to RT range
+
+FRAMES (Right-side Tabs)
+─────────────────────────────────────────────────────────────────────────────
+• ParametersFrame:      ~1600 lines
+  ├─ 8 Parameter Groups (scrollable, can hide)
+  ├─ Smoothing, Baseline, Peak Detection, Negatives, Shoulders
+  ├─ Range Filters, Peak Grouping, Deconvolution
+  └─ Real-time update on any change
+
+• MSFrame:              ~1000 lines
+  ├─ Search method selection
+  ├─ Extraction parameters
+  ├─ Results tree (compound + score)
+  ├─ Spectrum viewer
+  ├─ MS baseline correction button
+  └─ Auto-load MSToolkit library
+
+• RTTableFrame:         ~1100 lines
+  ├─ RT range table
+  ├─ Add/delete ranges
+  ├─ Load/save to file
+  ├─ Notes per range
+  └─ Apply during integration
+
+• QuantitationFrame:    ~350 lines
+  ├─ Internal standard info
+  ├─ Sample preparation
+  ├─ Results display
+  ├─ Calculation history
+  └─ Persist in results
+
+FRAMES (Main Area)
+─────────────────────────────────────────────────────────────────────────────
+• PlotFrame:            ~1200 lines
+  ├─ Matplotlib figure (TIC + chromatogram)
+  ├─ Interactive: Click peaks for context menu
+  ├─ Shade integration areas
+  ├─ Highlight selected peak
+  ├─ Context Menu (right-click peak):
+  │   ├─ View Spectrum
+  │   ├─ Search Library
+  │   ├─ Edit Assignment
+  │   ├─ Add to RT Table
+  │   └─ RT Assignment
+  ├─ Navigation toolbar
+  └─ Supports dark/light themes
+
+• ButtonFrame:          ~70 lines
+  ├─ Row 1: Export, Back, Next, Integrate
+  ├─ Row 2: Batch Process All Files, MS Search All
+  └─ Disabled states when no data
+
+• FileTreeFrame:        ~100 lines
+  ├─ File browser
+  ├─ .D directory filter
+  ├─ Double-click to load
+  └─ Open folder button
+
+================================================================================
+BACKGROUND WORKERS (Threading)
+================================================================================
+
+• AutomationWorker (QRunnable)
+  ├─ Batch processes all .D files in directory
+  ├─ Emits: started, file_started, file_progress, log_message, 
+  │         overall_progress, finished, error
+  ├─ Can be cancelled (worker.cancelled = True)
+  └─ Runs in QThreadPool
+
+• BatchSearchWorker (QRunnable)
+  ├─ MS library search on integrated peaks
+  ├─ Emits: started, progress (per peak), finished, error, log_message
+  ├─ Skips manually assigned peaks
+  └─ Runs in QThreadPool
+
+• MSBaselineWorker (QRunnable)
+  ├─ Baseline correction on TIC data
+  ├─ Emits: finished, error
+  └─ Runs in QThreadPool
+
+================================================================================
+KEYBOARD & MOUSE INTERACTIONS
+================================================================================
+
+• Left-Click on Peak:           Show peak info/highlight
+• Right-Click on Peak:          Context menu
+                                ├─ View Spectrum
+                                ├─ Search Library
+                                ├─ Edit Assignment
+                                ├─ Add to RT Table
+                                └─ RT Assignment
+• Double-Click .D File:         Load file
+• Slider/Spinbox Change:        Real-time signal processing
+• Parameter Visibility Dialog:  Toggle sections
+• Batch Directory Right-Click:  Context menu
+                                ├─ Show Details
+                                ├─ Skip / Retry / Remove
+                                └─ Add Directory
+
+================================================================================
+DATA FLOW & STATE MANAGEMENT
+================================================================================
+
+Load File
+  ↓
+[current_x, current_y] = Interpolated data
+[original_x, original_y] = Raw data
+  ↓
+Adjust Parameters (smoothing, baseline, peak detection)
+  ↓
+process_and_display()
+  ├─ Apply Smoothing
+  ├─ Apply Baseline Correction
+  ├─ Apply Deconvolution (optional)
+  └─ Update Plot
+  ↓
+User clicks "Integrate"
+  ↓
+integrate_peaks_no_ui()
+  ├─ Detect peaks (find_peaks)
+  ├─ Calculate areas (trapezoidal)
+  ├─ Apply RT matching
+  ├─ Quality checks
+  └─ Return [Peak objects]
+  ↓
+[integrated_peaks] stored in app
+[integration_results] dict created
+  ↓
+plot_frame.shade_integration_areas()
+  ↓
+export_manager.export_after_integration()
+  ├─ Save JSON
+  └─ Save CSV
+  ↓
+Enable "MS Search All" button
+  ↓
+User clicks "MS Search All"
+  ↓
+BatchSearchWorker processes peaks
+  ├─ Skip if manually assigned
+  ├─ Extract spectrum
+  ├─ Search MSToolkit
+  └─ Auto-assign top match
+  ↓
+export_manager.export_after_ms_search()
+  ├─ Update JSON with matches
+  └─ Update CSV
+
+================================================================================
+CONFIGURATION & PERSISTENCE
+================================================================================
+
+QSettings Location:
+• Windows:   HKEY_CURRENT_USER\Software\CalebCoatney\ChromaKit
+• macOS:     ~/Library/Preferences/com.CalebCoatney.ChromaKit.plist
+• Linux:     ~/.config/CalebCoatney/ChromaKit
+
+Persisted Values:
+• scaling/signal_factor          (float)
+• scaling/area_factor            (float)
+• scaling/presets                (JSON dict)
+• export/after_integration       (bool)
+• export/after_ms_search         (bool)
+• export/after_assignment        (bool)
+• export/during_batch            (bool)
+• export/json_enabled            (bool)
+• export/csv_enabled             (bool)
+• export/json_filename_format    (str)
+• export/csv_filename_format     (str)
+• parameter_visibility/*         (bool per section)
+• theme                          (str: "light" or "dark")
+
+================================================================================
+CRITICAL FEATURES FOR WEB VERSION
+================================================================================
+
+MUST REPLICATE:
+✓ File loading from .D directories
+✓ Signal processing (smoothing + baseline) with live preview
+✓ Peak integration with quality checks
+✓ MS library search (single + batch)
+✓ Manual peak assignment with cross-file matching
+✓ RT table for peak grouping
+✓ Quantitation (Polyarc + IS method)
+✓ Batch automation (all .D files in directory)
+✓ Batch MS search (all peaks)
+✓ Batch queue (multiple directories)
+✓ Real-time progress tracking with logs
+✓ Auto-export (JSON + CSV with configurable triggers)
+✓ Theme support (dark/light)
+✓ Settings persistence
+✓ Parameter visibility toggles
+✓ Scaling factors with presets
+
+SECONDARY FEATURES:
+• Deconvolution mode (EMG/Geometric)
+• Shoulder detection
+• MS baseline correction
+• Advanced RT alignment
+• JSON ↔ Excel conversion tool
+
+THREADING CRITICAL:
+• AutomationWorker (batch processing)
+• BatchSearchWorker (MS search on all peaks)
+• Cancel/retry mechanisms
+• Real-time progress updates
+
+================================================================================
