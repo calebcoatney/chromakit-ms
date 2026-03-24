@@ -463,15 +463,37 @@ class ChromaKitApp(QMainWindow):
         
         self.status_bar.showMessage("Generated sample data")
         
+    def set_mode(self, profile: "SignalProfile") -> None:
+        """Switch UI mode based on the active signal profile."""
+        ui_mode = profile.ui_mode  # "chromatography" or "spectroscopy"
+        
+        # 1. Update Plot labels
+        self.plot_frame.set_axis_labels(profile.x_label, profile.y_label)
+        
+        # 2. Update RT Table column headers
+        pos_label = "RT" if ui_mode == "chromatography" else profile.x_label.split(" (")[0]
+        self.rt_table_frame.set_column_labels(pos_label)
+        
+        # 3. Toggle panel visibility
+        is_chrom = (ui_mode == "chromatography")
+        ms_idx = self.right_tabs.indexOf(self.ms_frame)
+        quant_idx = self.right_tabs.indexOf(self.quantitation_frame)
+        
+        self.right_tabs.setTabVisible(ms_idx, is_chrom)
+        self.right_tabs.setTabVisible(quant_idx, is_chrom)
+        
+        # 4. Update window title
+        self.setWindowTitle(f"ChromaKit - {profile.display_name}")
+
     @Slot(str)
-    def on_file_selected(self, file_path, batch_mode=False, detector=None):
-        """Handle file selection from the tree view.
+    def on_file_selected(self, folder_path, batch_mode=False):
+        """Handle .C folder selection from the tree view.
 
         Args:
-            file_path: Path to the .D directory to load
+            folder_path: Path to the .C folder to load
             batch_mode: If True, suppress error dialogs (for batch processing)
-            detector: Specific detector channel to use, or None to auto-detect
         """
+        from logic.c_folder import CFolder
         try:
             # Clear stored peak data to prevent ghost peaks
             self.plot_frame.clear_peak_data()
@@ -489,28 +511,27 @@ class ChromaKitApp(QMainWindow):
             self.current_x = None
             self.current_y = None
             
-            # Normalize path to ensure consistent path formatting
-            file_path = os.path.normpath(os.path.abspath(file_path))
+            # Normalize path
+            folder_path = os.path.normpath(os.path.abspath(folder_path))
             
-            # Set current directory path
-            self.current_directory_path = file_path
+            # Open .C folder and set UI mode
+            self.current_cf = CFolder.open(folder_path)
+            self.set_mode(self.current_cf.profile)
+            
+            # Set current directory path (for legacy compatibility)
+            self.current_directory_path = folder_path
             
             # Show loading message
-            self.status_bar.showMessage(f"Loading: {file_path}")
+            self.status_bar.showMessage(f"Loading: {folder_path}")
             
-            # Check if it's a .D directory
-            if not file_path.endswith('.D'):
-                self.status_bar.showMessage(f"Not a valid data directory: {file_path}")
-                return
-                
-            # Load the data (pass detector to skip auto-detect when switching channels)
-            data = self.data_handler.load_data_directory(file_path, detector=detector)
+            # Load the signal data using the profile's loader
+            data = self.current_cf.load_signal()
             
-            # Process chromatogram data if available
-            if 'chromatogram' in data and len(data['chromatogram']['x']) > 0:
+            # Process signal data if available
+            if 'x' in data and len(data['x']) > 0:
                 # Get raw data
-                raw_x = np.array(data['chromatogram']['x'])
-                raw_y = np.array(data['chromatogram']['y'])
+                raw_x = np.array(data['x'])
+                raw_y = np.array(data['y'])
                 
                 # Interpolate to standard length at load time
                 from logic.interpolation import interpolate_arrays
@@ -522,64 +543,41 @@ class ChromaKitApp(QMainWindow):
                 self.current_x = interp_x
                 self.current_y = interp_y
                 
-                original_length = len(raw_x)
-                if original_length > 10000:
-                    self.status_bar.showMessage(f"Interpolated {original_length} points to 10,000 for processing...")
-                
                 # Process with current parameters and display
-                self.process_and_display(self.current_x, self.current_y)
+                # Pass the active profile to process() for stage-gating and defaults
+                self.process_and_display(self.current_x, self.current_y, profile=self.current_cf.profile)
                 
                 # Set flag that real data is loaded
                 self.real_data_loaded = True
             
-            # Check if MS data is available
-            has_ms_data = self.data_handler.has_ms_data
+            # Check if MS data is available from metadata
+            has_ms_data = data.get('metadata', {}).get('has_ms_data', False)
             
             # Show or hide TIC plot based on MS data availability
-            try:
-                self.plot_frame.set_tic_visible(has_ms_data)
-            except Exception as tic_error:
-                print(f"Error setting TIC visibility: {type(tic_error).__name__}: {tic_error}")
-                # Try to continue without TIC functionality
-                has_ms_data = False
+            self.plot_frame.set_tic_visible(has_ms_data)
             
             # Enable or disable MS tab
             ms_tab_index = self.right_tabs.indexOf(self.ms_frame)
             self.right_tabs.setTabEnabled(ms_tab_index, has_ms_data)
             
             # Plot TIC only if MS data is available
-            if has_ms_data and 'tic' in data and len(data['tic']['x']) > 0:
-                try:
-                    self.plot_frame.plot_tic(data['tic']['x'], data['tic']['y'], new_file=True)
-                except Exception as plot_error:
-                    # If TIC plotting fails, just log it and continue
-                    print(f"Warning: Failed to plot TIC data: {plot_error}")
-                    has_ms_data = False  # Treat as no MS data if plotting fails
+            metadata = data.get('metadata', {})
+            if has_ms_data and metadata.get('tic_x') is not None:
+                self.plot_frame.plot_tic(metadata['tic_x'], metadata['tic_y'], new_file=True)
             else:
-                # Explicitly clear the TIC plot if no MS data
-                try:
-                    if hasattr(self.plot_frame, 'clear_tic'):
-                        self.plot_frame.clear_tic()
-                except Exception as clear_error:
-                    print(f"Warning: Failed to clear TIC plot: {clear_error}")
-                    # Continue anyway since this is not critical
+                if hasattr(self.plot_frame, 'clear_tic'):
+                    self.plot_frame.clear_tic()
             
             # Update status bar with success message
-            sample_name = os.path.basename(file_path)
-            
-            # Show navigation info
-            num_dirs = len(self.data_handler.available_directories)
-            curr_idx = self.data_handler.current_index + 1  # 1-indexed for display
-            
-            # Add information about MS data availability to the status message
+            sample_name = os.path.basename(folder_path)
             ms_status = "with" if has_ms_data else "without"
-            self.status_bar.showMessage(f"Loaded: {sample_name} ({curr_idx}/{num_dirs}) - {ms_status} MS data")
+            self.status_bar.showMessage(f"Loaded: {sample_name} - {ms_status} MS data")
             
             # Enable export button
             self.button_frame.enable_export(True)
 
-            # Process and display the chromatogram data
-            self.process_and_display(self.current_x, self.current_y, new_file=True)
+            # Final display update
+            self.process_and_display(self.current_x, self.current_y, new_file=True, profile=self.current_cf.profile)
             
         except Exception as e:
             # Handle any errors during loading
@@ -1423,12 +1421,15 @@ class ChromaKitApp(QMainWindow):
                 peak_groups = params.get('integration', {}).get('peak_groups', [])
 
                 # Perform integration - CORE FUNCTIONALITY WITHOUT UI UPDATES
+                # Pass the active profile for feature class selection
+                profile = getattr(self, 'current_cf', None).profile if hasattr(self, 'current_cf') else None
                 integration_results = self.processor.integrate_peaks(
                     processed_data=self.current_processed,
                     ms_data=ms_data,
                     quality_options=quality_options,
                     chemstation_area_factor=self.area_factor,
-                    peak_groups=peak_groups if peak_groups else None
+                    peak_groups=peak_groups if peak_groups else None,
+                    profile=profile
                 )
 
             # Check if integration was successful
@@ -2057,7 +2058,7 @@ class ChromaKitApp(QMainWindow):
             print("No data available to process!")
             self.status_bar.showMessage("Load data first before changing parameters")
     
-    def process_and_display(self, x, y, new_file=False):
+    def process_and_display(self, x, y, new_file=False, profile=None):
         """Process data with current parameters and update display"""
         # Validate input data
         if x is None or y is None:
@@ -2085,7 +2086,8 @@ class ChromaKitApp(QMainWindow):
                 print(f"Using MS range for peak filtering: {ms_min:.2f} to {ms_max:.2f} min")
 
         # Process the data (already interpolated)
-        processed = self.processor.process(x, y, params, ms_range)
+        # Pass the active profile for defaults and stage-gating
+        processed = self.processor.process(x, y, params, ms_range, profile=profile)
 
         # --- Deconvolution mode: replace classical peaks with U-Net pipeline ---
         if peak_mode == 'deconvolution' and params['peaks']['enabled']:

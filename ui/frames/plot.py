@@ -104,6 +104,16 @@ class PlotFrame(QWidget):
 
         self.canvas.draw_idle()
 
+    def set_axis_labels(self, x_label: str, y_label: str) -> None:
+        """Update axis labels to match the active signal profile."""
+        if hasattr(self, 'chromatogram_ax') and self.chromatogram_ax is not None:
+            self.chromatogram_ax.set_xlabel(x_label)
+            self.chromatogram_ax.set_ylabel(y_label)
+        if hasattr(self, 'tic_ax') and self.tic_ax is not None:
+            self.tic_ax.set_xlabel(x_label)
+            self.tic_ax.set_ylabel(y_label)
+        self.canvas.draw_idle()
+
     def clear_tic(self):
         """Clear the TIC plot and redraw the canvas."""
         try:

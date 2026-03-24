@@ -234,6 +234,11 @@ class RTTableFrame(QWidget):
         table_layout.addWidget(self.table_widget)
         self.layout.addWidget(table_group)
     
+    def set_column_labels(self, position_label: str) -> None:
+        """Update table headers to match the active signal profile (e.g., 'Wavenumber')."""
+        labels = ["Compound", f"Start {position_label}", f"Apex {position_label}", f"End {position_label}"]
+        self.table_widget.setHorizontalHeaderLabels(labels)
+    
     def _init_settings(self):
         """Initialize RT matching settings."""
         settings_group = QGroupBox("RT Matching Settings")
