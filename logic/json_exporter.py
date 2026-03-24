@@ -473,3 +473,18 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
     except Exception as e:
         print(f"Error updating JSON file with MS search results: {e}")
         return False
+
+
+def metadata_from_manifest(manifest: dict) -> dict:
+    """Build export metadata dict from a .C folder manifest.
+
+    For .C-based workflows this replaces scrape_metadata_from_d_directory().
+    The existing scrape function remains for any legacy call sites.
+    """
+    return {
+        "sample_id":    manifest.get("sample_id", ""),
+        "instrument":   manifest.get("instrument", ""),
+        "signal_type":  manifest.get("signal_type", ""),
+        "created":      manifest.get("created", ""),
+        "source_format": manifest.get("source_format", ""),
+    }
