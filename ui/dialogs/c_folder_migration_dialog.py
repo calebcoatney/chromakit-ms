@@ -9,14 +9,20 @@ from PySide6.QtWidgets import (
 from logic.c_folder import CFolder
 
 
+def _detect_signal_type(d_path: str) -> str:
+    """Return 'gcms' if the .D folder contains MS data, otherwise 'gc'."""
+    return "gcms" if os.path.isfile(os.path.join(d_path, "data.ms")) else "gc"
+
+
 class CFolderMigrationDialog(QDialog):
     """Shows detected .D folders and wraps them in .C containers on confirmation.
 
-    Each row shows: source .D path, destination .C path, signal type selector.
-    Originals are copied, not moved — they remain at their original paths.
+    Each row shows: source .D path, destination .C path, auto-detected signal type.
+    The .D folder is moved (not copied) into the .C container.
     """
 
-    SIGNAL_TYPES = ["gcms", "gc"]
+    SIGNAL_TYPES = ["GC-MS", "GC"]
+    _SIGNAL_KEY = {"GC-MS": "gcms", "GC": "gc"}
 
     def __init__(self, d_paths: list[str], parent=None):
         super().__init__(parent)
@@ -29,7 +35,8 @@ class CFolderMigrationDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
             "ChromaKit detected Agilent .D folders without .C wrappers.\n"
-            "Select folders to migrate. Originals will not be deleted."
+            "Select the signal type for each folder, then click OK to migrate.\n"
+            "The .D folders will be moved inside the new .C containers."
         ))
 
         self.table = QTableWidget(len(self.d_paths), 3)
@@ -45,14 +52,13 @@ class CFolderMigrationDialog(QDialog):
             self.table.setItem(row, 1, QTableWidgetItem(c_path))
             combo = QComboBox()
             combo.addItems(self.SIGNAL_TYPES)
+            # Auto-detect: set to GC-MS if data.ms exists, otherwise GC
+            detected = _detect_signal_type(d_path)
+            combo.setCurrentText("GC-MS" if detected == "gcms" else "GC")
             self.table.setCellWidget(row, 2, combo)
             self._combos.append(combo)
 
         layout.addWidget(self.table)
-        layout.addWidget(QLabel(
-            "⚠ External tools referencing the original .D path will need to be "
-            "updated if you later remove the originals."
-        ))
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
@@ -69,7 +75,8 @@ class CFolderMigrationDialog(QDialog):
         errors = []
 
         for row, d_path in enumerate(self.d_paths):
-            signal_type = self._combos[row].currentText()
+            display_type = self._combos[row].currentText()
+            signal_type = self._SIGNAL_KEY[display_type]
             try:
                 CFolder.create(d_path, signal_type)
             except FileExistsError:

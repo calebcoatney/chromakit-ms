@@ -75,6 +75,10 @@ class ChromatographicPeak(Feature):
         """Returns retention_time, satisfying the Feature.position interface."""
         return self.retention_time
 
+    @staticmethod
+    def column_headers() -> list:
+        return ['Compound ID', 'Peak #', 'Ret Time', 'Integrator', 'Width', 'Area', 'Start Time', 'End Time']
+
     def as_row(self):
         """Return peak data as a row for display in a table."""
         return [
@@ -354,18 +358,31 @@ class Integrator:
             # Create composite Peak
             width = g_end - g_start
             compound_id = "Group"
-            composite = feature_cls(
-                compound_id=compound_id,
-                peak_number=0,  # will be re-numbered later
-                retention_time=apex_rt,
-                integrator='py',
-                width=width,
-                area=total_area,
-                start_time=g_start,
-                end_time=g_end,
-                start_index=start_idx,
-                end_index=end_idx
-            )
+            if feature_cls is Peak or issubclass(feature_cls, ChromatographicPeak):
+                composite = feature_cls(
+                    compound_id=compound_id,
+                    peak_number=0,
+                    retention_time=apex_rt,
+                    integrator='py',
+                    width=width,
+                    area=total_area,
+                    start_time=g_start,
+                    end_time=g_end,
+                    start_index=start_idx,
+                    end_index=end_idx
+                )
+            else:
+                composite = feature_cls(
+                    feature_id=0,
+                    position=apex_rt,
+                    position_units=profile.x_label if profile else "",
+                    area=total_area,
+                    width=width,
+                    start=g_start,
+                    end=g_end,
+                    start_index=start_idx,
+                    end_index=end_idx,
+                )
             composite.is_grouped = True
             composite.grouped_peak_count = len(member_indices)
             
@@ -735,6 +752,10 @@ class Integrator:
             if is_negative:
                 area = abs(area)
 
+            # For decreasing x-axes (e.g. FTIR wavenumbers), area may be negative
+            # even for non-negative peaks due to integration direction
+            area = abs(area)
+
             # Store integrated area and bounds
             integrated_areas.append(area)
             integration_bounds.append((x[left_bound], x[right_bound]))
@@ -748,9 +769,23 @@ class Integrator:
             end_time = x[right_bound]
             width = end_time - start_time
             
-            peak = feature_cls(compound_id, peak_number, retention_time,
-                        integrator, width, area, start_time, end_time,
-                        start_index=left_bound, end_index=right_bound)
+            if feature_cls is Peak or issubclass(feature_cls, ChromatographicPeak):
+                peak = feature_cls(compound_id, peak_number, retention_time,
+                            integrator, width, area, start_time, end_time,
+                            start_index=left_bound, end_index=right_bound)
+            else:
+                # SpectralFeature and other Feature subclasses use the generic signature
+                peak = feature_cls(
+                    feature_id=peak_number,
+                    position=apex_x,
+                    position_units=profile.x_label if profile else "",
+                    area=area,
+                    width=width,
+                    start=start_time,
+                    end=end_time,
+                    start_index=left_bound,
+                    end_index=right_bound,
+                )
             
             # Add shoulder flag if applicable
             if has_shoulder_info:

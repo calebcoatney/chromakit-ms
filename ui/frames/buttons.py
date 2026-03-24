@@ -52,7 +52,7 @@ class ButtonFrame(QWidget):
         
         # Replace checkbox with button (CHANGE HERE)
         self.automation_button = QPushButton("Batch Process All Files")
-        self.automation_button.setToolTip("Process and perform MS search on all .D files in the directory")
+        self.automation_button.setToolTip("Process and perform MS search on all sample files in the directory")
         self.automation_button.clicked.connect(self.automation_clicked.emit)
         self.row2_layout.addWidget(self.automation_button)
         

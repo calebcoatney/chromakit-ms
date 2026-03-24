@@ -9,8 +9,9 @@ import os
 class FileTreeFrame(QWidget):
     """A file browser panel that can be placed on the left side of the application."""
     
-    file_selected = Signal(str)    # Signal emitted when a .C folder is selected
-    d_folder_opened = Signal(str)  # Signal emitted if user double-clicks a bare .D folder
+    file_selected = Signal(str)       # Signal emitted when a .C folder is selected
+    d_folder_opened = Signal(str)     # Signal emitted if user double-clicks a bare .D folder
+    directory_opened = Signal(str)    # Signal emitted when a new root directory is set
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,8 +35,8 @@ class FileTreeFrame(QWidget):
         self.model.setRootPath(QDir.homePath())
         self.model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs | QDir.Files)
         
-        # Create a name filter to show directories with .C extension
-        self.model.setNameFilters(["*.C"])
+        # Create a name filter to show .C and .D directories
+        self.model.setNameFilters(["*.C", "*.D"])
         self.model.setNameFilterDisables(False)  # Hide items that don't match filter
         
         # Set up the tree view
@@ -75,6 +76,7 @@ class FileTreeFrame(QWidget):
         metrics = self.path_label.fontMetrics()
         elided = metrics.elidedText(path, Qt.ElideMiddle, 200)
         self.path_label.setText(elided)
+        self.directory_opened.emit(path)
     def on_item_double_clicked(self, index):
         """Handle item double-click in the tree view."""
         file_path = self.model.filePath(index)

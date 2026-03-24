@@ -11,8 +11,9 @@ class AgilentLoader(DataLoader):
     The .D folder must be the first directory inside <c_folder>/data/.
     """
 
-    def __init__(self):
+    def __init__(self, signal_factor: float = 1.0):
         self._handler = DataHandler()
+        self._handler.signal_factor = signal_factor
 
     def load(self, c_folder_path: str) -> dict:
         data_dir = os.path.join(c_folder_path, "data")

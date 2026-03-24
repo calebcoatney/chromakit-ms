@@ -35,6 +35,11 @@ class PlotFrame(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         
+        # Current axis labels (updated by set_axis_labels from the active profile)
+        self._x_label = 'Time (min)'
+        self._y_label = 'Intensity'
+        self._invert_x = False  # True for high→low x-axes (e.g. FTIR wavenumbers)
+        
         # Set the layout
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -104,14 +109,17 @@ class PlotFrame(QWidget):
 
         self.canvas.draw_idle()
 
-    def set_axis_labels(self, x_label: str, y_label: str) -> None:
-        """Update axis labels to match the active signal profile."""
+    def set_axis_labels(self, x_label: str, y_label: str, invert_x: bool = False) -> None:
+        """Update axis labels and x-axis direction to match the active signal profile."""
+        self._x_label = x_label
+        self._y_label = y_label
+        self._invert_x = invert_x
         if hasattr(self, 'chromatogram_ax') and self.chromatogram_ax is not None:
-            self.chromatogram_ax.set_xlabel(x_label)
-            self.chromatogram_ax.set_ylabel(y_label)
+            self.chromatogram_ax.set_xlabel(self._x_label)
+            self.chromatogram_ax.set_ylabel(self._y_label)
         if hasattr(self, 'tic_ax') and self.tic_ax is not None:
-            self.tic_ax.set_xlabel(x_label)
-            self.tic_ax.set_ylabel(y_label)
+            self.tic_ax.set_xlabel(self._x_label)
+            self.tic_ax.set_ylabel(self._y_label)
         self.canvas.draw_idle()
 
     def clear_tic(self):
@@ -122,8 +130,8 @@ class PlotFrame(QWidget):
                 if self.tic_ax in self.figure.axes:
                     self.tic_ax.clear()
                     self.tic_ax.set_title('Total Ion Chromatogram (TIC)')
-                    self.tic_ax.set_xlabel('Time (min)')
-                    self.tic_ax.set_ylabel('Intensity')
+                    self.tic_ax.set_xlabel(self._x_label)
+                    self.tic_ax.set_ylabel(self._y_label)
                     self.tic_ax.grid(True, linestyle='--', alpha=0.7)
                     self.figure.tight_layout()
                     self.canvas.draw_idle()
@@ -153,8 +161,8 @@ class PlotFrame(QWidget):
             
             # Set basic TIC properties
             self.tic_ax.set_title('Total Ion Chromatogram (TIC)')
-            self.tic_ax.set_xlabel('Time (min)')
-            self.tic_ax.set_ylabel('Intensity')
+            self.tic_ax.set_xlabel(self._x_label)
+            self.tic_ax.set_ylabel(self._y_label)
             self.tic_ax.grid(True, linestyle='--', alpha=0.7)
             
             # Restore chromatogram data if available
@@ -172,14 +180,14 @@ class PlotFrame(QWidget):
         """Set up initial empty plots."""
         self.tic_ax.clear()
         self.tic_ax.set_title('Total Ion Chromatogram (TIC)')
-        self.tic_ax.set_xlabel('Time (min)')
-        self.tic_ax.set_ylabel('Intensity')
+        self.tic_ax.set_xlabel(self._x_label)
+        self.tic_ax.set_ylabel(self._y_label)
         self.tic_ax.grid(True, linestyle='--', alpha=0.7)
         
         self.chromatogram_ax.clear()
         self.chromatogram_ax.set_title('Processed Chromatogram')
-        self.chromatogram_ax.set_xlabel('Time (min)')
-        self.chromatogram_ax.set_ylabel('Intensity')
+        self.chromatogram_ax.set_xlabel(self._x_label)
+        self.chromatogram_ax.set_ylabel(self._y_label)
         self.chromatogram_ax.grid(True, linestyle='--', alpha=0.7)
         
         self.figure.tight_layout()
@@ -338,8 +346,8 @@ class PlotFrame(QWidget):
                         )
 
         # Set labels and add legend
-        self.chromatogram_ax.set_xlabel('Time (min)')
-        self.chromatogram_ax.set_ylabel('Intensity')
+        self.chromatogram_ax.set_xlabel(self._x_label)
+        self.chromatogram_ax.set_ylabel(self._y_label)
         self.chromatogram_ax.grid(True, linestyle='--', alpha=0.7)
         self.chromatogram_ax.legend()
         
@@ -350,6 +358,8 @@ class PlotFrame(QWidget):
                 x_min, x_max = np.min(x), np.max(x)
                 x_padding = (x_max - x_min) * 0.02  # 2% padding
                 x_full_range = [x_min - x_padding, x_max + x_padding]
+                if self._invert_x:
+                    x_full_range = x_full_range[::-1]
                 
                 y_min = np.min(baseline_to_show)
                 y_max_raw = np.max(main_y)
@@ -473,8 +483,8 @@ class PlotFrame(QWidget):
         
         # Set labels and title
         self.tic_ax.set_title('Total Ion Chromatogram (TIC)')
-        self.tic_ax.set_xlabel('Time (min)')
-        self.tic_ax.set_ylabel('Intensity')
+        self.tic_ax.set_xlabel(self._x_label)
+        self.tic_ax.set_ylabel(self._y_label)
         self.tic_ax.grid(True, linestyle='--', alpha=0.7)
         
         # Only calculate and apply new view limits for new files
@@ -484,6 +494,8 @@ class PlotFrame(QWidget):
                 x_min, x_max = np.min(x), np.max(x)
                 x_padding = (x_max - x_min) * 0.02  # 2% padding
                 x_full_range = [x_min - x_padding, x_max + x_padding]
+                if self._invert_x:
+                    x_full_range = x_full_range[::-1]
                 
                 if show_baseline and baseline_y is not None:
                     y_min = np.min(baseline_y)
@@ -558,21 +570,19 @@ class PlotFrame(QWidget):
             found_peak = False
             
             for i, peak in enumerate(self.integrated_peaks):
-                if hasattr(peak, 'retention_time'):
-                    distance = abs(peak.retention_time - event.xdata)
+                peak_pos = getattr(peak, 'retention_time', None) or peak.position
+                peak_start = getattr(peak, 'start_time', None) or peak.start
+                peak_end = getattr(peak, 'end_time', None) or peak.end
+                distance = abs(peak_pos - event.xdata)
+                bound_lo, bound_hi = min(peak_start, peak_end), max(peak_start, peak_end)
+                
+                if (bound_lo <= event.xdata <= bound_hi) or distance < abs(bound_hi - bound_lo) * 0.1:
+                    found_peak = True
+                    self._show_peak_context_menu(i, event)
                     
-                    # If within bounds or close to apex
-                    if ((hasattr(peak, 'start_time') and hasattr(peak, 'end_time') and 
-                        peak.start_time <= event.xdata <= peak.end_time) or distance < 0.05):
-                        # Show context menu and immediately reset click tracking to prevent
-                        # further event handling for this click
-                        found_peak = True
-                        self._show_peak_context_menu(i, event)
-                        
-                        # Reset click tracking immediately to prevent further processing of this click
-                        self._last_click_x = None
-                        self._is_right_button = False
-                        break
+                    self._last_click_x = None
+                    self._is_right_button = False
+                    break
             
             # If no peak was found under the click, we'll return without resetting
             # letting the regular right-click behavior proceed
@@ -603,16 +613,21 @@ class PlotFrame(QWidget):
                     min_distance = float('inf')
                     
                     for i, peak in enumerate(self.integrated_peaks):
-                        # Check if click is within peak bounds or close to apex
-                        if hasattr(peak, 'retention_time'):
-                            distance = abs(peak.retention_time - x_value)
-                            
-                            # If within bounds or close to apex
-                            if (hasattr(peak, 'start_time') and hasattr(peak, 'end_time') and 
-                                peak.start_time <= x_value <= peak.end_time) or distance < 0.05:
-                                if distance < min_distance:
-                                    min_distance = distance
-                                    closest_peak = i
+                        # Use generic Feature attrs (position/start/end) with fallback to chromatography attrs
+                        peak_pos = getattr(peak, 'retention_time', None) or peak.position
+                        peak_start = getattr(peak, 'start_time', None) or peak.start
+                        peak_end = getattr(peak, 'end_time', None) or peak.end
+                        distance = abs(peak_pos - x_value)
+                        
+                        # Normalize bounds for inverted axes
+                        bound_lo = min(peak_start, peak_end)
+                        bound_hi = max(peak_start, peak_end)
+                        
+                        # If within bounds or close to apex
+                        if (bound_lo <= x_value <= bound_hi) or distance < abs(bound_hi - bound_lo) * 0.1:
+                            if distance < min_distance:
+                                min_distance = distance
+                                closest_peak = i
                     
                     # If a peak was found nearby, highlight it
                     if closest_peak is not None:
@@ -706,101 +721,91 @@ class PlotFrame(QWidget):
         # First clear any existing highlights
         self._clear_peak_highlights()
         
+        # Generic Feature attrs with chromatography fallbacks
+        peak_pos = getattr(peak, 'retention_time', None) or peak.position
+        peak_id = getattr(peak, 'peak_number', None) or peak.feature_id
+        
         # Determine text color based on peak issues (prioritize saturation over convolution)
         text_color = 'purple' if hasattr(peak, 'is_saturated') and peak.is_saturated else \
                     'red' if hasattr(peak, 'is_convoluted') and peak.is_convoluted else 'g'
+        
+        # Build annotation text — chromatography vs spectroscopy
+        is_chromatographic = hasattr(peak, 'retention_time')
+        if is_chromatographic:
+            annotation_text = f"Peak {peak_id}\nRT: {peak_pos:.3f}"
+            
+            # Add compound ID with source information
+            if hasattr(peak, 'compound_id') and peak.compound_id and peak.compound_id != f"Unknown ({peak_pos:.3f})":
+                annotation_text += f"\n{peak.compound_id}"
+
+                if hasattr(peak, 'rt_assignment') and peak.rt_assignment:
+                    source = getattr(peak, 'rt_assignment_source', 'RT')
+                    annotation_text += f" [{source}]"
+                elif hasattr(peak, 'Qual') and peak.Qual is not None:
+                    annotation_text += f" [MS: {peak.Qual:.3f}]"
+                else:
+                    annotation_text += " [Manual]"
+            
+            if hasattr(peak, 'is_saturated') and peak.is_saturated:
+                annotation_text += "\n⚠️ DETECTOR SATURATION"
+                if hasattr(peak, 'saturation_level'):
+                    annotation_text += f"\n • Max: {peak.saturation_level:.2e}"
+            elif hasattr(peak, 'is_convoluted') and peak.is_convoluted:
+                annotation_text += "\n⚠️ Possible convolution"
+                if hasattr(peak, 'quality_issues') and peak.quality_issues:
+                    for issue in peak.quality_issues:
+                        annotation_text += f"\n • {issue}"
+                else:
+                    if hasattr(peak, 'asymmetry') and peak.asymmetry is not None:
+                        annotation_text += f"\n • Asym: {peak.asymmetry:.2f}"
+                    if hasattr(peak, 'spectral_coherence') and peak.spectral_coherence is not None:
+                        annotation_text += f"\n • Coh: {peak.spectral_coherence:.2f}"
+        else:
+            annotation_text = f"Feature {peak_id}\n{self._x_label}: {peak_pos:.2f}"
+            annotation_text += f"\nArea: {abs(peak.area):.4f}"
+            if hasattr(peak, 'band_assignment') and peak.band_assignment:
+                annotation_text += f"\n{peak.band_assignment}"
         
         # Add annotation and highlight for each plot
         for ax in [self.chromatogram_ax, self.tic_ax]:
             if ax is None:
                 continue
-            # Create a more detailed annotation that includes compound ID if available
-            annotation_text = f"Peak {peak.peak_number}\nRT: {peak.retention_time:.3f}"
-            
-            # Add compound ID with source information
-            if hasattr(peak, 'compound_id') and peak.compound_id and peak.compound_id != f"Unknown ({peak.retention_time:.3f})":
-                annotation_text += f"\n{peak.compound_id}"
-
-                # Show assignment source and confidence
-                if hasattr(peak, 'rt_assignment') and peak.rt_assignment:
-                    # RT Table assignment
-                    source = getattr(peak, 'rt_assignment_source', 'RT')
-                    annotation_text += f" [{source}]"
-                elif hasattr(peak, 'Qual') and peak.Qual is not None:
-                    # MS library assignment
-                    annotation_text += f" [MS: {peak.Qual:.3f}]"
-                else:
-                    # Manual or other assignment
-                    annotation_text += " [Manual]"
-            
-            # Add saturation warning if detected
-            if hasattr(peak, 'is_saturated') and peak.is_saturated:
-                annotation_text += "\n⚠️ DETECTOR SATURATION"
-                if hasattr(peak, 'saturation_level'):
-                    annotation_text += f"\n • Max: {peak.saturation_level:.2e}"
-            
-            # Add quality information if available
-            elif hasattr(peak, 'is_convoluted') and peak.is_convoluted:
-                annotation_text += "\n⚠️ Possible convolution"
-                
-                if hasattr(peak, 'quality_issues') and peak.quality_issues:
-                    for issue in peak.quality_issues:
-                        annotation_text += f"\n • {issue}"
-                else:
-                    # Fallback to raw metrics
-                    if hasattr(peak, 'asymmetry') and peak.asymmetry is not None:
-                        annotation_text += f"\n • Asym: {peak.asymmetry:.2f}"
-                    if hasattr(peak, 'spectral_coherence') and peak.spectral_coherence is not None:
-                        annotation_text += f"\n • Coh: {peak.spectral_coherence:.2f}"
-            
-            # Add the annotation
-            text = ax.text(peak.retention_time, ax.get_ylim()[1]*0.9, 
+            text = ax.text(peak_pos, ax.get_ylim()[1]*0.9, 
                     annotation_text, 
                     color=text_color, fontsize=10, ha='center', va='top',
                     bbox=dict(boxstyle="round,pad=0.3", fc='white', alpha=0.7))
-            
-            # Tag the text object so we can identify it later
             text.peak_annotation = True
         
         # If the peak is part of integration results, highlight its area
         if hasattr(self, 'x_peaks') and hasattr(self, 'y_peaks') and hasattr(self, 'baseline_peaks'):
             for i, integrated_peak in enumerate(self.integrated_peaks):
-                if integrated_peak.peak_number == peak.peak_number:
-                    # Increase alpha for this peak's shading
-                    # First clear any previous highlighted areas
+                ip_id = getattr(integrated_peak, 'peak_number', None) or integrated_peak.feature_id
+                if ip_id == peak_id:
                     for collection in self.chromatogram_ax.collections:
                         if hasattr(collection, 'peak_highlight') and collection.peak_highlight:
                             collection.remove()
                     
-                    # FIXED: Check if we're showing corrected or original signal
                     showing_corrected = self.chromatogram_ax.get_title() == 'Baseline-Corrected Chromatogram'
                     
-                    # Adjust the shading based on the current view mode
                     if showing_corrected:
-                        # For corrected view: Use the stored y_peaks and zero baseline
                         shade_y = self.y_peaks[i]
                         shade_baseline = np.zeros_like(self.baseline_peaks[i])
                     else:
-                        # For uncorrected view: Adjust y_peaks back to raw signal
                         shade_y = self.y_peaks[i] + self.baseline_peaks[i] 
                         shade_baseline = self.baseline_peaks[i]
                     
-                    # Add a new shaded area with higher alpha
                     collection = self.chromatogram_ax.fill_between(
                         self.x_peaks[i],
                         shade_y,
                         shade_baseline,
-                        alpha=0.8,  # Higher alpha for highlight
+                        alpha=0.8,
                         color='green',
-                        label=f'_highlight_peak_{peak.peak_number}'
+                        label=f'_highlight_peak_{peak_id}'
                     )
                     collection.peak_highlight = True
                     
-                    # Send signal to update MS spectrum with this peak's data
-                    self.peak_spectrum_requested.emit(integrated_peak.peak_number - 1)  # Convert to zero-based index
-                    
-                    # Also update RT entry box
-                    self.point_selected.emit(peak.retention_time)
+                    self.peak_spectrum_requested.emit(ip_id - 1)
+                    self.point_selected.emit(peak_pos)
                     
                     break
         
@@ -903,11 +908,10 @@ class PlotFrame(QWidget):
             marker_y = shade_y[len(shade_y)//2]  # Use middle point height
             
             if is_saturated:
-                # Use diamond marker for saturation
                 self.chromatogram_ax.plot(
-                    peak.retention_time,
-                    marker_y,  # Match the current view's peak height
-                    marker='D',  # Diamond marker for saturation
+                    getattr(peak, 'retention_time', None) or peak.position,
+                    marker_y,
+                    marker='D',
                     markersize=12,
                     markerfacecolor='purple',
                     markeredgecolor='black',
@@ -915,11 +919,10 @@ class PlotFrame(QWidget):
                     linestyle='None'
                 )
             elif is_convoluted:
-                # Use triangle marker for convolution
                 self.chromatogram_ax.plot(
-                    peak.retention_time,
-                    marker_y,  # Match the current view's peak height
-                    marker='^',  # Triangle marker
+                    getattr(peak, 'retention_time', None) or peak.position,
+                    marker_y,
+                    marker='^',
                     markersize=12,
                     markerfacecolor='red',
                     markeredgecolor='black',
@@ -1079,57 +1082,50 @@ class PlotFrame(QWidget):
         
         # Get the peak
         peak = self.integrated_peaks[peak_index]
+        peak_pos = getattr(peak, 'retention_time', None) or peak.position
+        peak_id = getattr(peak, 'peak_number', None) or peak.feature_id
+        is_chromatographic = hasattr(peak, 'retention_time')
         
         # Create context menu
         menu = QMenu()
         
-        # Add actions
-        view_ms_action = menu.addAction(f"View MS Spectrum for Peak {peak.peak_number}")
-        view_ms_action.triggered.connect(lambda: self.peak_spectrum_requested.emit(peak_index))
-        
-        # Add search action if the peak has an MS spectrum
-        search_ms_action = menu.addAction("Search MS Library")
-        search_ms_action.triggered.connect(lambda: self._request_ms_search(peak_index))
+        if is_chromatographic:
+            view_ms_action = menu.addAction(f"View MS Spectrum for Peak {peak_id}")
+            view_ms_action.triggered.connect(lambda: self.peak_spectrum_requested.emit(peak_index))
+            
+            search_ms_action = menu.addAction("Search MS Library")
+            search_ms_action.triggered.connect(lambda: self._request_ms_search(peak_index))
 
-        # Add RT assignment action
-        rt_assign_action = menu.addAction("Assign from RT Table")
-        rt_assign_action.triggered.connect(lambda: self._request_rt_assignment(peak_index))
+            rt_assign_action = menu.addAction("Assign from RT Table")
+            rt_assign_action.triggered.connect(lambda: self._request_rt_assignment(peak_index))
+            
+            add_to_rt_action = menu.addAction("Add to RT Table...")
+            add_to_rt_action.triggered.connect(lambda: self._add_peak_to_rt_table(peak_index))
+            
+            menu.addSeparator()
+            
+            reassign_menu = menu.addMenu("Reassign Compound")
+            reassign_ms_action = reassign_menu.addAction("From MS Library Search")
+            reassign_ms_action.triggered.connect(lambda: self._request_ms_search(peak_index))
+            reassign_rt_action = reassign_menu.addAction("From RT Table")
+            reassign_rt_action.triggered.connect(lambda: self._request_rt_assignment(peak_index))
+            reassign_manual_action = reassign_menu.addAction("Manual Assignment...")
+            reassign_manual_action.triggered.connect(lambda: self._edit_peak_assignment(peak_index))
+            
+            menu.addSeparator()
+            
+            edit_assignment_action = menu.addAction("Edit Compound Assignment...")
+            edit_assignment_action.triggered.connect(lambda: self._edit_peak_assignment(peak_index))
+            
+            menu.addSeparator()
         
-        # Add "Add to RT Table" action
-        add_to_rt_action = menu.addAction("Add to RT Table...")
-        add_to_rt_action.triggered.connect(lambda: self._add_peak_to_rt_table(peak_index))
-        
-        menu.addSeparator()
-        
-        # Add reassignment options submenu
-        reassign_menu = menu.addMenu("Reassign Compound")
-        
-        # Reassign from MS library
-        reassign_ms_action = reassign_menu.addAction("From MS Library Search")
-        reassign_ms_action.triggered.connect(lambda: self._request_ms_search(peak_index))
-        
-        # Reassign from RT table
-        reassign_rt_action = reassign_menu.addAction("From RT Table")
-        reassign_rt_action.triggered.connect(lambda: self._request_rt_assignment(peak_index))
-        
-        # Manual reassignment
-        reassign_manual_action = reassign_menu.addAction("Manual Assignment...")
-        reassign_manual_action.triggered.connect(lambda: self._edit_peak_assignment(peak_index))
-        
-        menu.addSeparator()
-        
-        # Add edit assignment action (moved to separate section)
-        edit_assignment_action = menu.addAction("Edit Compound Assignment...")
-        edit_assignment_action.triggered.connect(lambda: self._edit_peak_assignment(peak_index))
-        
-        menu.addSeparator()
-        
-        # Copy peak info to clipboard
-        copy_rt_action = menu.addAction(f"Copy RT: {peak.retention_time:.3f}")
-        copy_rt_action.triggered.connect(lambda: QApplication.clipboard().setText(f"{peak.retention_time:.3f}"))
+        # Copy position to clipboard (RT for chromatography, position for spectroscopy)
+        pos_label = "RT" if is_chromatographic else self._x_label
+        copy_rt_action = menu.addAction(f"Copy {pos_label}: {peak_pos:.3f}")
+        copy_rt_action.triggered.connect(lambda: QApplication.clipboard().setText(f"{peak_pos:.3f}"))
         
         # If compound ID is assigned, add option to copy it
-        if hasattr(peak, 'compound_id') and peak.compound_id and peak.compound_id != f"Unknown ({peak.retention_time:.3f})":
+        if hasattr(peak, 'compound_id') and peak.compound_id and peak.compound_id != f"Unknown ({peak_pos:.3f})":
             copy_name_action = menu.addAction(f"Copy Compound Name: {peak.compound_id}")
             copy_name_action.triggered.connect(lambda: QApplication.clipboard().setText(peak.compound_id))
             

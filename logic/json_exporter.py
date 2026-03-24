@@ -215,17 +215,16 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
 
     Args:
         peaks: List of Peak objects from integration
-        d_path: Path to the .D directory
+        d_path: Path to the .D or .C directory
         detector: Detector name (usually auto-detected, fallback "FID1A")
         quantitation_settings: Optional dict with quantitation settings and results
-        processing_params: Optional dict of processing parameters (smoothing, baseline, peaks, deconvolution)
+        processing_params: Optional dict of processing parameters
 
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Scrape metadata from the .D directory
-        metadata = scrape_metadata_from_d_directory(d_path, detector)
+        metadata, result_file_path = _resolve_export_context(d_path, detector)
 
         # Build the result data structure
         result_data = {
@@ -320,10 +319,6 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
             
             result_data['peaks'].append(peak_data)
         
-        # Generate filename and save
-        result_filename = f"{metadata['notebook']} - {metadata['detector']}.json"
-        result_file_path = os.path.join(d_path, result_filename)
-        
         # Write JSON file
         with open(result_file_path, 'w') as f:
             json.dump(result_data, f, indent=4)
@@ -346,7 +341,7 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
 
     Args:
         peaks: List of Peak objects with MS search results
-        d_path: Path to the .D directory
+        d_path: Path to the .D or .C directory
         detector: Detector name (usually auto-detected, fallback "FID1A")
         quantitation_settings: Optional quantitation settings to include in export
         processing_params: Optional dict of processing parameters
@@ -355,10 +350,7 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
         True if successful, False otherwise
     """
     try:
-        # Try to load existing JSON file
-        metadata = scrape_metadata_from_d_directory(d_path, detector)
-        result_filename = f"{metadata['notebook']} - {metadata['detector']}.json"
-        result_file_path = os.path.join(d_path, result_filename)
+        metadata, result_file_path = _resolve_export_context(d_path, detector)
         
         if os.path.exists(result_file_path):
             # Load existing data
@@ -488,3 +480,32 @@ def metadata_from_manifest(manifest: dict) -> dict:
         "created":      manifest.get("created", ""),
         "source_format": manifest.get("source_format", ""),
     }
+
+
+def _resolve_export_context(path: str, detector: str) -> tuple:
+    """Return (metadata_dict, json_output_path) for either a .D or .C folder.
+
+    For .D folders: scrapes metadata via rainbow, writes JSON inside the .D dir.
+    For .C folders: reads manifest.json, writes JSON into <.C>/results/.
+    """
+    if path.endswith('.C') and os.path.isfile(os.path.join(path, 'manifest.json')):
+        with open(os.path.join(path, 'manifest.json')) as f:
+            manifest = json.load(f)
+        sample_id = manifest.get('sample_id', '') or os.path.splitext(os.path.basename(path))[0]
+        meta = {
+            'sample_id': sample_id,
+            'timestamp': manifest.get('created', datetime.datetime.now().isoformat()),
+            'method': '',
+            'detector': detector,
+            'signal': '',
+            'notebook': sample_id,
+        }
+        results_dir = os.path.join(path, 'results')
+        os.makedirs(results_dir, exist_ok=True)
+        json_path = os.path.join(results_dir, f"{sample_id} - {detector}.json")
+        return meta, json_path
+
+    # Legacy .D path
+    meta = scrape_metadata_from_d_directory(path, detector)
+    json_path = os.path.join(path, f"{meta['notebook']} - {meta['detector']}.json")
+    return meta, json_path

@@ -27,6 +27,7 @@ class SignalProfile:
     pipeline_stages: List[PipelineStage]
     ui_mode: str        # "chromatography" or "spectroscopy"
     default_params: dict
+    invert_x: bool = False  # True for axes that display high→low (e.g. FTIR wavenumbers)
 
 
 class SignalProfileRegistry:
@@ -109,6 +110,7 @@ def _register_builtin_profiles() -> None:
         ],
         ui_mode="spectroscopy",
         default_params={},
+        invert_x=True,
     ))
 
     SignalProfileRegistry.register(SignalProfile(

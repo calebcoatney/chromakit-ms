@@ -25,10 +25,11 @@ class CFolder:
 
     @staticmethod
     def create(source_path: str, signal_type: str, **metadata) -> "CFolder":
-        """Create a new .C folder by copying source_path into data/.
+        """Create a new .C folder by moving source_path into data/.
 
         source_path may be a file (CSV) or a directory (.D folder).
-        The original is not modified. On any error the partial .C folder is removed.
+        The source is moved, not copied. On any error the partial .C folder
+        is removed and the source is restored to its original location.
         """
         base = os.path.splitext(os.path.basename(source_path))[0]
         parent = os.path.dirname(os.path.abspath(source_path))
@@ -42,13 +43,10 @@ class CFolder:
             os.makedirs(os.path.join(c_path, "results"))
 
             dest = os.path.join(c_path, "data", os.path.basename(source_path))
-            if os.path.isdir(source_path):
-                shutil.copytree(source_path, dest)
-            else:
-                shutil.copy2(source_path, dest)
+            shutil.move(source_path, dest)
 
             source_format = (
-                "agilent_d" if os.path.isdir(source_path) and source_path.endswith(".D")
+                "agilent_d" if os.path.isdir(dest) and dest.endswith(".D")
                 else os.path.splitext(source_path)[1].lstrip(".") or "unknown"
             )
 
@@ -62,6 +60,10 @@ class CFolder:
                 json.dump(manifest, f, indent=2)
 
         except Exception:
+            # Restore source if it was already moved into the .C folder
+            dest = os.path.join(c_path, "data", os.path.basename(source_path))
+            if os.path.exists(dest) and not os.path.exists(source_path):
+                shutil.move(dest, source_path)
             if os.path.exists(c_path):
                 shutil.rmtree(c_path, ignore_errors=True)
             raise
@@ -90,22 +92,27 @@ class CFolder:
         from logic.signal_profiles import SignalProfileRegistry
         return SignalProfileRegistry.get(self.get_manifest()["signal_type"])
 
-    def load_signal(self) -> dict:
+    def load_signal(self, signal_factor: float = 1.0) -> dict:
         """Load raw signal using the profile's loader.
 
         CSVLoader needs column names from the manifest; all other loaders
-        are instantiated with no arguments.
+        are instantiated with no arguments. AgilentLoader accepts signal_factor.
         """
         profile = self.profile
         manifest = self.get_manifest()
 
         from logic.loaders.csv_loader import CSVLoader
+        from logic.loaders.agilent_loader import AgilentLoader
         if issubclass(profile.loader_class, CSVLoader):
             csv_cols = manifest.get("csv_columns", {})
+            has_header = csv_cols.get("has_header", True)
             loader = profile.loader_class(
-                x_column=csv_cols.get("x_column", "x"),
-                y_column=csv_cols.get("y_column", "y"),
+                x_column=csv_cols.get("x_column", 0 if not has_header else "x"),
+                y_column=csv_cols.get("y_column", 1 if not has_header else "y"),
+                has_header=has_header,
             )
+        elif issubclass(profile.loader_class, AgilentLoader):
+            loader = profile.loader_class(signal_factor=signal_factor)
         else:
             loader = profile.loader_class()
 
@@ -131,6 +138,35 @@ class CFolder:
             pd.DataFrame(feature_dicts).to_csv(
                 os.path.join(results_dir, "features.csv"), index=False
             )
+
+    def extract(self, delete_wrapper: bool = False) -> str:
+        """Move the data source back out of this .C folder to its parent directory.
+
+        Returns the restored path. If *delete_wrapper* is True the .C folder
+        is removed after extraction (results/ will be lost).
+        """
+        data_dir = os.path.join(self.path, "data")
+        if not os.path.isdir(data_dir):
+            raise FileNotFoundError(f"No data/ directory in {self.path}")
+
+        items = [i for i in os.listdir(data_dir) if not i.startswith(".")]
+        if len(items) != 1:
+            raise RuntimeError(
+                f"Expected exactly one item in data/, found {len(items)}: {items}"
+            )
+
+        source_name = items[0]
+        src = os.path.join(data_dir, source_name)
+        dest = os.path.join(os.path.dirname(self.path), source_name)
+        if os.path.exists(dest):
+            raise FileExistsError(f"Cannot extract — {dest} already exists")
+
+        shutil.move(src, dest)
+
+        if delete_wrapper:
+            shutil.rmtree(self.path, ignore_errors=True)
+
+        return dest
 
 
 def _json_default(obj):

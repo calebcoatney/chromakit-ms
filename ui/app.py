@@ -49,6 +49,9 @@ class ChromaKitApp(QMainWindow):
         # Add flag to track if real data is loaded
         self.real_data_loaded = False
         
+        # Current signal profile (set on file load for both .C and .D paths)
+        self.current_profile = None
+        
         # Initialize data handler
         self.data_handler = DataHandler()
         
@@ -116,6 +119,8 @@ class ChromaKitApp(QMainWindow):
         
         # Connect signals - only connecting those signals that currently exist
         self.file_tree.file_selected.connect(self.on_file_selected)
+        self.file_tree.d_folder_opened.connect(self.on_file_selected)
+        self.file_tree.directory_opened.connect(self.on_directory_opened)
         self.plot_frame.point_selected.connect(self.on_point_selected)
         self.parameters_frame.parameters_changed.connect(self.on_parameters_changed)
         
@@ -198,6 +203,13 @@ class ChromaKitApp(QMainWindow):
         # Add JSON ↔ Excel Converter
         self.converter_action = tools_menu.addAction("JSON ↔ Excel Converter...")
         self.converter_action.triggered.connect(self.show_json_excel_converter)
+        
+        # Batch .C conversion tools
+        tools_menu.addSeparator()
+        self.batch_convert_action = tools_menu.addAction("Batch Convert to .C…")
+        self.batch_convert_action.triggered.connect(self.show_batch_convert_dialog)
+        self.batch_extract_action = tools_menu.addAction("Extract from .C…")
+        self.batch_extract_action.triggered.connect(self.show_batch_extract_dialog)
         
         # Theme state
         self.current_theme = 'light'
@@ -468,7 +480,7 @@ class ChromaKitApp(QMainWindow):
         ui_mode = profile.ui_mode  # "chromatography" or "spectroscopy"
         
         # 1. Update Plot labels
-        self.plot_frame.set_axis_labels(profile.x_label, profile.y_label)
+        self.plot_frame.set_axis_labels(profile.x_label, profile.y_label, invert_x=profile.invert_x)
         
         # 2. Update RT Table column headers
         pos_label = "RT" if ui_mode == "chromatography" else profile.x_label.split(" (")[0]
@@ -486,12 +498,43 @@ class ChromaKitApp(QMainWindow):
         self.setWindowTitle(f"ChromaKit - {profile.display_name}")
 
     @Slot(str)
-    def on_file_selected(self, folder_path, batch_mode=False):
-        """Handle .C folder selection from the tree view.
+    def on_directory_opened(self, dir_path):
+        """Check for bare .D folders when a directory is opened and offer migration."""
+        if getattr(self, '_suppressing_migration', False):
+            return
+
+        import glob as glob_mod
+        d_paths = sorted(glob_mod.glob(os.path.join(dir_path, "*.D")))
+        if not d_paths:
+            return
+
+        # Filter to only .D folders that don't already have a .C counterpart
+        bare_d = [
+            p for p in d_paths
+            if os.path.isdir(p) and not os.path.isdir(
+                os.path.join(os.path.dirname(p),
+                             os.path.splitext(os.path.basename(p))[0] + ".C")
+            )
+        ]
+        if not bare_d:
+            return
+
+        from ui.dialogs.c_folder_migration_dialog import CFolderMigrationDialog
+        dialog = CFolderMigrationDialog(bare_d, parent=self)
+        if dialog.exec():
+            # Refresh tree without re-triggering migration
+            self._suppressing_migration = True
+            self.file_tree.set_root_path(dir_path)
+            self._suppressing_migration = False
+
+    @Slot(str)
+    def on_file_selected(self, folder_path, batch_mode=False, detector=None):
+        """Handle .C or .D folder selection from the tree view.
 
         Args:
-            folder_path: Path to the .C folder to load
+            folder_path: Path to the .C or .D folder to load
             batch_mode: If True, suppress error dialogs (for batch processing)
+            detector: Specific detector channel to use (only for .D paths)
         """
         from logic.c_folder import CFolder
         try:
@@ -514,18 +557,68 @@ class ChromaKitApp(QMainWindow):
             # Normalize path
             folder_path = os.path.normpath(os.path.abspath(folder_path))
             
-            # Open .C folder and set UI mode
-            self.current_cf = CFolder.open(folder_path)
-            self.set_mode(self.current_cf.profile)
+            # Branch on folder type: .C (new format) vs .D (legacy Agilent)
+            if folder_path.endswith('.C'):
+                self.current_cf = CFolder.open(folder_path)
+                self.current_profile = self.current_cf.profile
+                data = self.current_cf.load_signal(signal_factor=self.signal_factor)
+            elif folder_path.endswith('.D'):
+                # Legacy .D path — load directly via DataHandler
+                from logic.signal_profiles import SignalProfileRegistry
+                self.current_cf = None
+                result = self.data_handler.load_data_directory(folder_path, detector=detector)
+                chrom = result['chromatogram']
+                tic = result.get('tic', {})
+                has_ms = self.data_handler.has_ms_data
+                # Detect gc vs gcms based on MS data presence
+                profile_name = 'gcms' if has_ms else 'gc'
+                self.current_profile = SignalProfileRegistry.get(profile_name)
+                data = {
+                    'x': chrom['x'],
+                    'y': chrom['y'],
+                    'metadata': {
+                        'has_ms_data': has_ms,
+                        'tic_x': tic.get('x') if has_ms else None,
+                        'tic_y': tic.get('y') if has_ms else None,
+                        'detector': getattr(self.data_handler, 'current_detector', ''),
+                        'sample_id': result.get('metadata', {}).get('filename', ''),
+                        'filename': result.get('metadata', {}).get('filename', ''),
+                        'd_path': folder_path,
+                    }
+                }
+            else:
+                self.status_bar.showMessage(f"Not a valid data directory: {folder_path}")
+                return
+            
+            self.set_mode(self.current_profile)
             
             # Set current directory path (for legacy compatibility)
             self.current_directory_path = folder_path
             
+            # Sync data_handler state so downstream code that checks
+            # data_handler.current_directory_path / has_ms_data keeps working
+            has_ms_data = data.get('metadata', {}).get('has_ms_data', False)
+            self.data_handler.current_directory_path = folder_path
+            self.data_handler.has_ms_data = has_ms_data
+            
+            # Build navigation list for prev/next sample buttons.
+            # For .D paths this is already done inside load_data_directory().
+            # For .C paths we scan the parent for sibling .C and .D folders.
+            if folder_path.endswith('.C'):
+                parent_dir = os.path.dirname(folder_path)
+                siblings = sorted(
+                    os.path.join(parent_dir, d) for d in os.listdir(parent_dir)
+                    if os.path.isdir(os.path.join(parent_dir, d))
+                    and (d.endswith('.C') or d.endswith('.D'))
+                )
+                self.data_handler.available_directories = siblings
+                try:
+                    self.data_handler.current_index = siblings.index(folder_path)
+                except ValueError:
+                    self.data_handler.current_index = -1
+            
             # Show loading message
             self.status_bar.showMessage(f"Loading: {folder_path}")
-            
-            # Load the signal data using the profile's loader
-            data = self.current_cf.load_signal()
             
             # Process signal data if available
             if 'x' in data and len(data['x']) > 0:
@@ -545,7 +638,7 @@ class ChromaKitApp(QMainWindow):
                 
                 # Process with current parameters and display
                 # Pass the active profile to process() for stage-gating and defaults
-                self.process_and_display(self.current_x, self.current_y, profile=self.current_cf.profile)
+                self.process_and_display(self.current_x, self.current_y, profile=self.current_profile)
                 
                 # Set flag that real data is loaded
                 self.real_data_loaded = True
@@ -577,7 +670,7 @@ class ChromaKitApp(QMainWindow):
             self.button_frame.enable_export(True)
 
             # Final display update
-            self.process_and_display(self.current_x, self.current_y, new_file=True, profile=self.current_cf.profile)
+            self.process_and_display(self.current_x, self.current_y, new_file=True, profile=self.current_profile)
             
         except Exception as e:
             # Handle any errors during loading
@@ -1422,7 +1515,7 @@ class ChromaKitApp(QMainWindow):
 
                 # Perform integration - CORE FUNCTIONALITY WITHOUT UI UPDATES
                 # Pass the active profile for feature class selection
-                profile = getattr(self, 'current_cf', None).profile if hasattr(self, 'current_cf') else None
+                profile = self.current_profile
                 integration_results = self.processor.integrate_peaks(
                     processed_data=self.current_processed,
                     ms_data=ms_data,
@@ -1625,12 +1718,18 @@ class ChromaKitApp(QMainWindow):
         
         # Create table
         table = QTableWidget()
-        headers = ['Compound ID', 'Peak #', 'Ret Time', 'Integrator', 'Width', 'Area', 'Start Time', 'End Time', 'Quality']
+        peaks = integration_results['peaks']
+        
+        # Get headers from the feature class, with a Quality column appended
+        if peaks and hasattr(peaks[0], 'column_headers'):
+            data_headers = peaks[0].column_headers()
+        else:
+            data_headers = ['Compound ID', 'Peak #', 'Ret Time', 'Integrator', 'Width', 'Area', 'Start Time', 'End Time']
+        headers = data_headers + ['Quality']
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         
         # Populate table
-        peaks = integration_results['peaks']
         table.setRowCount(len(peaks))
         
         for i, peak in enumerate(peaks):
@@ -2015,7 +2114,7 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage("Processing with updated parameters...")
             
             # Process and display the data with new parameters
-            self.process_and_display(self.current_x, self.current_y, new_file=False)
+            self.process_and_display(self.current_x, self.current_y, new_file=False, profile=self.current_profile)
             
             # Update status message with details
             method_name = params['baseline']['method']
@@ -2987,11 +3086,15 @@ class ChromaKitApp(QMainWindow):
 
     def export_results_csv(self, filepath=None):
         """Export integration results to a CSV file matching GCMS standard format."""
+        # If filepath is provided, we're in programmatic/batch mode — skip all UI
+        interactive = filepath is None
+        
         if not hasattr(self, 'integrated_peaks') or not self.integrated_peaks:
-            QMessageBox.warning(self, "No Results", "No integrated peaks to export.")
+            if interactive:
+                QMessageBox.warning(self, "No Results", "No integrated peaks to export.")
             return False
         
-        if filepath is None:
+        if interactive:
             # Get file path for saving
             filepath, _ = QFileDialog.getSaveFileName(
                 self, "Save Results CSV", "", "CSV Files (*.csv);;All Files (*.*)"
@@ -3048,7 +3151,7 @@ class ChromaKitApp(QMainWindow):
                         compound_id,
                         casno,
                         qual,
-                        f"{peak.retention_time:.3f}",
+                        f"{getattr(peak, 'retention_time', peak.position):.3f}",
                         f"{peak.area:.1f}"
                     ]
                     
@@ -3071,11 +3174,14 @@ class ChromaKitApp(QMainWindow):
                     
                     csv_writer.writerow(row)
             
-            self.status_bar.showMessage(f"Results exported to {filepath}")
+            if interactive:
+                self.status_bar.showMessage(f"Results exported to {filepath}")
             return True
         
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Error exporting results: {str(e)}")
+            print(f"CSV export error: {str(e)}")
+            if interactive:
+                QMessageBox.critical(self, "Export Error", f"Error exporting results: {str(e)}")
             return False
 
     def update_results_view(self):
@@ -3124,9 +3230,8 @@ class ChromaKitApp(QMainWindow):
         
         # Get the current directory if data is loaded
         initial_directory = None
-        if hasattr(self, 'current_file') and self.current_file:
-            # Get parent directory of the .D file
-            initial_directory = os.path.dirname(self.current_file)
+        if hasattr(self, 'current_directory_path') and self.current_directory_path:
+            initial_directory = os.path.dirname(self.current_directory_path)
         
         # Create and show the converter dialog
         converter_dialog = JsonToExcelConverter(parent=self, initial_directory=initial_directory)
@@ -3137,6 +3242,22 @@ class ChromaKitApp(QMainWindow):
         
         # Show as modal dialog
         converter_dialog.exec()
+
+    def show_batch_convert_dialog(self):
+        """Show the batch Convert to .C dialog."""
+        from ui.dialogs.batch_convert_dialog import BatchConvertDialog
+        dialog = BatchConvertDialog(parent=self)
+        dialog.setProperty("theme", self.current_theme)
+        dialog.setStyleSheet(self.styleSheet())
+        dialog.exec()
+
+    def show_batch_extract_dialog(self):
+        """Show the batch Extract from .C dialog."""
+        from ui.dialogs.batch_convert_dialog import BatchExtractDialog
+        dialog = BatchExtractDialog(parent=self)
+        dialog.setProperty("theme", self.current_theme)
+        dialog.setStyleSheet(self.styleSheet())
+        dialog.exec()
     
     def show_batch_queue_dialog(self):
         """Show the batch job setup dialog before the progress dialog."""
@@ -3502,6 +3623,15 @@ class ChromaKitApp(QMainWindow):
             QMessageBox.warning(self, "No Data Loaded", "Please load a data file first.")
             return
         
+        # Detector switching requires a .D folder (either direct or inside .C)
+        if hasattr(self, 'current_directory_path') and self.current_directory_path.endswith('.C'):
+            QMessageBox.information(
+                self, "Not Supported",
+                "Detector switching is not yet supported for .C containers.\n"
+                "Load the .D folder directly to switch detectors."
+            )
+            return
+        
         # Get available detectors
         detectors = self.data_handler.get_available_detectors()
         if not detectors:
@@ -3589,6 +3719,10 @@ class ChromaKitApp(QMainWindow):
         self.signal_factor = signal_factor
         self.area_factor = area_factor
         self.data_handler.signal_factor = signal_factor
+        
+        # Reload current file so the new factor takes effect immediately
+        if hasattr(self, 'current_directory_path') and self.current_directory_path:
+            self.on_file_selected(self.current_directory_path)
 
     def show_parameter_visibility_dialog(self):
         """Show dialog to configure which parameter sections are visible."""

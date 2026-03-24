@@ -92,13 +92,18 @@ class SpectralFeature(Feature):
             "quality_issues": self.quality_issues,
         }
 
+    @staticmethod
+    def column_headers() -> list:
+        return ['Feature #', 'Position', 'Area', 'Width', 'Start', 'End', 'Assignment', 'Absorbance']
+
     def as_row(self) -> list:
         return [
+            self.feature_id,
             round(self.position, 2),
-            round(self.area, 1),
-            round(self.width, 2),
-            round(self.start, 2),
-            round(self.end, 2),
+            round(abs(self.area), 4),
+            round(abs(self.width), 2),
+            round(min(self.start, self.end), 2),
+            round(max(self.start, self.end), 2),
             self.band_assignment,
             round(self.absorbance, 4),
         ]
