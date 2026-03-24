@@ -92,11 +92,20 @@ class CFolder:
         from logic.signal_profiles import SignalProfileRegistry
         return SignalProfileRegistry.get(self.get_manifest()["signal_type"])
 
-    def load_signal(self, signal_factor: float = 1.0) -> dict:
+    def get_available_detectors(self) -> list:
+        """Return detector channel names if the underlying source supports them."""
+        from logic.loaders.agilent_loader import AgilentLoader
+        if issubclass(self.profile.loader_class, AgilentLoader):
+            loader = AgilentLoader()
+            return loader.get_available_detectors(self.path)
+        return []
+
+    def load_signal(self, signal_factor: float = 1.0, detector: str = None) -> dict:
         """Load raw signal using the profile's loader.
 
         CSVLoader needs column names from the manifest; all other loaders
-        are instantiated with no arguments. AgilentLoader accepts signal_factor.
+        are instantiated with no arguments. AgilentLoader accepts signal_factor
+        and an optional detector channel name.
         """
         profile = self.profile
         manifest = self.get_manifest()
@@ -111,12 +120,13 @@ class CFolder:
                 y_column=csv_cols.get("y_column", 1 if not has_header else "y"),
                 has_header=has_header,
             )
+            return loader.load(self.path)
         elif issubclass(profile.loader_class, AgilentLoader):
             loader = profile.loader_class(signal_factor=signal_factor)
+            return loader.load(self.path, detector=detector)
         else:
             loader = profile.loader_class()
-
-        return loader.load(self.path)
+            return loader.load(self.path)
 
     def save_results(self, features: List["Feature"], processing_metadata: dict) -> None:
         """Write features to results/features.json and results/features.csv."""

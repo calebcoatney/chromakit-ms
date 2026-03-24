@@ -534,7 +534,7 @@ class ChromaKitApp(QMainWindow):
         Args:
             folder_path: Path to the .C or .D folder to load
             batch_mode: If True, suppress error dialogs (for batch processing)
-            detector: Specific detector channel to use (only for .D paths)
+            detector: Specific detector channel to use (for Agilent data)
         """
         from logic.c_folder import CFolder
         try:
@@ -561,7 +561,7 @@ class ChromaKitApp(QMainWindow):
             if folder_path.endswith('.C'):
                 self.current_cf = CFolder.open(folder_path)
                 self.current_profile = self.current_cf.profile
-                data = self.current_cf.load_signal(signal_factor=self.signal_factor)
+                data = self.current_cf.load_signal(signal_factor=self.signal_factor, detector=detector)
             elif folder_path.endswith('.D'):
                 # Legacy .D path — load directly via DataHandler
                 from logic.signal_profiles import SignalProfileRegistry
@@ -3623,17 +3623,11 @@ class ChromaKitApp(QMainWindow):
             QMessageBox.warning(self, "No Data Loaded", "Please load a data file first.")
             return
         
-        # Detector switching requires a .D folder (either direct or inside .C)
-        if hasattr(self, 'current_directory_path') and self.current_directory_path.endswith('.C'):
-            QMessageBox.information(
-                self, "Not Supported",
-                "Detector switching is not yet supported for .C containers.\n"
-                "Load the .D folder directly to switch detectors."
-            )
-            return
-        
-        # Get available detectors
-        detectors = self.data_handler.get_available_detectors()
+        # Get available detectors (works for both .C and .D paths)
+        if hasattr(self, 'current_cf') and self.current_cf is not None:
+            detectors = self.current_cf.get_available_detectors()
+        else:
+            detectors = self.data_handler.get_available_detectors()
         if not detectors:
             QMessageBox.warning(self, "No Detectors", "No detector channels found in the current data.")
             return

@@ -477,8 +477,9 @@ class Integrator:
         has_shoulder_info = 'peak_metadata' in processed_data and len(processed_data.get('peak_metadata', [])) > 0
         peak_metadata = processed_data.get('peak_metadata', [])
         
-        # IMPORTANT: Use the original signal for bounds detection to avoid double baseline subtraction
-        # The corrected signal will be used only for final area calculation
+        # Use the original signal for derivative calculation (shoulder detection).
+        # Bound-walking threshold and valley-finding use integration_signal (smoothed +
+        # baseline-corrected) to prevent raw noise spikes from triggering premature stops.
         bounds_detection_signal = processed_data.get('original_y', y)
         integration_signal = processed_data.get('corrected_y', y)  # Keep for area calculation
         
@@ -562,7 +563,9 @@ class Integrator:
                             baseline_segment = baseline_y[start_idx:peak_idx]
                             min_left = start_idx + np.argmin(np.abs(segment - baseline_segment))
                         else:
-                            min_left = start_idx + np.argmin(bounds_detection_signal[start_idx:peak_idx])
+                            # Use the corrected signal so the valley is found in baseline-corrected
+                            # space. On a rising raw baseline argmin would always land at start_idx.
+                            min_left = start_idx + np.argmin(integration_signal[start_idx:peak_idx])
                     else:
                         min_left = 0
                 else:
@@ -578,14 +581,15 @@ class Integrator:
                             baseline_segment = baseline_y[peak_idx:end_idx]
                             min_right = peak_idx + np.argmin(np.abs(segment - baseline_segment))
                         else:
-                            min_right = peak_idx + np.argmin(bounds_detection_signal[peak_idx:end_idx])
+                            min_right = peak_idx + np.argmin(integration_signal[peak_idx:end_idx])
                     else:
                         min_right = len(bounds_detection_signal) - 1
                 else:
                     min_right = len(bounds_detection_signal) - 1
                 
-                # Calculate vertical distance between apex and baseline (peak height)
-                apex_vertical_distance = apex_y - baseline_at_apex
+                # Calculate vertical distance between apex and baseline (peak height).
+                # Use integration_signal for consistency with diff in bound-walking loops.
+                apex_vertical_distance = integration_signal[peak_idx]
 
                 # For negative peaks, distance is negative — use absolute value
                 if is_negative or apex_vertical_distance < 0:
@@ -605,11 +609,13 @@ class Integrator:
                         if s_idx < peak_idx and s_bounds[1] > min_left:
                             left_limit_by_shoulder = s_bounds[1]
 
-                # Calculate the left bound using the specified criteria
+                # Calculate the left bound using the specified criteria.
+                # Use integration_signal (smoothed + corrected) for diff so that raw noise
+                # spikes below baseline don't prematurely fire the threshold criterion.
                 previous_slope = None
                 left_stop_reason = "no_criteria_met"
                 for j in range(peak_idx, 2, -1):
-                    diff = bounds_detection_signal[j] - baseline_y[j]
+                    diff = integration_signal[j]
                     
                     # If we've hit a shoulder's right bound, stop
                     if left_limit_by_shoulder is not None and j <= left_limit_by_shoulder:
@@ -658,7 +664,7 @@ class Integrator:
                 previous_slope = None
                 right_stop_reason = "no_criteria_met"
                 for j in range(peak_idx, len(bounds_detection_signal) - 3):
-                    diff = bounds_detection_signal[j] - baseline_y[j]
+                    diff = integration_signal[j]
                     
                     # If we've hit a shoulder's left bound, stop
                     if right_limit_by_shoulder is not None and j >= right_limit_by_shoulder:

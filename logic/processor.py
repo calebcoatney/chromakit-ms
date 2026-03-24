@@ -25,7 +25,7 @@ class ChromatogramProcessor:
 
         # --- Peak detection ---
         peak_prominence = peak_params.get('min_prominence', 0.05)
-        peak_width = peak_params.get('min_width', 5)
+        peak_width = peak_params.get('min_width', 0) or None  # None disables width filter in find_peaks
 
         signal_for_detection = smoothed_y if smoothed_y is not None else y
         
@@ -293,8 +293,15 @@ class ChromatogramProcessor:
         detection_signal = baseline_corrected_y  # Default to corrected signal
         
         if params['peaks']['enabled']:
-            # Pass the smoothed signal only if smoothing was enabled
-            smoothed_for_detection = smoothed_y if params['smoothing']['enabled'] else None
+            # Apply smoothing to the baseline-corrected signal for detection.
+            # Previously used the pre-correction smoothed_y, which caused missed peaks
+            # on steep baselines because prominence was computed against a sloped zero.
+            if params['smoothing']['enabled']:
+                smoothed_for_detection = self._apply_smoothing(
+                    np.copy(baseline_corrected_y), params['smoothing']
+                )
+            else:
+                smoothed_for_detection = None
             
             # Use derivative-based detection, passing both peak and shoulder params
             peaks_x, peaks_y, peak_metadata, detection_signal = self._detect_peaks_and_shoulders_derivative(

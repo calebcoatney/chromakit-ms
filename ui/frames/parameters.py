@@ -512,6 +512,17 @@ class ParametersFrame(QWidget):
         self.prominence_help = QLabel("Enter a number or scientific notation (e.g. 1e-3)")
         form_layout.addRow("", self.prominence_help)
 
+        # Min width filter (samples) — filters narrow noise spikes
+        self.min_width_entry = QLineEdit()
+        self.min_width_entry.setText(str(int(self.current_params['peaks'].get('min_width', 0))))
+        self.min_width_entry.setToolTip(
+            "Minimum peak width in samples (data points).\n"
+            "Noise spikes are 1–3 samples wide; real GC peaks are typically wider.\n"
+            "Set to 0 to disable width filtering."
+        )
+        self.min_width_entry.editingFinished.connect(self._on_min_width_changed)
+        form_layout.addRow("Min Width (samples):", self.min_width_entry)
+
         # ── Deconvolution sub-controls (visible only in deconvolution mode) ──
 
         self.deconv_controls_frame = QFrame()
@@ -570,21 +581,15 @@ class ParametersFrame(QWidget):
         self.heatmap_threshold_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('heatmap_threshold', v))
         adv_layout.addRow("U-Net Confidence:", self.heatmap_threshold_spin)
 
-        self.pre_fit_signal_spin = QDoubleSpinBox()
-        self.pre_fit_signal_spin.setRange(0.0, 5.0)
-        self.pre_fit_signal_spin.setSingleStep(0.1)
-        self.pre_fit_signal_spin.setDecimals(1)
-        self.pre_fit_signal_spin.setValue(
-            self.current_params['deconvolution']['pre_fit_signal_threshold'] * 100
-        )
-        self.pre_fit_signal_spin.setSuffix("%")
-        self.pre_fit_signal_spin.setToolTip(
-            "Skip U-Net detections where the raw signal is below this % of the peak maximum.\n"
+        self.pre_fit_signal_entry = QLineEdit()
+        self.pre_fit_signal_entry.setText(str(self.current_params['deconvolution']['pre_fit_signal_threshold']))
+        self.pre_fit_signal_entry.setToolTip(
+            "Skip U-Net detections where the signal is below this fraction of the peak maximum.\n"
             "Pre-fit noise gate — prevents fitting on baseline noise.\n"
-            "0.1% is a good starting point. 0% = no pre-filtering."
+            "1e-3 is a good starting point. 0 = no pre-filtering."
         )
-        self.pre_fit_signal_spin.valueChanged.connect(self._on_pre_fit_signal_changed)
-        adv_layout.addRow("Pre-fit Signal Gate:", self.pre_fit_signal_spin)
+        self.pre_fit_signal_entry.editingFinished.connect(self._on_pre_fit_signal_changed)
+        adv_layout.addRow("Pre-fit Signal Gate:", self.pre_fit_signal_entry)
 
         self.min_area_frac_spin = QDoubleSpinBox()
         self.min_area_frac_spin.setRange(0.00, 0.30)
@@ -1133,6 +1138,7 @@ class ParametersFrame(QWidget):
         is_deconv = self.current_params['peaks']['mode'] == 'deconvolution'
         self.prominence_entry.setEnabled(enabled)
         self.peak_mode_combo.setEnabled(enabled)
+        self.min_width_entry.setEnabled(enabled)
         self.deconv_controls_frame.setVisible(enabled and is_deconv)
 
     def _update_shoulder_controls_state(self):
@@ -1369,10 +1375,18 @@ class ParametersFrame(QWidget):
         self.current_params['deconvolution'][key] = value
         self.parameters_changed.emit(self.current_params)
 
-    def _on_pre_fit_signal_changed(self, value):
-        """Handle pre-fit signal gate change (displayed as %, stored as fraction)."""
-        self.current_params['deconvolution']['pre_fit_signal_threshold'] = value / 100.0
-        self.parameters_changed.emit(self.current_params)
+    def _on_pre_fit_signal_changed(self):
+        """Handle pre-fit signal gate change."""
+        text = self.pre_fit_signal_entry.text()
+        try:
+            value = float(text)
+            self.current_params['deconvolution']['pre_fit_signal_threshold'] = max(0.0, value)
+            self.pre_fit_signal_entry.setStyleSheet("background-color: #e6f2ff; border: 1px solid #99ccff;")
+            QTimer.singleShot(800, lambda: self.pre_fit_signal_entry.setStyleSheet(""))
+            self.parameters_changed.emit(self.current_params)
+        except ValueError:
+            self.pre_fit_signal_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
+            QTimer.singleShot(800, lambda: self.pre_fit_signal_entry.setStyleSheet(""))
 
     def _add_deconv_window_row(self):
         """Add a new row to the deconvolution windows table."""
@@ -1512,10 +1526,9 @@ class ParametersFrame(QWidget):
             spin.blockSignals(True)
             spin.setValue(d[key])
             spin.blockSignals(False)
-        # Pre-fit signal gate: stored as fraction, displayed as %
-        self.pre_fit_signal_spin.blockSignals(True)
-        self.pre_fit_signal_spin.setValue(d['pre_fit_signal_threshold'] * 100)
-        self.pre_fit_signal_spin.blockSignals(False)
+        self.pre_fit_signal_entry.blockSignals(True)
+        self.pre_fit_signal_entry.setText(str(d['pre_fit_signal_threshold']))
+        self.pre_fit_signal_entry.blockSignals(False)
 
     def _on_ms_baseline_clicked(self):
         """Signal that MS baseline correction button was clicked."""
@@ -1598,6 +1611,19 @@ class ParametersFrame(QWidget):
         self.current_params['shoulders']['apex_distance'] = value
         self.parameters_changed.emit(self.current_params)
     
+    def _on_min_width_changed(self):
+        """Handle min width entry change with validation."""
+        text = self.min_width_entry.text()
+        try:
+            value = int(float(text))
+            self.current_params['peaks']['min_width'] = max(0, value)
+            self.min_width_entry.setStyleSheet("background-color: #e6f2ff; border: 1px solid #99ccff;")
+            QTimer.singleShot(800, lambda: self.min_width_entry.setStyleSheet(""))
+            self.parameters_changed.emit(self.current_params)
+        except ValueError:
+            self.min_width_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
+            QTimer.singleShot(800, lambda: self.min_width_entry.setStyleSheet(""))
+
     def _on_prominence_entry_changed(self):
         """Handle prominence entry change with validation"""
         text = self.prominence_entry.text()

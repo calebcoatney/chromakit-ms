@@ -15,13 +15,21 @@ class AgilentLoader(DataLoader):
         self._handler = DataHandler()
         self._handler.signal_factor = signal_factor
 
-    def load(self, c_folder_path: str) -> dict:
+    def get_available_detectors(self, c_folder_path: str) -> list:
+        """Return detector channel names available in the .D folder inside a .C container."""
+        data_dir = os.path.join(c_folder_path, "data")
+        d_path = self._find_d_folder(data_dir)
+        if d_path is None:
+            return []
+        return self._handler.get_available_detectors(d_path)
+
+    def load(self, c_folder_path: str, detector: str = None) -> dict:
         data_dir = os.path.join(c_folder_path, "data")
         d_path = self._find_d_folder(data_dir)
         if d_path is None:
             raise FileNotFoundError(f"No .D folder found inside {data_dir}")
 
-        result = self._handler.load_data_directory(d_path)
+        result = self._handler.load_data_directory(d_path, detector=detector)
         chrom = result["chromatogram"]
         tic = result["tic"]
         has_ms = self._handler.has_ms_data
