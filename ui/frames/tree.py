@@ -9,7 +9,8 @@ import os
 class FileTreeFrame(QWidget):
     """A file browser panel that can be placed on the left side of the application."""
     
-    file_selected = Signal(str)  # Signal emitted when a file is selected
+    file_selected = Signal(str)    # Signal emitted when a .C folder is selected
+    d_folder_opened = Signal(str)  # Signal emitted if user double-clicks a bare .D folder
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -33,8 +34,8 @@ class FileTreeFrame(QWidget):
         self.model.setRootPath(QDir.homePath())
         self.model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs | QDir.Files)
         
-        # Create a name filter to show directories with .D extension
-        self.model.setNameFilters(["*.D"])
+        # Create a name filter to show directories with .C extension
+        self.model.setNameFilters(["*.C"])
         self.model.setNameFilterDisables(False)  # Hide items that don't match filter
         
         # Set up the tree view
@@ -78,17 +79,20 @@ class FileTreeFrame(QWidget):
         """Handle item double-click in the tree view."""
         file_path = self.model.filePath(index)
 
-        # Check if it's a .D directory or regular file
-        if os.path.isdir(file_path) and file_path.endswith('.D'):
-            self.file_selected.emit(file_path)
-        elif os.path.isdir(file_path) and not file_path.endswith('.D'):
-            # If it's a regular directory, expand/collapse it
-            if self.tree_view.isExpanded(index):
-                self.tree_view.collapse(index)
+        # Handle .C and .D directories
+        if os.path.isdir(file_path):
+            if file_path.endswith('.C'):
+                self.file_selected.emit(file_path)
+            elif file_path.endswith('.D'):
+                self.d_folder_opened.emit(file_path)
             else:
-                self.tree_view.expand(index)
+                # If it's a regular directory, expand/collapse it
+                if self.tree_view.isExpanded(index):
+                    self.tree_view.collapse(index)
+                else:
+                    self.tree_view.expand(index)
         else:
-            # For non-.D files, still emit the signal
+            # For non-directory files, still emit the signal
             self.file_selected.emit(file_path)
         
     def get_selected_path(self):
