@@ -4,6 +4,7 @@ import time
 import traceback
 import datetime
 import json
+from logic.c_folder import CFolder
 from util.thread_helpers import main_thread_dispatcher
 
 class AutomationSignals(QObject):
@@ -46,26 +47,32 @@ class AutomationWorker(QRunnable):
     def run(self):
         """Run the automation worker."""
         try:
-            # Get list of .D files in the directory
-            d_files = []
-            for item in os.listdir(self.directory_path):
+            # Get list of .C folders in the directory
+            c_files = []
+            for item in sorted(os.listdir(self.directory_path)):
                 item_path = os.path.join(self.directory_path, item)
-                if os.path.isdir(item_path) and item.endswith('.D'):
-                    d_files.append(item_path)
+                if os.path.isdir(item_path) and item.endswith('.C'):
+                    c_files.append(item_path)
             
-            # Sort files by name
-            d_files.sort()
-            
+            # If no .C folders found, emit a message and exit
+            if not c_files:
+                self.signals.log_message.emit(
+                    "No .C folders found in directory. "
+                    "Use File > Migrate .D Folders to convert existing Agilent data."
+                )
+                self.signals.finished.emit()
+                return
+
             # Store these for progress calculations
-            self.total_files = len(d_files)
+            self.total_files = len(c_files)
             self.current_file_index = 0
             
             # Signal the start of processing
-            self.signals.started.emit(len(d_files))
-            self.signals.log_message.emit(f"Found {len(d_files)} .D files to process")
+            self.signals.started.emit(len(c_files))
+            self.signals.log_message.emit(f"Found {len(c_files)} .C folders to process")
             
             # Process each file
-            for i, file_path in enumerate(d_files):
+            for i, file_path in enumerate(c_files):
                 self.current_file_index = i  # Update the current file index
                 
                 if self.cancelled:
