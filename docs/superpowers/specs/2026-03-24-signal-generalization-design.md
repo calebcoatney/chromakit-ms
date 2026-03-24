@@ -26,15 +26,15 @@ The goal is to generalize the system to support FTIR and UV-Vis signals — star
 
 ## 1. `.C` Folder Format
 
-ChromaKit manages `.C` directories as its native container format. Each `.C` folder represents one signal acquisition and contains the raw data source, processing results, and a manifest declaring the signal type.
+ChromaKit manages `.C` directories as its native container format. Each `.C` folder represents one sample (a single signal acquisition) and contains the raw data source, processing results, and a manifest declaring the signal type.
 
 ### Layout
 
 ```
-MyExperiment.C/
+MySample.C/
   manifest.json          ← signal type, source format, instrument metadata
   data/
-    MyExperiment.D/      ← Agilent: original .D folder nested inside
+    MySample.D/      ← Agilent: original .D folder nested inside
     — or —
     spectrum.csv         ← FTIR/UV-Vis: raw signal file
   results/
@@ -64,8 +64,8 @@ The `signal_type` field is the key dispatch value — it maps to a registered `S
 
 A `CFolderMigrationDialog` is presented when the user opens a directory containing `.D` folders with no corresponding `.C` wrappers. It lists detected `.D` folders, the user confirms, and `CFolder.create()` wraps each one:
 
-- A new `MyExperiment.C/` folder is created alongside `MyExperiment.D/`
-- `MyExperiment.D/` is **copied** (not moved) into `MyExperiment.C/data/` — the original `.D` folder remains at its original path until the user explicitly chooses to clean up
+- A new `MySample.C/` folder is created alongside `MySample.D/`
+- `MySample.D/` is **copied** (not moved) into `MySample.C/data/` — the original `.D` folder remains at its original path until the user explicitly chooses to clean up
 - `manifest.json` is written with `signal_type: "gcms"` or `"gc"` (user-selectable per-folder in the dialog)
 - The dialog displays the source path and destination path for each folder before committing
 - The dialog warns that external tools or scripts referencing the original `.D` path will need to be updated if the user later removes the originals
