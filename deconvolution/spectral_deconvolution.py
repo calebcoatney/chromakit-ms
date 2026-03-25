@@ -82,6 +82,9 @@ def sharpness_yang(rt_array: np.ndarray, intensity_array: np.ndarray,
     Returns -1.0 if both sides are empty (degenerate peak).
     Returns median of available side if only one side has data above p25.
     """
+    if left < 0 or right >= len(intensity_array) or left > right:
+        return -1.0
+
     apex_idx = left + int(np.argmax(intensity_array[left:right + 1]))
     apex_intensity = intensity_array[apex_idx]
 
