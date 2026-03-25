@@ -7,6 +7,7 @@ from spectral_deconvolution import (
     sharpness_yang, is_shared, shape_similarity_angle,
     _merge_peaks, _cluster_by_rt, _cluster_by_shape,
     _filter_peaks, _find_model_peak, _build_components,
+    deconvolve,
 )
 
 
@@ -325,3 +326,84 @@ class TestBuildComponents:
         comp2 = next(c for c in components if c.model_peak_mz == 200.0)
         assert comp1.spectrum.get(300.0, 0.0) > 0.0
         assert comp2.spectrum.get(300.0, 0.0) == pytest.approx(0.0, abs=1e-6)
+
+
+class TestDeconvolve:
+    def test_empty_input_returns_empty(self):
+        assert deconvolve([]) == []
+
+    def test_zero_candidates_fallback_builds_direct_spectrum(self):
+        params = DeconvolutionParams(
+            min_cluster_size=2,
+            min_cluster_distance=0.05,
+            min_cluster_intensity=10.0,
+            min_model_peak_sharpness=1000.0,  # impossibly high threshold
+            use_is_shared=False,
+        )
+        # Three peaks at same RT cluster, different m/z — all fail sharpness
+        peaks = []
+        for mz in [100.0, 200.0, 300.0]:
+            p = make_gaussian_peak(rt_center=5.0, mz=mz, height=500.0, n_points=30)
+            peaks.append(p)
+
+        result = deconvolve(peaks, params)
+        # Fallback should produce exactly 1 component (direct spectrum)
+        assert len(result) == 1
+        # Direct spectrum: all m/z values whose boundary spans the model RT
+        assert set(result[0].spectrum.keys()) == {100.0, 200.0, 300.0}
+
+    def test_single_analyte_two_mz_values(self):
+        params = DeconvolutionParams(
+            min_cluster_distance=0.05,
+            min_cluster_size=2,
+            min_cluster_intensity=100.0,
+            min_model_peak_sharpness=1.0,
+            use_is_shared=False,
+        )
+        peaks = [
+            make_gaussian_peak(rt_center=5.0, mz=100.0, width=0.3, height=1000.0, n_points=40),
+            make_gaussian_peak(rt_center=5.0, mz=200.0, width=0.3, height=800.0, n_points=40),
+        ]
+        result = deconvolve(peaks, params)
+        assert len(result) >= 1
+        all_mzs = set()
+        for comp in result:
+            all_mzs.update(comp.spectrum.keys())
+        assert len(all_mzs) > 0
+
+    def test_default_params_used_when_none(self):
+        peaks = [make_gaussian_peak(rt_center=5.0, mz=float(m), height=1000.0)
+                 for m in [100, 200]]
+        result = deconvolve(peaks)
+        assert isinstance(result, list)
+
+    def test_synthetic_two_analytes(self):
+        """Two analytes at well-separated RTs, each with 3 m/z values."""
+        params = DeconvolutionParams(
+            min_cluster_distance=0.01,   # eps < 0.5 min gap → two clusters
+            min_cluster_size=2,
+            min_cluster_intensity=100.0,
+            min_model_peak_sharpness=1.0,
+            use_is_shared=False,
+            shape_sim_threshold=30.0,
+        )
+        mz_a = {100.0, 150.0, 200.0}
+        mz_b = {250.0, 300.0, 350.0}
+        peaks = []
+        for mz in mz_a:
+            peaks.append(make_gaussian_peak(rt_center=2.0, mz=mz,
+                                            width=0.2, height=1000.0, n_points=40))
+        for mz in mz_b:
+            peaks.append(make_gaussian_peak(rt_center=2.5, mz=mz,
+                                            width=0.2, height=800.0, n_points=40))
+
+        result = deconvolve(peaks, params)
+        assert len(result) == 2
+
+        result.sort(key=lambda c: c.rt)
+        comp_a, comp_b = result[0], result[1]
+
+        assert any(mz in comp_a.spectrum and comp_a.spectrum[mz] > 0 for mz in mz_a)
+        assert any(mz in comp_b.spectrum and comp_b.spectrum[mz] > 0 for mz in mz_b)
+        assert comp_a.rt == pytest.approx(2.0, abs=0.1)
+        assert comp_b.rt == pytest.approx(2.5, abs=0.1)

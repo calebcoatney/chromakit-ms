@@ -455,3 +455,83 @@ def _build_components(model_peaks: list, other_peaks: list) -> list:
         )
         for mp in model_peaks
     ]
+
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
+
+def deconvolve(peaks: list,
+               params: Optional[DeconvolutionParams] = None) -> list:
+    """Spectral deconvolution via the ADAP-GC 3.2 two-step decomposition algorithm.
+
+    Clusters EIC peaks by retention time, selects model peaks by shape and
+    sharpness, then decomposes all peaks into linear combinations of model peaks
+    (NNLS) to construct fragmentation spectra for each detected analyte.
+
+    Reference: Smirnov et al., J. Proteome Res. 2018, 17, 470-478.
+    Java source: dulab.adap.workflow.TwoStepDecomposition.run()
+
+    Args:
+        peaks: Detected EIC peaks (one per m/z per chromatographic feature).
+        params: Algorithm parameters. Uses default DeconvolutionParams if None.
+
+    Returns:
+        List of DeconvolutedComponent, each with RT and fragmentation spectrum.
+    """
+    if params is None:
+        params = DeconvolutionParams()
+    if not peaks:
+        return []
+
+    rt_clusters = _cluster_by_rt(
+        peaks, params.min_cluster_distance,
+        params.min_cluster_size, params.min_cluster_intensity,
+    )
+
+    model_peaks: list = []
+    result: list = []
+
+    for cluster in rt_clusters:
+        candidates = _filter_peaks(cluster, params)
+
+        if len(candidates) == 0:
+            # Fallback: no model peak candidates survived filtering.
+            # Pick best from the full cluster and build a direct spectrum
+            # by interpolating ALL input peaks (not just this cluster) at
+            # the model peak's RT. This matches Java TwoStepDecomposition
+            # lines 102-126 which iterate the full `peaks` list.
+            model_peak = _find_model_peak(cluster, params.model_peak_choice)
+            if model_peak is None:
+                continue
+
+            span_rt = model_peak.rt_apex
+            spectrum: dict = {}
+            for p in peaks:  # ALL input peaks
+                p_left_rt = float(p.rt_array[p.left_boundary_idx])
+                p_right_rt = float(p.rt_array[p.right_boundary_idx])
+                if p_left_rt <= span_rt <= p_right_rt:
+                    spectrum[p.mz] = float(np.interp(span_rt, p.rt_array, p.intensity_array))
+
+            result.append(DeconvolutedComponent(
+                rt=model_peak.rt_apex,
+                spectrum=spectrum,
+                model_peak_mz=model_peak.mz,
+                model_peak_rt_array=model_peak.rt_array,
+                model_peak_intensity_array=model_peak.intensity_array,
+            ))
+
+        elif len(candidates) == 1:
+            model_peaks.append(candidates[0])
+
+        else:
+            shape_clusters = _cluster_by_shape(candidates, params.shape_sim_threshold)
+            for sc in shape_clusters:
+                mp = _find_model_peak(sc, params.model_peak_choice)
+                if mp is not None:
+                    model_peaks.append(mp)
+
+    other_peaks = _merge_peaks(
+        peaks, params.edge_to_height_ratio, params.delta_to_height_ratio
+    )
+    result += _build_components(model_peaks, other_peaks)
+
+    return result
