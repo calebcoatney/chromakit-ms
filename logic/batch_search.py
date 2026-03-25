@@ -239,6 +239,7 @@ class BatchSearchWorker(QRunnable):
         if not self.cancelled:
             self.signals.log_message.emit("MS library search completed")
 
+    @staticmethod
     def format_casno(casno):
         """Format a CAS number with dashes."""
         if not casno or not isinstance(casno, str):

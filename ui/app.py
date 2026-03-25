@@ -839,9 +839,11 @@ class ChromaKitApp(QMainWindow):
                 # Explicitly update RT entry as well
                 self.ms_frame.rt_entry.setText(f"{peak.retention_time:.3f}")
                 
-                # Update status bar
+                # Update status bar — note if deconvolved spectrum is available
+                has_deconv = getattr(peak, 'deconvolved_spectrum', None) is not None
+                deconv_note = " (deconvolved spectrum available — use Search All to apply)" if has_deconv else ""
                 self.status_bar.showMessage(
-                    f"Extracted mass spectrum for peak {peak.peak_number} at RT={peak.retention_time:.3f}"
+                    f"Extracted mass spectrum for peak {peak.peak_number} at RT={peak.retention_time:.3f}{deconv_note}"
                 )
             else:
                 self.status_bar.showMessage(f"Could not extract spectrum for peak {peak.peak_number}")
@@ -2827,14 +2829,21 @@ class ChromaKitApp(QMainWindow):
         return deconv, grouping
 
     def _on_deconvolve_ms_progress(self, pct: int):
-        print(f"Deconvolution progress: {pct}%")
+        self.status_bar.showMessage(f"Spectral deconvolution: {pct}%")
 
     def _on_deconvolve_ms_finished(self):
-        print("MS spectral deconvolution complete.")
+        n_deconv = sum(
+            1 for p in getattr(self, 'integrated_peaks', [])
+            if getattr(p, 'deconvolved_spectrum', None) is not None
+        )
+        self.status_bar.showMessage(
+            f"Spectral deconvolution complete — {n_deconv} of {len(getattr(self, 'integrated_peaks', []))} peaks deconvolved"
+        )
         self._refresh_current_peak_ms_display()
 
     def _on_deconvolve_ms_error(self, msg: str):
-        print(f"Spectral deconvolution error:\n{msg}")
+        self.status_bar.showMessage("Spectral deconvolution failed")
+        QMessageBox.critical(self, "Deconvolution Error", msg)
 
     def _refresh_current_peak_ms_display(self):
         """Re-display spectrum for the last-viewed peak (picks up deconvolved spectrum)."""
