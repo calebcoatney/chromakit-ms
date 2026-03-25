@@ -177,3 +177,28 @@ def is_shared(intensity_array: np.ndarray,
     return (left_to_apex >= edge_to_height
             or right_to_apex >= edge_to_height
             or delta_to_apex >= delta_to_height)
+
+
+def shape_similarity_angle(peak_a: EICPeak, peak_b: EICPeak) -> float:
+    """Angle between two chromatogram elution profiles (degrees, [0°, 90°]).
+
+    Port of Math.continuous_dot_product() + angle from
+    TwoStepDecomposition.getShapeClusters() (line 448-453).
+
+    Norm uses the continuous (trapz) inner product, matching peak.getNorm()
+    in Java: norm = sqrt(continuous_dot_product(chrom, chrom)).
+    np.interp clamps to boundary values outside each peak's RT range.
+    """
+    all_rt = np.union1d(peak_a.rt_array, peak_b.rt_array)
+    a = np.interp(all_rt, peak_a.rt_array, peak_a.intensity_array)
+    b = np.interp(all_rt, peak_b.rt_array, peak_b.intensity_array)
+
+    norm_a = np.sqrt(np.trapz(a ** 2, all_rt))
+    norm_b = np.sqrt(np.trapz(b ** 2, all_rt))
+
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 90.0
+
+    dot = np.trapz(a * b, all_rt)
+    cos_angle = np.clip(dot / (norm_a * norm_b), 0.0, 1.0)
+    return float(np.degrees(np.arccos(cos_angle)))

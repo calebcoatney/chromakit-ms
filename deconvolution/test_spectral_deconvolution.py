@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from spectral_deconvolution import (
     EICPeak, DeconvolutedComponent, DeconvolutionParams,
-    sharpness_yang, is_shared,
+    sharpness_yang, is_shared, shape_similarity_angle,
 )
 
 
@@ -80,3 +80,33 @@ class TestIsShared:
         # Left=400, right=50, apex=1000 → |400-50|/1000 = 0.35 > 0.3
         ints = np.array([400.0, 700.0, 1000.0, 600.0, 50.0])
         assert is_shared(ints, 0.3, 0.3) is True
+
+
+class TestShapeSimilarityAngle:
+    def test_identical_peaks_angle_near_zero(self):
+        peak = make_gaussian_peak(rt_center=5.0, mz=100.0)
+        angle = shape_similarity_angle(peak, peak)
+        assert angle < 1.0  # degrees
+
+    def test_angle_always_in_valid_range(self):
+        peak_a = make_gaussian_peak(rt_center=4.0, mz=100.0)
+        peak_b = make_gaussian_peak(rt_center=6.0, mz=200.0)
+        angle = shape_similarity_angle(peak_a, peak_b)
+        assert 0.0 <= angle <= 90.0
+
+    def test_very_different_shapes_large_angle(self):
+        # peak_a: early sharp spike; peak_b: late sharp spike on shared RT range
+        rts = np.linspace(0, 10, 100)
+        ints_a = np.zeros(100)
+        ints_a[10] = 1000.0  # spike near start
+        ints_b = np.zeros(100)
+        ints_b[90] = 1000.0  # spike near end
+        peak_a = EICPeak(rt_apex=rts[10], mz=100.0, rt_array=rts,
+                         intensity_array=ints_a,
+                         left_boundary_idx=0, right_boundary_idx=99, apex_idx=10)
+        peak_b = EICPeak(rt_apex=rts[90], mz=200.0, rt_array=rts,
+                         intensity_array=ints_b,
+                         left_boundary_idx=0, right_boundary_idx=99, apex_idx=90)
+        angle = shape_similarity_angle(peak_a, peak_b)
+        # Both on the same RT grid with non-overlapping spikes → near 90°
+        assert angle > 45.0
