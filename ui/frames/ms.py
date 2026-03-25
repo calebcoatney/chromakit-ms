@@ -28,7 +28,11 @@ class MSFrame(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(350)
-        
+
+        # Track the current data directory and peak for spectrum toggle
+        self._current_data_path = None
+        self._current_peak = None
+
         # Create main layout
         self.layout = QVBoxLayout(self)
         
@@ -164,7 +168,16 @@ class MSFrame(QWidget):
         self.configure_button = QPushButton("Configure...")
         self.configure_button.clicked.connect(self._configure_search_options)
         mz_shift_layout.addWidget(self.configure_button)
-        
+
+        # Toggle button: switches between deconvolved and raw apex spectrum
+        self.spectrum_toggle_btn = QPushButton("Deconvolved")
+        self.spectrum_toggle_btn.setCheckable(True)
+        self.spectrum_toggle_btn.setChecked(True)   # default: show deconvolved
+        self.spectrum_toggle_btn.setVisible(False)  # hidden until deconvolved spectrum available
+        self.spectrum_toggle_btn.setFixedWidth(120)
+        self.spectrum_toggle_btn.clicked.connect(self._on_spectrum_toggle)
+        mz_shift_layout.addWidget(self.spectrum_toggle_btn)
+
         mz_shift_layout.addStretch()
         rt_layout.addLayout(mz_shift_layout)
         
@@ -431,9 +444,55 @@ class MSFrame(QWidget):
         if not getattr(self, 'theme_applied', False):
             self.apply_theme()
     
+    def set_data_path(self, path: str):
+        """Called by ChromaKitApp when a file is loaded."""
+        self._current_data_path = path
+
+    def display_peak_spectrum(self, peak, data_directory=None):
+        """Display spectrum for a peak, using deconvolved if available and toggle is on."""
+        self._current_peak = peak
+        if data_directory:
+            self._current_data_path = data_directory
+
+        has_deconvolved = (
+            hasattr(peak, 'deconvolved_spectrum')
+            and peak.deconvolved_spectrum is not None
+        )
+        self.spectrum_toggle_btn.setVisible(has_deconvolved)
+
+        if has_deconvolved and self.spectrum_toggle_btn.isChecked():
+            spectrum = peak.deconvolved_spectrum
+        else:
+            # Point-in-time extraction at TIC apex
+            if self._current_data_path:
+                from logic.spectrum_extractor import SpectrumExtractor
+                extractor = SpectrumExtractor()
+                spectrum = extractor.extract_at_rt(
+                    self._current_data_path,
+                    retention_time=peak.retention_time,
+                )
+            else:
+                return
+
+        if spectrum is None:
+            return
+
+        self.plot_mass_spectrum(
+            spectrum['mz'],
+            spectrum['intensities'],
+            f"Peak (RT={peak.retention_time:.3f})",
+        )
+
+    def _on_spectrum_toggle(self):
+        """Re-display current peak with toggled spectrum source, updating button label."""
+        checked = self.spectrum_toggle_btn.isChecked()
+        self.spectrum_toggle_btn.setText("Deconvolved" if checked else "Raw Apex")
+        if self._current_peak is not None:
+            self.display_peak_spectrum(self._current_peak)
+
     def set_extract_spectrum_function(self, func):
         """Set a function that can extract real MS spectra.
-        
+
         Args:
             func: A function that takes a retention time and returns a spectrum dict
                  with 'mz' and 'intensities' keys

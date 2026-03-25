@@ -604,6 +604,8 @@ class ChromaKitApp(QMainWindow):
             has_ms_data = data.get('metadata', {}).get('has_ms_data', False)
             self.data_handler.current_directory_path = folder_path
             self.data_handler.has_ms_data = has_ms_data
+            if hasattr(self, 'ms_frame'):
+                self.ms_frame.set_data_path(folder_path)
             
             # Build navigation list for prev/next sample buttons.
             # For .D paths this is already done inside load_data_directory().
