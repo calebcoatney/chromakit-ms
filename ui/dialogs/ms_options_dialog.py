@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QFormLayout,
     QLabel, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton,
-    QRadioButton, QButtonGroup, QGroupBox, QSlider
+    QRadioButton, QButtonGroup, QGroupBox, QSlider, QLineEdit
 )
 from PySide6.QtCore import Qt, Signal, QSettings
 
@@ -27,6 +27,7 @@ class MSOptionsDialog(QDialog):
         self._create_general_tab()
         self._create_extraction_tab()
         self._create_subtraction_tab()
+        self._create_spectral_deconv_tab()
         self._create_algorithm_tab()
         self._create_quality_checks_tab()  # Add this line
         
@@ -156,7 +157,7 @@ class MSOptionsDialog(QDialog):
         layout.addWidget(self.tic_weight_check)
         
         # Add to tab widget
-        self.tab_widget.addTab(tab, "Spectrum Extraction")
+        self.tab_widget.addTab(tab, "Spectrum Extraction (Fallback)")
         
         # Initially disable option groups if not selected
         self.range_options_group.setEnabled(self.range_radio.isChecked())
@@ -219,8 +220,92 @@ class MSOptionsDialog(QDialog):
         layout.addWidget(params_group)
         
         # Add to tab widget
-        self.tab_widget.addTab(tab, "Background Subtraction")
+        self.tab_widget.addTab(tab, "Background Subtraction (Fallback)")
     
+    def _create_spectral_deconv_tab(self):
+        """Create the Spectral Deconvolution (ADAP-GC) options tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        info = QLabel(
+            "Deconvolved spectra replace point-in-time extraction for library search.\n"
+            "Run via 'Deconvolve MS' button after FID integration."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # --- Peak Window Grouping ---
+        grouping_group = QGroupBox("Peak Window Grouping")
+        grouping_layout = QFormLayout(grouping_group)
+
+        self.gap_tolerance_spin = QDoubleSpinBox()
+        self.gap_tolerance_spin.setRange(0.0, 5.0)
+        self.gap_tolerance_spin.setSingleStep(0.05)
+        self.gap_tolerance_spin.setDecimals(3)
+        self.gap_tolerance_spin.setSpecialValueText("Auto")
+        self.gap_tolerance_spin.setToolTip("0 = auto (0.5× median FID peak width)")
+        grouping_layout.addRow("Gap tolerance (min):", self.gap_tolerance_spin)
+
+        self.padding_fraction_spin = QDoubleSpinBox()
+        self.padding_fraction_spin.setRange(0.0, 2.0)
+        self.padding_fraction_spin.setSingleStep(0.1)
+        self.padding_fraction_spin.setDecimals(2)
+        grouping_layout.addRow("Padding fraction:", self.padding_fraction_spin)
+
+        self.rt_match_tolerance_spin = QDoubleSpinBox()
+        self.rt_match_tolerance_spin.setRange(0.001, 1.0)
+        self.rt_match_tolerance_spin.setSingleStep(0.005)
+        self.rt_match_tolerance_spin.setDecimals(3)
+        self.rt_match_tolerance_spin.setToolTip("Max RT gap (min) between FID peak and MS component")
+        grouping_layout.addRow("RT match tolerance (min):", self.rt_match_tolerance_spin)
+
+        layout.addWidget(grouping_group)
+
+        # --- ADAP-GC Parameters ---
+        adap_group = QGroupBox("ADAP-GC Parameters")
+        adap_layout = QFormLayout(adap_group)
+
+        self.min_cluster_distance_spin = QDoubleSpinBox()
+        self.min_cluster_distance_spin.setRange(0.0001, 1.0)
+        self.min_cluster_distance_spin.setSingleStep(0.001)
+        self.min_cluster_distance_spin.setDecimals(4)
+        self.min_cluster_distance_spin.setToolTip("DBSCAN eps — max RT gap within a cluster (min)")
+        adap_layout.addRow("Min cluster distance (min):", self.min_cluster_distance_spin)
+
+        self.min_cluster_size_spin = QSpinBox()
+        self.min_cluster_size_spin.setRange(1, 20)
+        self.min_cluster_size_spin.setToolTip("DBSCAN min_samples — minimum EIC peaks per cluster")
+        adap_layout.addRow("Min cluster size:", self.min_cluster_size_spin)
+
+        self.min_cluster_intensity_spin = QDoubleSpinBox()
+        self.min_cluster_intensity_spin.setRange(0.0, 1e8)
+        self.min_cluster_intensity_spin.setSingleStep(100.0)
+        self.min_cluster_intensity_spin.setDecimals(0)
+        self.min_cluster_intensity_spin.setToolTip("Drop clusters below this max intensity (counts)")
+        adap_layout.addRow("Min cluster intensity:", self.min_cluster_intensity_spin)
+
+        self.shape_sim_threshold_spin = QDoubleSpinBox()
+        self.shape_sim_threshold_spin.setRange(1.0, 90.0)
+        self.shape_sim_threshold_spin.setSingleStep(1.0)
+        self.shape_sim_threshold_spin.setDecimals(1)
+        self.shape_sim_threshold_spin.setToolTip("Max angle (°) between EIC shapes in the same cluster")
+        adap_layout.addRow("Shape similarity threshold (°):", self.shape_sim_threshold_spin)
+
+        self.model_peak_choice_combo = QComboBox()
+        self.model_peak_choice_combo.addItems(["Sharpness", "Intensity", "m/z"])
+        self.model_peak_choice_combo.setToolTip("Criterion for selecting the representative EIC peak")
+        adap_layout.addRow("Model peak choice:", self.model_peak_choice_combo)
+
+        self.excluded_mz_edit = QLineEdit()
+        self.excluded_mz_edit.setPlaceholderText("e.g. 73, 147, 221  (leave blank for none)")
+        self.excluded_mz_edit.setToolTip("Comma-separated m/z values to exclude (e.g. TMS artifacts)")
+        adap_layout.addRow("Excluded m/z:", self.excluded_mz_edit)
+
+        layout.addWidget(adap_group)
+        layout.addStretch()
+
+        self.tab_widget.addTab(tab, "Spectral Deconvolution")
+
     def _create_algorithm_tab(self):
         """Create the algorithm options tab."""
         tab = QWidget()
@@ -431,7 +516,29 @@ class MSOptionsDialog(QDialog):
         self.skew_threshold_spin.setValue(self.settings.value("ms_search/skew_threshold", 0.5, float))
         self.coherence_threshold_spin.setValue(self.settings.value("ms_search/coherence_threshold", 0.7, float))
         self.high_corr_threshold_spin.setValue(self.settings.value("ms_search/high_corr_threshold", 0.5, float))
-    
+
+        # Spectral Deconvolution tab
+        self.gap_tolerance_spin.setValue(
+            self.settings.value("ms_spectral_deconv/gap_tolerance", 0.0, float))
+        self.padding_fraction_spin.setValue(
+            self.settings.value("ms_spectral_deconv/padding_fraction", 0.5, float))
+        self.rt_match_tolerance_spin.setValue(
+            self.settings.value("ms_spectral_deconv/rt_match_tolerance", 0.05, float))
+        self.min_cluster_distance_spin.setValue(
+            self.settings.value("ms_spectral_deconv/min_cluster_distance", 0.005, float))
+        self.min_cluster_size_spin.setValue(
+            self.settings.value("ms_spectral_deconv/min_cluster_size", 2, int))
+        self.min_cluster_intensity_spin.setValue(
+            self.settings.value("ms_spectral_deconv/min_cluster_intensity", 200.0, float))
+        self.shape_sim_threshold_spin.setValue(
+            self.settings.value("ms_spectral_deconv/shape_sim_threshold", 30.0, float))
+        choice_map = {"sharpness": 0, "intensity": 1, "mz": 2}
+        self.model_peak_choice_combo.setCurrentIndex(
+            choice_map.get(
+                self.settings.value("ms_spectral_deconv/model_peak_choice", "sharpness", str), 0))
+        self.excluded_mz_edit.setText(
+            self.settings.value("ms_spectral_deconv/excluded_mz", "", str))
+
     def _save_settings(self):
         """Save settings to QSettings."""
         # General tab
@@ -477,7 +584,28 @@ class MSOptionsDialog(QDialog):
         self.settings.setValue("ms_search/skew_threshold", self.skew_threshold_spin.value())
         self.settings.setValue("ms_search/coherence_threshold", self.coherence_threshold_spin.value())
         self.settings.setValue("ms_search/high_corr_threshold", self.high_corr_threshold_spin.value())
-    
+
+        # Spectral Deconvolution tab
+        self.settings.setValue("ms_spectral_deconv/gap_tolerance",
+                               self.gap_tolerance_spin.value())
+        self.settings.setValue("ms_spectral_deconv/padding_fraction",
+                               self.padding_fraction_spin.value())
+        self.settings.setValue("ms_spectral_deconv/rt_match_tolerance",
+                               self.rt_match_tolerance_spin.value())
+        self.settings.setValue("ms_spectral_deconv/min_cluster_distance",
+                               self.min_cluster_distance_spin.value())
+        self.settings.setValue("ms_spectral_deconv/min_cluster_size",
+                               self.min_cluster_size_spin.value())
+        self.settings.setValue("ms_spectral_deconv/min_cluster_intensity",
+                               self.min_cluster_intensity_spin.value())
+        self.settings.setValue("ms_spectral_deconv/shape_sim_threshold",
+                               self.shape_sim_threshold_spin.value())
+        choice_list = ["sharpness", "intensity", "mz"]
+        self.settings.setValue("ms_spectral_deconv/model_peak_choice",
+                               choice_list[self.model_peak_choice_combo.currentIndex()])
+        self.settings.setValue("ms_spectral_deconv/excluded_mz",
+                               self.excluded_mz_edit.text().strip())
+
     def _restore_defaults(self):
         """Restore default values."""
         # General tab
@@ -518,7 +646,18 @@ class MSOptionsDialog(QDialog):
         self.skew_threshold_spin.setValue(0.5)
         self.coherence_threshold_spin.setValue(0.7)
         self.high_corr_threshold_spin.setValue(0.5)
-    
+
+        # Spectral Deconvolution tab
+        self.gap_tolerance_spin.setValue(0.0)
+        self.padding_fraction_spin.setValue(0.5)
+        self.rt_match_tolerance_spin.setValue(0.05)
+        self.min_cluster_distance_spin.setValue(0.005)
+        self.min_cluster_size_spin.setValue(2)
+        self.min_cluster_intensity_spin.setValue(200.0)
+        self.shape_sim_threshold_spin.setValue(30.0)
+        self.model_peak_choice_combo.setCurrentIndex(0)
+        self.excluded_mz_edit.clear()
+
     def get_options(self):
         """Get the current options as a dictionary."""
         # Determine extraction method from radio buttons
