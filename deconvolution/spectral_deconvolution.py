@@ -67,3 +67,59 @@ class _PeakData:
     rt_array: np.ndarray     # chromatogram RT axis (may be merged from multiple peaks)
     intensity_array: np.ndarray
     apex_intensity: float    # max intensity in this chromatogram
+
+
+# ─── Layer 1: Math primitives ─────────────────────────────────────────────────
+
+def sharpness_yang(rt_array: np.ndarray, intensity_array: np.ndarray,
+                   left: int, right: int) -> float:
+    """Peak quality metric. Port of FeatureTools.sharpnessYang() (line 542).
+
+    Computes median slope on each side of the apex for points above the
+    25th-percentile height above baseline. Higher = sharper, better model peak.
+    Uses index deltas (not time deltas) matching Java lines 591, 607.
+
+    Returns -1.0 if both sides are empty (degenerate peak).
+    Returns median of available side if only one side has data above p25.
+    """
+    apex_idx = left + int(np.argmax(intensity_array[left:right + 1]))
+    apex_intensity = intensity_array[apex_idx]
+
+    if apex_intensity <= 0:
+        return -1.0
+
+    left_h = intensity_array[left]
+    right_h = intensity_array[right]
+    left_rt = rt_array[left]
+    right_rt = rt_array[right]
+
+    if right_rt == left_rt:
+        return -1.0
+
+    slope_bl = (right_h - left_h) / (right_rt - left_rt)
+    intercept_bl = left_h - slope_bl * left_rt
+    baseline_at_apex = slope_bl * rt_array[apex_idx] + intercept_bl
+
+    p25_offset = 0.25 * (apex_intensity - baseline_at_apex)
+    if p25_offset <= 0.0:
+        return -1.0
+    p25 = p25_offset + baseline_at_apex
+
+    left_slopes = [
+        (apex_intensity - intensity_array[i]) / float(apex_idx - i)
+        for i in range(left, apex_idx)
+        if intensity_array[i] >= p25
+    ]
+    right_slopes = [
+        (intensity_array[i] - apex_intensity) / float(i - apex_idx)
+        for i in range(apex_idx + 1, right + 1)
+        if intensity_array[i] >= p25
+    ]
+
+    if not left_slopes and not right_slopes:
+        return -1.0
+    if not right_slopes:
+        return float(np.median(left_slopes))
+    if not left_slopes:
+        return float(np.median(right_slopes))
+    return (float(np.median(left_slopes)) - float(np.median(right_slopes))) / 2.0
