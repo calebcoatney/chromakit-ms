@@ -116,7 +116,9 @@ class ChromaKitApp(QMainWindow):
         # Create status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        
+
+        self._last_ms_peak_index = None
+
         # Connect signals - only connecting those signals that currently exist
         self.file_tree.file_selected.connect(self.on_file_selected)
         self.file_tree.d_folder_opened.connect(self.on_file_selected)
@@ -131,6 +133,7 @@ class ChromaKitApp(QMainWindow):
         self.button_frame.integrate_clicked.connect(self.on_integrate)
         self.button_frame.automation_clicked.connect(self.on_automation_clicked)
         self.button_frame.batch_search_clicked.connect(self.run_batch_ms_search)
+        self.button_frame.deconvolve_ms_clicked.connect(self._on_deconvolve_ms_clicked)
 
         # Connect RT table signals
         self.rt_table_frame.rt_table_changed.connect(self.on_rt_table_changed)
@@ -549,6 +552,7 @@ class ChromaKitApp(QMainWindow):
             
             # Disable batch search button until new peaks are integrated
             self.button_frame.batch_search_button.setEnabled(False)
+            self.button_frame.deconvolve_ms_button.setEnabled(False)
             
             # Reset current data to prevent length mismatches
             self.current_x = None
@@ -750,6 +754,7 @@ class ChromaKitApp(QMainWindow):
     
     def on_peak_spectrum_requested(self, peak_index):
         """Handle request to extract MS spectrum for a specific peak."""
+        self._last_ms_peak_index = peak_index
         # Check if MS data exists for this sample
         if not hasattr(self.data_handler, 'has_ms_data') or not self.data_handler.has_ms_data:
             self.status_bar.showMessage("No MS data available for this file")
@@ -2749,7 +2754,76 @@ class ChromaKitApp(QMainWindow):
         dialog.close()
         self.status_bar.showMessage("Error in batch MS search")
         QMessageBox.critical(self, "Batch Search Error", error_message)
-    
+
+    def _on_deconvolve_ms_clicked(self):
+        """Dispatch spectral deconvolution worker."""
+        if not hasattr(self, 'integrated_peaks') or not self.integrated_peaks:
+            return
+        if not hasattr(self.data_handler, 'current_directory_path') or not self.data_handler.current_directory_path:
+            return
+
+        from logic.spectral_deconv_worker import SpectralDeconvWorker
+
+        # Read params from MS options dialog settings
+        deconv_params, grouping_params = self._get_spectral_deconv_params()
+
+        worker = SpectralDeconvWorker(
+            peaks=self.integrated_peaks,
+            ms_data_path=self.data_handler.current_directory_path,
+            deconv_params=deconv_params,
+            grouping_params=grouping_params,
+        )
+        worker.signals.progress.connect(self._on_deconvolve_ms_progress)
+        worker.signals.finished.connect(self._on_deconvolve_ms_finished)
+        worker.signals.error.connect(self._on_deconvolve_ms_error)
+
+        print(f"Running MS spectral deconvolution on {len(self.integrated_peaks)} peaks...")
+        QThreadPool.globalInstance().start(worker)
+
+    def _get_spectral_deconv_params(self):
+        """Read DeconvolutionParams and WindowGroupingParams from QSettings."""
+        from logic.spectral_deconvolution import DeconvolutionParams
+        from logic.spectral_deconv_runner import WindowGroupingParams
+
+        s = QSettings("CalebCoatney", "ChromaKit")
+
+        deconv = DeconvolutionParams(
+            min_cluster_distance=s.value("ms_spectral_deconv/min_cluster_distance", 0.005, float),
+            min_cluster_size=s.value("ms_spectral_deconv/min_cluster_size", 2, int),
+            min_cluster_intensity=s.value("ms_spectral_deconv/min_cluster_intensity", 200.0, float),
+            shape_sim_threshold=s.value("ms_spectral_deconv/shape_sim_threshold", 30.0, float),
+            model_peak_choice=s.value("ms_spectral_deconv/model_peak_choice", "sharpness", str),
+            excluded_mz=[
+                float(x.strip())
+                for x in s.value("ms_spectral_deconv/excluded_mz", "", str).split(",")
+                if x.strip()
+            ],
+        )
+
+        raw_gap = s.value("ms_spectral_deconv/gap_tolerance", 0.0, float)
+        grouping = WindowGroupingParams(
+            gap_tolerance=None if raw_gap == 0.0 else raw_gap,
+            padding_fraction=s.value("ms_spectral_deconv/padding_fraction", 0.5, float),
+            rt_match_tolerance=s.value("ms_spectral_deconv/rt_match_tolerance", 0.05, float),
+        )
+
+        return deconv, grouping
+
+    def _on_deconvolve_ms_progress(self, pct: int):
+        print(f"Deconvolution progress: {pct}%")
+
+    def _on_deconvolve_ms_finished(self):
+        print("MS spectral deconvolution complete.")
+        self._refresh_current_peak_ms_display()
+
+    def _on_deconvolve_ms_error(self, msg: str):
+        print(f"Spectral deconvolution error:\n{msg}")
+
+    def _refresh_current_peak_ms_display(self):
+        """Re-display spectrum for the last-viewed peak (picks up deconvolved spectrum)."""
+        if hasattr(self, '_last_ms_peak_index') and self._last_ms_peak_index is not None:
+            self.on_peak_spectrum_requested(self._last_ms_peak_index)
+
     def _perform_quantitation(self):
         """Perform quantitation on integrated peaks using Polyarc + IS method."""
         from logic.quantitation import QuantitationCalculator
@@ -3031,7 +3105,8 @@ class ChromaKitApp(QMainWindow):
                       self.ms_frame.library_loaded)
         
         self.button_frame.batch_search_button.setEnabled(bool(peaks) and has_library)
-        
+        self.button_frame.deconvolve_ms_button.setEnabled(bool(peaks))
+
         # Update other UI elements as needed
         self.update_results_view()
 

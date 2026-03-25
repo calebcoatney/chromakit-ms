@@ -11,7 +11,8 @@ class ButtonFrame(QWidget):
     integrate_clicked = Signal()
     automation_clicked = Signal()  # Changed from automation_toggled
     batch_search_clicked = Signal()
-    
+    deconvolve_ms_clicked = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         
@@ -62,7 +63,13 @@ class ButtonFrame(QWidget):
         self.batch_search_button.clicked.connect(self.batch_search_clicked.emit)
         self.batch_search_button.setEnabled(False)  # Disabled by default
         self.row2_layout.addWidget(self.batch_search_button)
-        
+
+        self.deconvolve_ms_button = QPushButton("Deconvolve MS")
+        self.deconvolve_ms_button.setToolTip("Run ADAP-GC spectral deconvolution on integrated peaks")
+        self.deconvolve_ms_button.setEnabled(False)
+        self.deconvolve_ms_button.clicked.connect(self.deconvolve_ms_clicked)
+        self.row2_layout.addWidget(self.deconvolve_ms_button)
+
         # Add rows to main layout
         self.layout.addWidget(self.row1_frame)
         self.layout.addWidget(self.row2_frame)
