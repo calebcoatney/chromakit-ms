@@ -90,13 +90,18 @@ class BatchSearchWorker(QRunnable):
                 
                 # Extract spectrum based on extraction method
                 extraction_method = options.get('extraction_method', 'apex')
-                
-                spectrum = self.spectrum_extractor.extract_for_peak(
-                    self.data_directory, 
-                    peak, 
-                    self.options
-                )
-                
+
+                # Extract spectrum: use deconvolved if available, otherwise point-in-time
+                if hasattr(peak, 'deconvolved_spectrum') and peak.deconvolved_spectrum is not None:
+                    spectrum = peak.deconvolved_spectrum
+                    # Deconvolved spectrum is already clean — skip background subtraction
+                else:
+                    spectrum = self.spectrum_extractor.extract_for_peak(
+                        self.data_directory,
+                        peak,
+                        self.options
+                    )
+
                 if not spectrum or 'mz' not in spectrum or 'intensities' not in spectrum:
                     # Signal progress even when spectrum extraction fails
                     self.signals.progress.emit(i, f"No spectrum at RT {peak.retention_time:.3f}", [])
