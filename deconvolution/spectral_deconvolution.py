@@ -354,3 +354,45 @@ def _cluster_by_shape(peaks: list, threshold: float) -> list:
     for peak, label in zip(peaks, labels):
         groups.setdefault(int(label), []).append(peak)
     return list(groups.values())
+
+
+# ─── Layer 4: Peak filtering and selection ────────────────────────────────────
+
+def _filter_peaks(cluster: list, params: DeconvolutionParams) -> list:
+    """Filter model peak candidates by isShared, sharpness, and excluded m/z.
+    Port of TwoStepDecomposition.filterPeaks().
+    """
+    result = []
+    for peak in cluster:
+        sliced = peak.intensity_array[peak.left_boundary_idx:peak.right_boundary_idx + 1]
+
+        if params.use_is_shared and is_shared(
+                sliced, params.edge_to_height_ratio, params.delta_to_height_ratio):
+            continue
+
+        if sharpness_yang(peak.rt_array, peak.intensity_array,
+                          peak.left_boundary_idx, peak.right_boundary_idx) \
+                < params.min_model_peak_sharpness:
+            continue
+
+        if any(abs(peak.mz - excl) <= params.excluded_mz_tolerance
+               for excl in params.excluded_mz):
+            continue
+
+        result.append(peak)
+    return result
+
+
+def _find_model_peak(peaks: list, choice: str) -> Optional[EICPeak]:
+    """Select model peak from a cluster by choice criterion.
+    Port of TwoStepDecomposition.findModelPeak().
+    """
+    if not peaks:
+        return None
+    if choice == 'intensity':
+        return max(peaks, key=lambda p: float(p.intensity_array[p.apex_idx]))
+    if choice == 'mz':
+        return max(peaks, key=lambda p: p.mz)
+    # default: 'sharpness'
+    return max(peaks, key=lambda p: sharpness_yang(
+        p.rt_array, p.intensity_array, p.left_boundary_idx, p.right_boundary_idx))

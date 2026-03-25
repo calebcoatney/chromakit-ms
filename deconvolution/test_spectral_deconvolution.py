@@ -6,6 +6,7 @@ from spectral_deconvolution import (
     EICPeak, DeconvolutedComponent, DeconvolutionParams,
     sharpness_yang, is_shared, shape_similarity_angle,
     _merge_peaks, _cluster_by_rt, _cluster_by_shape,
+    _filter_peaks, _find_model_peak,
 )
 
 
@@ -217,3 +218,57 @@ class TestClusterByShape:
         clusters = _cluster_by_shape([peak], threshold=30.0)
         assert len(clusters) == 1
         assert clusters[0][0] is peak
+
+
+class TestFilterPeaks:
+    def test_sharp_clean_peak_passes(self):
+        peak = make_gaussian_peak(rt_center=5.0, width=0.2, height=1000.0, n_points=50)
+        params = DeconvolutionParams(min_model_peak_sharpness=1.0)
+        result = _filter_peaks([peak], params)
+        assert len(result) == 1
+
+    def test_low_sharpness_removed(self):
+        rt = np.linspace(0, 1, 20)
+        ints = np.ones(20) * 500.0
+        ints[10] = 510.0  # tiny apex
+        peak = EICPeak(rt_apex=0.5, mz=100.0, rt_array=rt, intensity_array=ints,
+                       left_boundary_idx=0, right_boundary_idx=19, apex_idx=10)
+        params = DeconvolutionParams(min_model_peak_sharpness=10.0)
+        result = _filter_peaks([peak], params)
+        assert len(result) == 0
+
+    def test_excluded_mz_removed(self):
+        peak = make_gaussian_peak(mz=73.0, width=0.2, height=1000.0, n_points=50)
+        params = DeconvolutionParams(
+            min_model_peak_sharpness=1.0,
+            excluded_mz=[73.0], excluded_mz_tolerance=0.5
+        )
+        result = _filter_peaks([peak], params)
+        assert len(result) == 0
+
+    def test_shared_peak_removed_when_enabled(self):
+        rt = np.linspace(0, 1, 20)
+        ints = np.zeros(20)
+        ints[0] = 10.0; ints[5] = 500.0; ints[10] = 200.0; ints[15] = 600.0; ints[19] = 10.0
+        peak = EICPeak(rt_apex=0.789, mz=100.0, rt_array=rt, intensity_array=ints,
+                       left_boundary_idx=0, right_boundary_idx=19, apex_idx=15)
+        params = DeconvolutionParams(use_is_shared=True, min_model_peak_sharpness=0.0)
+        result = _filter_peaks([peak], params)
+        assert len(result) == 0
+
+
+class TestFindModelPeak:
+    def test_picks_sharpest_peak(self):
+        sharp = make_gaussian_peak(rt_center=5.0, width=0.1, height=1000.0, n_points=50)
+        broad = make_gaussian_peak(rt_center=5.0, width=0.5, height=1000.0, n_points=50)
+        result = _find_model_peak([broad, sharp], 'sharpness')
+        assert result is sharp
+
+    def test_picks_highest_intensity(self):
+        low = make_gaussian_peak(height=500.0, mz=100.0)
+        high = make_gaussian_peak(height=2000.0, mz=200.0)
+        result = _find_model_peak([low, high], 'intensity')
+        assert result is high
+
+    def test_returns_none_for_empty_list(self):
+        assert _find_model_peak([], 'sharpness') is None
