@@ -193,13 +193,13 @@ def shape_similarity_angle(peak_a: EICPeak, peak_b: EICPeak) -> float:
     a = np.interp(all_rt, peak_a.rt_array, peak_a.intensity_array)
     b = np.interp(all_rt, peak_b.rt_array, peak_b.intensity_array)
 
-    norm_a = np.sqrt(np.trapz(a ** 2, all_rt))
-    norm_b = np.sqrt(np.trapz(b ** 2, all_rt))
+    norm_a = np.sqrt(np.trapezoid(a ** 2, all_rt))
+    norm_b = np.sqrt(np.trapezoid(b ** 2, all_rt))
 
     if norm_a == 0.0 or norm_b == 0.0:
         return 90.0
 
-    dot = np.trapz(a * b, all_rt)
+    dot = np.trapezoid(a * b, all_rt)
     cos_angle = np.clip(dot / (norm_a * norm_b), 0.0, 1.0)
     return float(np.degrees(np.arccos(cos_angle)))
 
