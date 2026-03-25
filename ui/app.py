@@ -605,7 +605,7 @@ class ChromaKitApp(QMainWindow):
             self.data_handler.current_directory_path = folder_path
             self.data_handler.has_ms_data = has_ms_data
             if hasattr(self, 'ms_frame'):
-                self.ms_frame.set_data_path(folder_path)
+                self.ms_frame.set_data_path(self._get_ms_data_path())
             
             # Build navigation list for prev/next sample buttons.
             # For .D paths this is already done inside load_data_directory().
@@ -812,7 +812,10 @@ class ChromaKitApp(QMainWindow):
             print(f"Start time: {peak.start_time:.3f}, End time: {peak.end_time:.3f}")
             
             # Use the data handler to extract the spectrum
-            spectrum = self.data_handler.extract_spectrum_for_peak(
+            # Resolve the inner .D path for .C folders (rainbow cannot read .C directly)
+            ms_path = self._get_ms_data_path()
+            spectrum = self.data_handler.spectrum_extractor.extract_for_peak(
+                ms_path,
                 peak,
                 {'extraction_method': 'apex', 'debug': False}
             )
@@ -2757,6 +2760,18 @@ class ChromaKitApp(QMainWindow):
         self.status_bar.showMessage("Error in batch MS search")
         QMessageBox.critical(self, "Batch Search Error", error_message)
 
+    def _get_ms_data_path(self):
+        """Return the rainbow-readable .D path, resolving .C folders to their inner .D."""
+        path = self.data_handler.current_directory_path
+        if path and path.endswith('.C') and os.path.isdir(path):
+            data_dir = os.path.join(path, 'data')
+            if os.path.isdir(data_dir):
+                for item in sorted(os.listdir(data_dir)):
+                    candidate = os.path.join(data_dir, item)
+                    if item.endswith('.D') and os.path.isdir(candidate):
+                        return candidate
+        return path
+
     def _on_deconvolve_ms_clicked(self):
         """Dispatch spectral deconvolution worker."""
         if not hasattr(self, 'integrated_peaks') or not self.integrated_peaks:
@@ -2771,7 +2786,7 @@ class ChromaKitApp(QMainWindow):
 
         worker = SpectralDeconvWorker(
             peaks=self.integrated_peaks,
-            ms_data_path=self.data_handler.current_directory_path,
+            ms_data_path=self._get_ms_data_path(),
             deconv_params=deconv_params,
             grouping_params=grouping_params,
         )
