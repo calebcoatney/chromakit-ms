@@ -301,7 +301,7 @@ class PlotFrame(QWidget):
                                          markersize=8, alpha=0.9,
                                          label='Neg. Peak' if 'Neg. Peak' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
         
-        # Draw deconvolution component curves from pipeline
+        # Draw peak splitting component curves from pipeline
         if fitted_curves:
             _deconv_colors = ['#e6194b', '#3cb44b', '#4363d8', '#f58231',
                               '#911eb4', '#42d4f4', '#f032e6', '#bfef45',
@@ -331,7 +331,7 @@ class PlotFrame(QWidget):
                     base_y = data['baseline_y'][si:ei + 1] if not show_corrected else np.zeros(len(seg_x))
                     self.chromatogram_ax.fill_between(
                         seg_x, base_y, seg_y, color=color, alpha=0.25,
-                        label='Deconv' if i == 0 and 'Deconv' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None
+                        label='Peak Split' if i == 0 and 'Peak Split' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None
                     )
                     # Vertical boundary lines at split points (skip chunk edges)
                     if comp.split_type_left != 'chunk':

@@ -53,15 +53,15 @@ class ParametersFrame(QWidget):
             },
             'peaks': {
                 'enabled': False,
-                'mode': 'classical',  # 'classical' or 'deconvolution'
+                'mode': 'classical',  # 'classical' or 'peak_splitting'
                 'min_prominence': 1e5,  # Changed from 0.5 to 1e5
                 'min_height': 0.0,
                 'min_width': 0.0,
                 'range_filters': []  # List of [start, end] time ranges
             },
-            'deconvolution': {
+            'peak_splitting': {
                 'splitting_method': 'geometric',
-                'windows': [],  # List of [start, end] — empty = deconvolve everything
+                'windows': [],  # List of [start, end] — empty = split entire chromatogram
                 # Shared parameters
                 'heatmap_threshold': 0.36,
                 'pre_fit_signal_threshold': 0.001,
@@ -483,9 +483,9 @@ class ParametersFrame(QWidget):
         # Peak detection mode combo box
         self.peak_mode_combo = QComboBox()
         self.peak_mode_combo.addItem("Classical", "classical")
-        self.peak_mode_combo.addItem("Deconvolution (U-Net)", "deconvolution")
+        self.peak_mode_combo.addItem("Peak Splitting (U-Net)", "peak_splitting")
 
-        # Grey out deconvolution if not available
+        # Grey out peak splitting if not available
         from logic.deconvolution import is_available as deconv_available
         if not deconv_available():
             model = self.peak_mode_combo.model()
@@ -523,11 +523,11 @@ class ParametersFrame(QWidget):
         self.min_width_entry.editingFinished.connect(self._on_min_width_changed)
         form_layout.addRow("Min Width (samples):", self.min_width_entry)
 
-        # ── Deconvolution sub-controls (visible only in deconvolution mode) ──
+        # ── Peak Splitting sub-controls (visible only in peak_splitting mode) ──
 
-        self.deconv_controls_frame = QFrame()
-        deconv_layout = QFormLayout(self.deconv_controls_frame)
-        deconv_layout.setContentsMargins(0, 4, 0, 0)
+        self.peak_splitting_controls_frame = QFrame()
+        peak_splitting_layout = QFormLayout(self.peak_splitting_controls_frame)
+        peak_splitting_layout.setContentsMargins(0, 4, 0, 0)
 
         # Splitting method
         self.splitting_method_combo = QComboBox()
@@ -538,37 +538,37 @@ class ParametersFrame(QWidget):
             "EMG: better at detecting small peaks, recovers peak shape parameters."
         )
         self.splitting_method_combo.currentIndexChanged.connect(self._on_splitting_method_changed)
-        deconv_layout.addRow("Splitting Method:", self.splitting_method_combo)
+        peak_splitting_layout.addRow("Splitting Method:", self.splitting_method_combo)
 
-        # Deconvolution windows table
-        windows_info = QLabel("Apply deconvolution only in these time ranges.\n"
-                              "Leave empty to deconvolve the entire chromatogram.")
+        # Peak splitting windows table
+        windows_info = QLabel("Apply peak splitting only in these time ranges.\n"
+                              "Leave empty to split the entire chromatogram.")
         windows_info.setStyleSheet("color: #666666; font-size: 10px;")
-        deconv_layout.addRow(windows_info)
+        peak_splitting_layout.addRow(windows_info)
 
-        self.deconv_windows_table = QTableWidget(0, 3)
-        self.deconv_windows_table.setHorizontalHeaderLabels(["Start (min)", "End (min)", ""])
-        self.deconv_windows_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.deconv_windows_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.deconv_windows_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.deconv_windows_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.deconv_windows_table.setMaximumHeight(120)
-        deconv_layout.addRow(self.deconv_windows_table)
+        self.peak_splitting_windows_table = QTableWidget(0, 3)
+        self.peak_splitting_windows_table.setHorizontalHeaderLabels(["Start (min)", "End (min)", ""])
+        self.peak_splitting_windows_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.peak_splitting_windows_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.peak_splitting_windows_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.peak_splitting_windows_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.peak_splitting_windows_table.setMaximumHeight(120)
+        peak_splitting_layout.addRow(self.peak_splitting_windows_table)
 
         add_window_btn = QPushButton("+ Add Window")
-        add_window_btn.clicked.connect(self._add_deconv_window_row)
-        deconv_layout.addRow(add_window_btn)
+        add_window_btn.clicked.connect(self._add_peak_splitting_window_row)
+        peak_splitting_layout.addRow(add_window_btn)
 
         # Advanced toggle
-        self.deconv_advanced_toggle = QPushButton("▶ Advanced")
-        self.deconv_advanced_toggle.setFlat(True)
-        self.deconv_advanced_toggle.setStyleSheet("text-align: left; padding: 2px;")
-        self.deconv_advanced_toggle.clicked.connect(self._toggle_deconv_advanced)
-        deconv_layout.addRow(self.deconv_advanced_toggle)
+        self.peak_splitting_advanced_toggle = QPushButton("▶ Advanced")
+        self.peak_splitting_advanced_toggle.setFlat(True)
+        self.peak_splitting_advanced_toggle.setStyleSheet("text-align: left; padding: 2px;")
+        self.peak_splitting_advanced_toggle.clicked.connect(self._toggle_peak_splitting_advanced)
+        peak_splitting_layout.addRow(self.peak_splitting_advanced_toggle)
 
         # Advanced frame (hidden by default)
-        self.deconv_advanced_frame = QFrame()
-        adv_layout = QFormLayout(self.deconv_advanced_frame)
+        self.peak_splitting_advanced_frame = QFrame()
+        adv_layout = QFormLayout(self.peak_splitting_advanced_frame)
         adv_layout.setContentsMargins(8, 0, 0, 0)
 
         # Shared params
@@ -576,37 +576,37 @@ class ParametersFrame(QWidget):
         self.heatmap_threshold_spin.setRange(0.10, 0.50)
         self.heatmap_threshold_spin.setSingleStep(0.02)
         self.heatmap_threshold_spin.setDecimals(2)
-        self.heatmap_threshold_spin.setValue(self.current_params['deconvolution']['heatmap_threshold'])
+        self.heatmap_threshold_spin.setValue(self.current_params['peak_splitting']['heatmap_threshold'])
         self.heatmap_threshold_spin.setToolTip("U-Net confidence threshold for detecting peak apexes.\nLower = more sensitive, higher = fewer false positives.")
-        self.heatmap_threshold_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('heatmap_threshold', v))
+        self.heatmap_threshold_spin.valueChanged.connect(lambda v: self._on_peak_splitting_param_changed('heatmap_threshold', v))
         adv_layout.addRow("U-Net Confidence:", self.heatmap_threshold_spin)
 
         self.pre_fit_signal_entry = QLineEdit()
-        self.pre_fit_signal_entry.setText(str(self.current_params['deconvolution']['pre_fit_signal_threshold']))
+        self.pre_fit_signal_entry.setText(str(self.current_params['peak_splitting']['pre_fit_signal_threshold']))
         self.pre_fit_signal_entry.setToolTip(
             "Skip U-Net detections where the signal is below this fraction of the peak maximum.\n"
             "Pre-fit noise gate — prevents fitting on baseline noise.\n"
             "1e-3 is a good starting point. 0 = no pre-filtering."
         )
-        self.pre_fit_signal_entry.editingFinished.connect(self._on_pre_fit_signal_changed)
+        self.pre_fit_signal_entry.editingFinished.connect(self._on_peak_splitting_pre_fit_signal_changed)
         adv_layout.addRow("Pre-fit Signal Gate:", self.pre_fit_signal_entry)
 
         self.min_area_frac_spin = QDoubleSpinBox()
         self.min_area_frac_spin.setRange(0.00, 0.30)
         self.min_area_frac_spin.setSingleStep(0.01)
         self.min_area_frac_spin.setDecimals(2)
-        self.min_area_frac_spin.setValue(self.current_params['deconvolution']['min_area_frac'])
+        self.min_area_frac_spin.setValue(self.current_params['peak_splitting']['min_area_frac'])
         self.min_area_frac_spin.setToolTip("Remove components with area below this fraction of the median.\nHigher = more aggressive phantom filtering.")
-        self.min_area_frac_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('min_area_frac', v))
+        self.min_area_frac_spin.valueChanged.connect(lambda v: self._on_peak_splitting_param_changed('min_area_frac', v))
         adv_layout.addRow("Min Area Fraction:", self.min_area_frac_spin)
 
         self.valley_threshold_spin = QDoubleSpinBox()
         self.valley_threshold_spin.setRange(0.20, 0.80)
         self.valley_threshold_spin.setSingleStep(0.05)
         self.valley_threshold_spin.setDecimals(2)
-        self.valley_threshold_spin.setValue(self.current_params['deconvolution']['valley_threshold_frac'])
+        self.valley_threshold_spin.setValue(self.current_params['peak_splitting']['valley_threshold_frac'])
         self.valley_threshold_spin.setToolTip("Valley depth for splitting merged peaks.\nLower = split at shallower valleys, higher = require deeper valleys.")
-        self.valley_threshold_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('valley_threshold_frac', v))
+        self.valley_threshold_spin.valueChanged.connect(lambda v: self._on_peak_splitting_param_changed('valley_threshold_frac', v))
         adv_layout.addRow("Valley Depth:", self.valley_threshold_spin)
 
         # EMG-only params
@@ -618,27 +618,27 @@ class ParametersFrame(QWidget):
         self.mu_bound_spin.setRange(0.50, 3.00)
         self.mu_bound_spin.setSingleStep(0.1)
         self.mu_bound_spin.setDecimals(2)
-        self.mu_bound_spin.setValue(self.current_params['deconvolution']['mu_bound_factor'])
+        self.mu_bound_spin.setValue(self.current_params['peak_splitting']['mu_bound_factor'])
         self.mu_bound_spin.setToolTip("Peak position bounds as multiples of sigma.\nSmaller = tighter peak positions, larger = more flexibility.")
-        self.mu_bound_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('mu_bound_factor', v))
+        self.mu_bound_spin.valueChanged.connect(lambda v: self._on_peak_splitting_param_changed('mu_bound_factor', v))
         adv_layout.addRow("Position Bounds (x sigma):", self.mu_bound_spin)
 
         self.fat_threshold_spin = QDoubleSpinBox()
         self.fat_threshold_spin.setRange(0.20, 0.80)
         self.fat_threshold_spin.setSingleStep(0.05)
         self.fat_threshold_spin.setDecimals(2)
-        self.fat_threshold_spin.setValue(self.current_params['deconvolution']['fat_threshold_frac'])
+        self.fat_threshold_spin.setValue(self.current_params['peak_splitting']['fat_threshold_frac'])
         self.fat_threshold_spin.setToolTip("FWHM threshold for flagging over-wide components.\nComponents wider than this fraction of the window trigger refitting.")
-        self.fat_threshold_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('fat_threshold_frac', v))
+        self.fat_threshold_spin.valueChanged.connect(lambda v: self._on_peak_splitting_param_changed('fat_threshold_frac', v))
         adv_layout.addRow("Width Threshold:", self.fat_threshold_spin)
 
         self.dedup_sigma_spin = QDoubleSpinBox()
         self.dedup_sigma_spin.setRange(0.00, 2.00)
         self.dedup_sigma_spin.setSingleStep(0.1)
         self.dedup_sigma_spin.setDecimals(2)
-        self.dedup_sigma_spin.setValue(self.current_params['deconvolution']['dedup_sigma_factor'])
+        self.dedup_sigma_spin.setValue(self.current_params['peak_splitting']['dedup_sigma_factor'])
         self.dedup_sigma_spin.setToolTip("Merge components within this many sigma of each other.\n0 = no deduplication.")
-        self.dedup_sigma_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('dedup_sigma_factor', v))
+        self.dedup_sigma_spin.valueChanged.connect(lambda v: self._on_peak_splitting_param_changed('dedup_sigma_factor', v))
         adv_layout.addRow("Dedup Distance (sigma):", self.dedup_sigma_spin)
 
         # Geometric-only params
@@ -650,27 +650,27 @@ class ParametersFrame(QWidget):
         self.dedup_rt_spin.setRange(0.000, 0.100)
         self.dedup_rt_spin.setSingleStep(0.005)
         self.dedup_rt_spin.setDecimals(3)
-        self.dedup_rt_spin.setValue(self.current_params['deconvolution']['dedup_rt_tolerance'])
+        self.dedup_rt_spin.setValue(self.current_params['peak_splitting']['dedup_rt_tolerance'])
         self.dedup_rt_spin.setToolTip("Merge components within this RT distance (minutes).\n0 = no deduplication.")
-        self.dedup_rt_spin.valueChanged.connect(lambda v: self._on_deconv_param_changed('dedup_rt_tolerance', v))
+        self.dedup_rt_spin.valueChanged.connect(lambda v: self._on_peak_splitting_param_changed('dedup_rt_tolerance', v))
         adv_layout.addRow("Dedup Distance (min):", self.dedup_rt_spin)
 
         # Reset button
-        self.deconv_reset_btn = QPushButton("Reset to Optimized Defaults")
-        self.deconv_reset_btn.setToolTip("Restore Optuna-optimized defaults for the current splitting method.")
-        self.deconv_reset_btn.clicked.connect(self._reset_deconv_defaults)
-        adv_layout.addRow(self.deconv_reset_btn)
+        self.peak_splitting_reset_btn = QPushButton("Reset to Optimized Defaults")
+        self.peak_splitting_reset_btn.setToolTip("Restore Optuna-optimized defaults for the current splitting method.")
+        self.peak_splitting_reset_btn.clicked.connect(self._reset_peak_splitting_defaults)
+        adv_layout.addRow(self.peak_splitting_reset_btn)
 
-        self.deconv_advanced_frame.setVisible(False)
-        deconv_layout.addRow(self.deconv_advanced_frame)
+        self.peak_splitting_advanced_frame.setVisible(False)
+        peak_splitting_layout.addRow(self.peak_splitting_advanced_frame)
 
-        # Initially hidden (shown when deconvolution mode is selected)
-        self.deconv_controls_frame.setVisible(False)
-        form_layout.addRow(self.deconv_controls_frame)
+        # Initially hidden (shown when peak_splitting mode is selected)
+        self.peak_splitting_controls_frame.setVisible(False)
+        form_layout.addRow(self.peak_splitting_controls_frame)
 
         # Enable/disable controls based on initial state
         self._update_peaks_controls_state()
-        self._update_deconv_method_visibility()
+        self._update_peak_splitting_method_visibility()
 
         # Add to parameters layout
         self.section_groups['peaks'] = peaks_group
@@ -1135,23 +1135,23 @@ class ParametersFrame(QWidget):
     def _update_peaks_controls_state(self):
         """Update enabled state of peaks controls"""
         enabled = self.peaks_enabled.isChecked()
-        is_deconv = self.current_params['peaks']['mode'] == 'deconvolution'
+        is_peak_splitting = self.current_params['peaks']['mode'] == 'peak_splitting'
         self.prominence_entry.setEnabled(enabled)
         self.peak_mode_combo.setEnabled(enabled)
         self.min_width_entry.setEnabled(enabled)
-        self.deconv_controls_frame.setVisible(enabled and is_deconv)
+        self.peak_splitting_controls_frame.setVisible(enabled and is_peak_splitting)
 
     def _update_shoulder_controls_state(self):
         """Update enabled state of shoulder controls"""
         shoulder_enabled = self.shoulders_enabled.isChecked()
         peak_enabled = self.peaks_enabled.isChecked()
-        is_deconv = self.current_params['peaks']['mode'] == 'deconvolution'
+        is_peak_splitting = self.current_params['peaks']['mode'] == 'peak_splitting'
 
         # Shoulder detection requires classical mode and peak detection enabled
-        overall_enabled = shoulder_enabled and peak_enabled and not is_deconv
+        overall_enabled = shoulder_enabled and peak_enabled and not is_peak_splitting
 
-        # Disable shoulder checkbox entirely in deconvolution mode
-        self.shoulders_enabled.setEnabled(peak_enabled and not is_deconv)
+        # Disable shoulder checkbox entirely in peak_splitting mode
+        self.shoulders_enabled.setEnabled(peak_enabled and not is_peak_splitting)
 
         # Enable/disable all shoulder detection controls
         self.shoulder_sensitivity_slider.setEnabled(overall_enabled)
@@ -1337,19 +1337,19 @@ class ParametersFrame(QWidget):
 
         # Set sensible defaults for each mode.  The prominence box always
         # controls classical peak detection (scipy find_peaks).  In hybrid
-        # deconvolution mode (with windows), this determines which peaks are
-        # kept outside the deconvolution windows.
-        if mode == 'deconvolution':
+        # peak_splitting mode (with windows), this determines which peaks are
+        # kept outside the peak splitting windows.
+        if mode == 'peak_splitting':
             # Keep prominence at its classical default — it now controls
-            # classical peak detection in hybrid mode (outside deconv windows).
-            # The deconvolution pipeline internally uses min_prominence=0.
+            # classical peak detection in hybrid mode (outside peak splitting windows).
+            # The peak splitting pipeline internally uses min_prominence=0.
             self.prominence_label.setText("Min Prominence:")
             self.prominence_entry.setToolTip(
                 'Prominence threshold for classical peak detection.\n'
-                'In hybrid mode (with deconvolution windows), this controls\n'
-                'peak sensitivity outside the deconvolution windows.'
+                'In hybrid mode (with peak splitting windows), this controls\n'
+                'peak sensitivity outside the peak splitting windows.'
             )
-            self.prominence_help.setText("Controls classical peaks (outside deconv windows)")
+            self.prominence_help.setText("Controls classical peaks (outside peak splitting windows)")
         else:
             self.current_params['peaks']['min_prominence'] = 1e5
             self.prominence_entry.setText('100000.0')
@@ -1366,21 +1366,21 @@ class ParametersFrame(QWidget):
     def _on_splitting_method_changed(self, index):
         """Handle splitting method change — update defaults and visibility."""
         method = self.splitting_method_combo.currentData()
-        self.current_params['deconvolution']['splitting_method'] = method
-        self._update_deconv_method_visibility()
+        self.current_params['peak_splitting']['splitting_method'] = method
+        self._update_peak_splitting_method_visibility()
         self.parameters_changed.emit(self.current_params)
 
-    def _on_deconv_param_changed(self, key, value):
-        """Handle any deconvolution advanced parameter change."""
-        self.current_params['deconvolution'][key] = value
+    def _on_peak_splitting_param_changed(self, key, value):
+        """Handle any peak splitting advanced parameter change."""
+        self.current_params['peak_splitting'][key] = value
         self.parameters_changed.emit(self.current_params)
 
-    def _on_pre_fit_signal_changed(self):
+    def _on_peak_splitting_pre_fit_signal_changed(self):
         """Handle pre-fit signal gate change."""
         text = self.pre_fit_signal_entry.text()
         try:
             value = float(text)
-            self.current_params['deconvolution']['pre_fit_signal_threshold'] = max(0.0, value)
+            self.current_params['peak_splitting']['pre_fit_signal_threshold'] = max(0.0, value)
             self.pre_fit_signal_entry.setStyleSheet("background-color: #e6f2ff; border: 1px solid #99ccff;")
             QTimer.singleShot(800, lambda: self.pre_fit_signal_entry.setStyleSheet(""))
             self.parameters_changed.emit(self.current_params)
@@ -1388,66 +1388,66 @@ class ParametersFrame(QWidget):
             self.pre_fit_signal_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
             QTimer.singleShot(800, lambda: self.pre_fit_signal_entry.setStyleSheet(""))
 
-    def _add_deconv_window_row(self):
-        """Add a new row to the deconvolution windows table."""
-        row = self.deconv_windows_table.rowCount()
-        self.deconv_windows_table.insertRow(row)
+    def _add_peak_splitting_window_row(self):
+        """Add a new row to the peak splitting windows table."""
+        row = self.peak_splitting_windows_table.rowCount()
+        self.peak_splitting_windows_table.insertRow(row)
 
         start_spin = QDoubleSpinBox()
         start_spin.setDecimals(3)
         start_spin.setRange(0, 9999)
-        start_spin.valueChanged.connect(self._on_deconv_windows_changed)
-        self.deconv_windows_table.setCellWidget(row, 0, start_spin)
+        start_spin.valueChanged.connect(self._on_peak_splitting_windows_changed)
+        self.peak_splitting_windows_table.setCellWidget(row, 0, start_spin)
 
         end_spin = QDoubleSpinBox()
         end_spin.setDecimals(3)
         end_spin.setRange(0, 9999)
         end_spin.setValue(60.0)
-        end_spin.valueChanged.connect(self._on_deconv_windows_changed)
-        self.deconv_windows_table.setCellWidget(row, 1, end_spin)
+        end_spin.valueChanged.connect(self._on_peak_splitting_windows_changed)
+        self.peak_splitting_windows_table.setCellWidget(row, 1, end_spin)
 
         del_btn = QPushButton("✕")
         del_btn.setFixedWidth(30)
-        del_btn.clicked.connect(lambda checked, r=row: self._remove_deconv_window_row(r))
-        self.deconv_windows_table.setCellWidget(row, 2, del_btn)
+        del_btn.clicked.connect(lambda checked, r=row: self._remove_peak_splitting_window_row(r))
+        self.peak_splitting_windows_table.setCellWidget(row, 2, del_btn)
 
-    def _remove_deconv_window_row(self, row):
-        """Remove a row from the deconvolution windows table."""
-        self.deconv_windows_table.removeRow(row)
-        for r in range(self.deconv_windows_table.rowCount()):
-            del_btn = self.deconv_windows_table.cellWidget(r, 2)
+    def _remove_peak_splitting_window_row(self, row):
+        """Remove a row from the peak splitting windows table."""
+        self.peak_splitting_windows_table.removeRow(row)
+        for r in range(self.peak_splitting_windows_table.rowCount()):
+            del_btn = self.peak_splitting_windows_table.cellWidget(r, 2)
             if del_btn:
                 del_btn.clicked.disconnect()
-                del_btn.clicked.connect(lambda checked, r=r: self._remove_deconv_window_row(r))
-        self._on_deconv_windows_changed()
+                del_btn.clicked.connect(lambda checked, r=r: self._remove_peak_splitting_window_row(r))
+        self._on_peak_splitting_windows_changed()
 
-    def _on_deconv_windows_changed(self, _=None):
-        """Collect deconvolution window values and emit parameters_changed."""
+    def _on_peak_splitting_windows_changed(self, _=None):
+        """Collect peak splitting window values and emit parameters_changed."""
         windows = []
-        for r in range(self.deconv_windows_table.rowCount()):
-            start_w = self.deconv_windows_table.cellWidget(r, 0)
-            end_w = self.deconv_windows_table.cellWidget(r, 1)
+        for r in range(self.peak_splitting_windows_table.rowCount()):
+            start_w = self.peak_splitting_windows_table.cellWidget(r, 0)
+            end_w = self.peak_splitting_windows_table.cellWidget(r, 1)
             if start_w and end_w:
                 windows.append([start_w.value(), end_w.value()])
-        self.current_params['deconvolution']['windows'] = windows
+        self.current_params['peak_splitting']['windows'] = windows
         self.parameters_changed.emit(self.current_params)
 
-    def _toggle_deconv_advanced(self):
-        """Toggle visibility of advanced deconvolution parameters."""
-        visible = not self.deconv_advanced_frame.isVisible()
-        self.deconv_advanced_frame.setVisible(visible)
-        self.deconv_advanced_toggle.setText("▼ Advanced" if visible else "▶ Advanced")
+    def _toggle_peak_splitting_advanced(self):
+        """Toggle visibility of advanced peak splitting parameters."""
+        visible = not self.peak_splitting_advanced_frame.isVisible()
+        self.peak_splitting_advanced_frame.setVisible(visible)
+        self.peak_splitting_advanced_toggle.setText("▼ Advanced" if visible else "▶ Advanced")
 
-    def _update_deconv_method_visibility(self):
+    def _update_peak_splitting_method_visibility(self):
         """Show/hide method-specific params based on splitting method."""
-        is_emg = self.current_params['deconvolution']['splitting_method'] == 'emg'
+        is_emg = self.current_params['peak_splitting']['splitting_method'] == 'emg'
 
         # EMG-only controls
         for w in [self.emg_only_label, self.mu_bound_spin, self.fat_threshold_spin,
                   self.dedup_sigma_spin]:
             w.setVisible(is_emg)
         # Find and toggle the QLabel row labels for EMG spinboxes
-        adv_layout = self.deconv_advanced_frame.layout()
+        adv_layout = self.peak_splitting_advanced_frame.layout()
         for i in range(adv_layout.rowCount()):
             label_item = adv_layout.itemAt(i, QFormLayout.LabelRole)
             field_item = adv_layout.itemAt(i, QFormLayout.FieldRole)
@@ -1470,7 +1470,7 @@ class ParametersFrame(QWidget):
     # Defaults for each method: Optuna-optimized where applicable,
     # with min_prominence=0 and pre_fit_signal_threshold=0.001 based
     # on real-data testing (high dynamic range chromatograms).
-    _DECONV_DEFAULTS = {
+    _PEAK_SPLITTING_DEFAULTS = {
         'geometric': {
             'heatmap_threshold': 0.36,
             'pre_fit_signal_threshold': 0.001,
@@ -1495,25 +1495,25 @@ class ParametersFrame(QWidget):
         },
     }
 
-    def _reset_deconv_defaults(self):
-        """Reset deconvolution parameters to Optuna-optimized defaults.
+    def _reset_peak_splitting_defaults(self):
+        """Reset peak splitting parameters to Optuna-optimized defaults.
 
         Does not touch Min Prominence — that controls classical peak detection
-        and is independent of the deconvolution tuning parameters.
+        and is independent of the peak splitting tuning parameters.
         """
-        method = self.current_params['deconvolution']['splitting_method']
-        defaults = self._DECONV_DEFAULTS[method]
+        method = self.current_params['peak_splitting']['splitting_method']
+        defaults = self._PEAK_SPLITTING_DEFAULTS[method]
 
         for key, val in defaults.items():
-            self.current_params['deconvolution'][key] = val
+            self.current_params['peak_splitting'][key] = val
 
         # Update spinboxes without emitting per-change signals
-        self._sync_deconv_spinboxes()
+        self._sync_peak_splitting_spinboxes()
         self.parameters_changed.emit(self.current_params)
 
-    def _sync_deconv_spinboxes(self):
-        """Sync all deconvolution spinbox values from current_params."""
-        d = self.current_params['deconvolution']
+    def _sync_peak_splitting_spinboxes(self):
+        """Sync all peak splitting spinbox values from current_params."""
+        d = self.current_params['peak_splitting']
         for spin, key in [
             (self.heatmap_threshold_spin, 'heatmap_threshold'),
             (self.min_area_frac_spin, 'min_area_frac'),

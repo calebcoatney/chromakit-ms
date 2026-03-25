@@ -1497,18 +1497,18 @@ class ChromaKitApp(QMainWindow):
 
             peak_mode = params['peaks'].get('mode', 'classical')
 
-            if peak_mode == 'deconvolution':
-                deconv_windows = params.get('deconvolution', {}).get('windows', [])
+            if peak_mode == 'peak_splitting':
+                deconv_windows = params.get('peak_splitting', {}).get('windows', [])
                 if deconv_windows:
                     # Hybrid mode: integrate classical peaks outside windows
-                    # with the normal integrator, deconv components with the
-                    # deconv integrator, then merge.
+                    # with the normal integrator, peak splitting components with the
+                    # peak splitting integrator, then merge.
                     integration_results = self._integrate_hybrid(
                         params, ms_data, quality_options,
                     )
                 else:
-                    # Full deconvolution — all peaks are deconv components
-                    integration_results = self._integrate_deconvolution()
+                    # Full peak splitting — all peaks are peak splitting components
+                    integration_results = self._integrate_peak_splitting()
             else:
                 # Extract peak groups from parameters
                 peak_groups = params.get('integration', {}).get('peak_groups', [])
@@ -1545,8 +1545,8 @@ class ChromaKitApp(QMainWindow):
             traceback.print_exc()
             return None
 
-    def _integrate_deconvolution(self):
-        """Integrate peaks using cached deconvolution components (EMG or geometric)."""
+    def _integrate_peak_splitting(self):
+        """Integrate peaks using cached peak splitting components (EMG or geometric)."""
         from logic.deconvolution import (
             integrate_emg_components, integrate_deconv_components,
             EMGComponent, DeconvComponent,
@@ -1577,10 +1577,10 @@ class ChromaKitApp(QMainWindow):
     
     def _integrate_hybrid(self, params, ms_data, quality_options):
         """Integrate peaks in hybrid mode: classical integrator for peaks
-        outside deconvolution windows, deconv integrator for components inside.
+        outside peak splitting windows, peak splitting integrator for components inside.
         """
         processed = self.current_processed
-        deconv_windows = params.get('deconvolution', {}).get('windows', [])
+        deconv_windows = params.get('peak_splitting', {}).get('windows', [])
 
         # --- 1. Identify which peaks are classical vs deconv ---
         all_px = processed.get('peaks_x', np.array([]))
@@ -1618,8 +1618,8 @@ class ChromaKitApp(QMainWindow):
                 peak_groups=peak_groups if peak_groups else None,
             )
 
-        # --- 3. Integrate deconv components ---
-        deconv_results = self._integrate_deconvolution()
+        # --- 3. Integrate peak splitting components ---
+        deconv_results = self._integrate_peak_splitting()
 
         # --- 4. Merge results, sorted by retention time ---
         if classical_results and deconv_results:
@@ -2188,9 +2188,9 @@ class ChromaKitApp(QMainWindow):
         # Pass the active profile for defaults and stage-gating
         processed = self.processor.process(x, y, params, ms_range, profile=profile)
 
-        # --- Deconvolution mode: replace classical peaks with U-Net pipeline ---
-        if peak_mode == 'deconvolution' and params['peaks']['enabled']:
-            self._apply_deconvolution(processed, params)
+        # --- Peak splitting mode: replace classical peaks with U-Net pipeline ---
+        if peak_mode == 'peak_splitting' and params['peaks']['enabled']:
+            self._apply_peak_splitting(processed, params)
 
         # Update the chromatogram plot
         self.plot_frame.plot_chromatogram(
@@ -2205,25 +2205,25 @@ class ChromaKitApp(QMainWindow):
         # Store the processed data for reference
         self.current_processed = processed
 
-    def _apply_deconvolution(self, processed, params):
-        """Run the deconvolution pipeline and inject results into processed data.
+    def _apply_peak_splitting(self, processed, params):
+        """Run the peak splitting pipeline and inject results into processed data.
 
-        Hybrid mode: when deconvolution windows are specified, classical peaks
+        Hybrid mode: when peak splitting windows are specified, classical peaks
         are kept outside those windows and only replaced inside them by
-        deconvolution components.  When no windows are specified, all classical
-        peaks are replaced (full deconvolution).
+        peak splitting components.  When no windows are specified, all classical
+        peaks are replaced (full peak splitting).
         """
         from logic.deconvolution import (
             is_available, run_deconvolution_pipeline, EMGComponent, DeconvComponent
         )
         if not is_available():
-            print("Deconvolution not available (missing torch or model weights)")
+            print("Peak splitting not available (missing torch or model weights)")
             return
 
         corrected_y = processed['corrected_y']
 
-        # Gather deconvolution parameters
-        deconv_params = params.get('deconvolution', {})
+        # Gather peak splitting parameters
+        deconv_params = params.get('peak_splitting', {})
         deconv_windows = deconv_params.get('windows', [])
         # Deconv pipeline always uses min_prominence=0 (optimal for U-Net
         # peak detection).  The main prominence box controls classical peak
@@ -2255,19 +2255,19 @@ class ChromaKitApp(QMainWindow):
 
         # Cache invalidation: re-run if signal or any deconv param changed
         cache_key = (hash(corrected_y.tobytes()), str(pipeline_kwargs))
-        if not hasattr(self, '_deconv_cache') or self._deconv_cache.get('key') != cache_key:
-            print(f"Running deconvolution pipeline ({splitting_method})...")
+        if not hasattr(self, '_peak_splitting_cache') or self._peak_splitting_cache.get('key') != cache_key:
+            print(f"Running peak splitting pipeline ({splitting_method})...")
             result = run_deconvolution_pipeline(
                 processed['x'], corrected_y,
                 **pipeline_kwargs,
             )
-            self._deconv_cache = {
+            self._peak_splitting_cache = {
                 'key': cache_key,
                 'result': result,
             }
         else:
-            print("Using cached deconvolution result")
-            result = self._deconv_cache['result']
+            print("Using cached peak splitting result")
+            result = self._peak_splitting_cache['result']
 
         # ------------------------------------------------------------------
         # Hybrid mode: when windows are specified, keep classical peaks outside
