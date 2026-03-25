@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from spectral_deconvolution import (
     EICPeak, DeconvolutedComponent, DeconvolutionParams,
-    sharpness_yang,
+    sharpness_yang, is_shared,
 )
 
 
@@ -57,3 +57,26 @@ class TestSharpnessYang:
         # Left side has slopes; right side empty → returns median_left (not -1.0)
         assert score != -1.0
         assert score > 0.0
+
+
+class TestIsShared:
+    def test_clean_symmetric_peak_not_shared(self):
+        # Symmetric Gaussian with low boundaries → not shared
+        peak = make_gaussian_peak(rt_center=5.0, width=0.3, height=1000.0, n_points=50)
+        sliced = peak.intensity_array[peak.left_boundary_idx:peak.right_boundary_idx + 1]
+        assert is_shared(sliced, 0.3, 0.3) is False
+
+    def test_high_left_boundary_is_shared(self):
+        # Left boundary = 50% of apex → edge_to_height ratio exceeded
+        ints = np.array([500.0, 600.0, 800.0, 1000.0, 700.0, 400.0, 50.0])
+        assert is_shared(ints, 0.3, 0.3) is True
+
+    def test_bimodal_is_shared(self):
+        # Two clear peaks → multiple local maxima
+        ints = np.array([10.0, 500.0, 200.0, 600.0, 10.0])
+        assert is_shared(ints, 0.3, 0.3) is True
+
+    def test_high_delta_is_shared(self):
+        # Left=400, right=50, apex=1000 → |400-50|/1000 = 0.35 > 0.3
+        ints = np.array([400.0, 700.0, 1000.0, 600.0, 50.0])
+        assert is_shared(ints, 0.3, 0.3) is True

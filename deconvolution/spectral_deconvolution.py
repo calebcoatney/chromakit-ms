@@ -126,3 +126,54 @@ def sharpness_yang(rt_array: np.ndarray, intensity_array: np.ndarray,
     if not left_slopes:
         return float(np.median(right_slopes))
     return (float(np.median(left_slopes)) - float(np.median(right_slopes))) / 2.0
+
+
+def is_shared(intensity_array: np.ndarray,
+              edge_to_height: float, delta_to_height: float) -> bool:
+    """Detect chromatographically unresolved peaks.
+    Port of FeatureTools.isShared(List<Double>, ...) (line 185).
+
+    Call with: peak.intensity_array[left_boundary_idx : right_boundary_idx + 1]
+
+    Returns True if the peak has multiple local maxima OR any boundary ratio
+    exceeds its threshold (indicating co-elution with an adjacent peak).
+    """
+    size = len(intensity_array)
+    if size < 2:
+        return False
+
+    left_intensity = float(intensity_array[0])
+    right_intensity = float(intensity_array[-1])
+    absolute_maximum = max(left_intensity, right_intensity)
+    local_maxima_count = 0
+    index = 1
+
+    while index < size - 1:
+        current = float(intensity_array[index])
+        if current > absolute_maximum:
+            absolute_maximum = current
+
+        prev_idx = index - 1
+        next_idx = index + 1
+        # Skip plateau runs (equal consecutive values)
+        while next_idx + 1 < size and current == float(intensity_array[next_idx]):
+            next_idx += 1
+
+        if float(intensity_array[prev_idx]) < current > float(intensity_array[next_idx]):
+            local_maxima_count += 1
+
+        index = next_idx
+
+    if local_maxima_count > 1:
+        return True
+
+    if absolute_maximum == 0:
+        return False
+
+    left_to_apex = left_intensity / absolute_maximum
+    right_to_apex = right_intensity / absolute_maximum
+    delta_to_apex = abs(left_intensity - right_intensity) / absolute_maximum
+
+    return (left_to_apex >= edge_to_height
+            or right_to_apex >= edge_to_height
+            or delta_to_apex >= delta_to_height)
