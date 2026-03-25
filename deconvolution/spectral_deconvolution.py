@@ -396,3 +396,62 @@ def _find_model_peak(peaks: list, choice: str) -> Optional[EICPeak]:
     # default: 'sharpness'
     return max(peaks, key=lambda p: sharpness_yang(
         p.rt_array, p.intensity_array, p.left_boundary_idx, p.right_boundary_idx))
+
+
+# ─── Layer 5: NNLS decomposition ─────────────────────────────────────────────
+
+def _build_components(model_peaks: list, other_peaks: list) -> list:
+    """Decompose each EIC peak into model peak contributions via NNLS.
+    Port of TwoStepDecomposition.buildComponents().
+
+    For each other_peak, finds model peaks whose rt_apex falls within the
+    other peak's original apex window (left_boundary_idx..right_boundary_idx).
+    Normalizes all chromatograms by apex intensity, solves NNLS to find
+    non-negative coefficients, and accumulates mz contributions into spectra.
+
+    Boundary check uses the ORIGINAL apex window from EICPeak
+    (left_boundary_idx/right_boundary_idx), NOT the expanded shared-window
+    left_peak_rt/right_peak_rt. This matches Java leftApexIndex/rightApexIndex.
+    """
+    spectra: dict = {id(mp): {} for mp in model_peaks}
+
+    for other in other_peaks:
+        src = other.source
+        left_rt = float(src.rt_array[src.left_boundary_idx])
+        right_rt = float(src.rt_array[src.right_boundary_idx])
+
+        candidates = [mp for mp in model_peaks if left_rt <= mp.rt_apex <= right_rt]
+        if not candidates:
+            continue
+
+        all_rts = other.rt_array.copy()
+        for mp in candidates:
+            all_rts = np.union1d(all_rts, mp.rt_array)
+
+        s0_raw = np.interp(all_rts, other.rt_array, other.intensity_array)
+        s0 = s0_raw / other.apex_intensity if other.apex_intensity > 0 else s0_raw
+
+        S = np.zeros((len(all_rts), len(candidates)))
+        for j, mp in enumerate(candidates):
+            col_raw = np.interp(all_rts, mp.rt_array, mp.intensity_array)
+            apex_int = float(mp.intensity_array[mp.apex_idx])
+            S[:, j] = col_raw / apex_int if apex_int > 0 else col_raw
+
+        coeffs, _ = nnls(S, s0)
+
+        for j, mp in enumerate(candidates):
+            # += accumulation: multiple _PeakData objects may share the same src.mz
+            spectra[id(mp)][src.mz] = (
+                spectra[id(mp)].get(src.mz, 0.0) + float(coeffs[j]) * other.apex_intensity
+            )
+
+    return [
+        DeconvolutedComponent(
+            rt=mp.rt_apex,
+            spectrum=spectra[id(mp)],
+            model_peak_mz=mp.mz,
+            model_peak_rt_array=mp.rt_array,
+            model_peak_intensity_array=mp.intensity_array,
+        )
+        for mp in model_peaks
+    ]

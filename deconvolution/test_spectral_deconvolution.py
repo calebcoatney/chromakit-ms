@@ -6,7 +6,7 @@ from spectral_deconvolution import (
     EICPeak, DeconvolutedComponent, DeconvolutionParams,
     sharpness_yang, is_shared, shape_similarity_angle,
     _merge_peaks, _cluster_by_rt, _cluster_by_shape,
-    _filter_peaks, _find_model_peak,
+    _filter_peaks, _find_model_peak, _build_components,
 )
 
 
@@ -272,3 +272,56 @@ class TestFindModelPeak:
 
     def test_returns_none_for_empty_list(self):
         assert _find_model_peak([], 'sharpness') is None
+
+
+class TestBuildComponents:
+    def _make_other_peak(self, source_peak: EICPeak):
+        from spectral_deconvolution import _PeakData
+        return _PeakData(
+            source=source_peak,
+            left_peak_rt=float(source_peak.rt_array[source_peak.left_boundary_idx]),
+            right_peak_rt=float(source_peak.rt_array[source_peak.right_boundary_idx]),
+            rt_array=source_peak.rt_array.copy(),
+            intensity_array=source_peak.intensity_array.copy(),
+            apex_intensity=float(source_peak.intensity_array[source_peak.apex_idx]),
+        )
+
+    def test_single_model_peak_has_mz_in_spectrum(self):
+        model = make_gaussian_peak(rt_center=5.0, mz=100.0, height=1000.0, n_points=50)
+        other_src = make_gaussian_peak(rt_center=5.0, mz=200.0, height=800.0, n_points=50)
+        other = self._make_other_peak(other_src)
+        components = _build_components([model], [other])
+        assert len(components) == 1
+        assert 200.0 in components[0].spectrum
+        assert components[0].spectrum[200.0] > 0.0
+
+    def test_model_apex_outside_other_boundary_gives_zero(self):
+        # Other peak: RT 1.0–2.0; model peak: RT=5.0 (outside)
+        model = make_gaussian_peak(rt_center=5.0, mz=100.0)
+        other_src = make_gaussian_peak(rt_center=1.5, mz=200.0)
+        other = self._make_other_peak(other_src)
+        components = _build_components([model], [other])
+        # model.rt_apex=5.0 is outside other's boundary [~1.0, ~2.0]
+        assert len(components) == 1
+        assert components[0].spectrum.get(200.0, 0.0) == pytest.approx(0.0, abs=1e-6)
+
+    def test_two_models_separated_contributions(self):
+        model1 = make_gaussian_peak(rt_center=2.0, mz=100.0, height=1000.0, n_points=30)
+        model2 = make_gaussian_peak(rt_center=8.0, mz=200.0, height=1000.0, n_points=30)
+
+        rts_other = np.linspace(1.5, 2.5, 30)
+        ints_other = 500.0 * np.exp(-0.5 * ((rts_other - 2.0) / 0.2) ** 2)
+        other_src = EICPeak(rt_apex=2.0, mz=300.0, rt_array=rts_other,
+                            intensity_array=ints_other, left_boundary_idx=0,
+                            right_boundary_idx=29, apex_idx=int(np.argmax(ints_other)))
+        from spectral_deconvolution import _PeakData
+        other = _PeakData(source=other_src, left_peak_rt=1.5, right_peak_rt=2.5,
+                          rt_array=rts_other, intensity_array=ints_other,
+                          apex_intensity=float(ints_other.max()))
+
+        components = _build_components([model1, model2], [other])
+        assert len(components) == 2
+        comp1 = next(c for c in components if c.model_peak_mz == 100.0)
+        comp2 = next(c for c in components if c.model_peak_mz == 200.0)
+        assert comp1.spectrum.get(300.0, 0.0) > 0.0
+        assert comp2.spectrum.get(300.0, 0.0) == pytest.approx(0.0, abs=1e-6)
