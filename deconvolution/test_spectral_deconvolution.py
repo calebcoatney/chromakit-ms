@@ -5,6 +5,7 @@ import pytest
 from spectral_deconvolution import (
     EICPeak, DeconvolutedComponent, DeconvolutionParams,
     sharpness_yang, is_shared, shape_similarity_angle,
+    _merge_peaks,
 )
 
 
@@ -110,3 +111,47 @@ class TestShapeSimilarityAngle:
         angle = shape_similarity_angle(peak_a, peak_b)
         # Both on the same RT grid with non-overlapping spikes → near 90°
         assert angle > 45.0
+
+
+class TestMergePeaks:
+    def _make_adjacent_same_mz_peaks(self):
+        """Two peaks at m/z=100 that are close enough to merge."""
+        # Peak 1: rt 1.0–1.4, apex at 1.2
+        rts1 = np.linspace(1.0, 1.4, 20)
+        ints1 = 1000.0 * np.exp(-0.5 * ((rts1 - 1.2) / 0.08) ** 2)
+        p1 = EICPeak(rt_apex=1.2, mz=100.0, rt_array=rts1, intensity_array=ints1,
+                     left_boundary_idx=0, right_boundary_idx=19, apex_idx=int(np.argmax(ints1)))
+        # Peak 2: rt 1.3–1.7, apex at 1.5 (overlapping window with p1)
+        rts2 = np.linspace(1.3, 1.7, 20)
+        ints2 = 800.0 * np.exp(-0.5 * ((rts2 - 1.5) / 0.08) ** 2)
+        p2 = EICPeak(rt_apex=1.5, mz=100.0, rt_array=rts2, intensity_array=ints2,
+                     left_boundary_idx=0, right_boundary_idx=19, apex_idx=int(np.argmax(ints2)))
+        return p1, p2
+
+    def test_adjacent_same_mz_merged(self):
+        p1, p2 = self._make_adjacent_same_mz_peaks()
+        merged = _merge_peaks([p1, p2], 0.3, 0.3)
+        assert len(merged) == 1
+        # Merged rt_array should span from p1 start to p2 end
+        assert merged[0].rt_array.min() <= 1.0 + 1e-9
+        assert merged[0].rt_array.max() >= 1.7 - 1e-9
+
+    def test_non_overlapping_same_mz_not_merged(self):
+        p1 = make_gaussian_peak(rt_center=1.0, width=0.1, mz=100.0, n_points=20)
+        p2 = make_gaussian_peak(rt_center=5.0, width=0.1, mz=100.0, n_points=20)
+        merged = _merge_peaks([p1, p2], 0.3, 0.3)
+        assert len(merged) == 2
+
+    def test_different_mz_not_merged(self):
+        p1 = make_gaussian_peak(rt_center=2.0, mz=100.0, n_points=20)
+        p2 = make_gaussian_peak(rt_center=2.0, mz=200.0, n_points=20)
+        merged = _merge_peaks([p1, p2], 0.3, 0.3)
+        assert len(merged) == 2
+
+    def test_merged_apex_from_highest_intensity_peak(self):
+        p1, p2 = self._make_adjacent_same_mz_peaks()
+        # p1 apex intensity ~1000, p2 ~800; merged should use p1's apex_intensity
+        merged = _merge_peaks([p1, p2], 0.3, 0.3)
+        assert merged[0].apex_intensity == pytest.approx(
+            max(p1.intensity_array.max(), p2.intensity_array.max()), rel=0.01
+        )

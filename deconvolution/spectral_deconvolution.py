@@ -202,3 +202,97 @@ def shape_similarity_angle(peak_a: EICPeak, peak_b: EICPeak) -> float:
     dot = np.trapz(a * b, all_rt)
     cos_angle = np.clip(dot / (norm_a * norm_b), 0.0, 1.0)
     return float(np.degrees(np.arccos(cos_angle)))
+
+
+# ─── Layer 2: Internal boundary/merge helpers ─────────────────────────────────
+
+def _correct_peak_boundaries(peak_data_list: list,
+                              edge_ratio: float, delta_ratio: float) -> None:
+    """Expand shared-window RT bounds for adjacent same-m/z peaks that are close.
+    Port of FeatureTools.correctPeakBoundaries().
+
+    Mutates left_peak_rt / right_peak_rt on _PeakData objects in place.
+
+    Java fidelity note: the Java computes mergeRight/mergeLeft boolean conditions
+    but their if(!mergeRight) guards are commented out (lines 295, 322). Only the
+    1.1× combined-width span check gates the merge. This implementation matches
+    that relaxed (span-only) behavior.
+    """
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for pd in peak_data_list:
+        groups[pd.source.mz].append(pd)
+
+    for group in groups.values():
+        group.sort(key=lambda p: p.source.rt_apex)
+        for i in range(1, len(group)):
+            prev, cur = group[i - 1], group[i]
+            combined = ((prev.right_peak_rt - prev.left_peak_rt) +
+                        (cur.right_peak_rt - cur.left_peak_rt))
+            total = cur.right_peak_rt - prev.left_peak_rt
+            if combined > 0 and total < 1.1 * combined:
+                prev.right_peak_rt = cur.right_peak_rt
+                cur.left_peak_rt = prev.left_peak_rt
+
+
+def _merge_peaks(peaks: list, edge_ratio: float, delta_ratio: float) -> list:
+    """Merge adjacent same-m/z peaks whose shared windows overlap.
+    Port of TwoStepDecomposition.mergePeaks().
+
+    Returns _PeakData list for use as 'other_peaks' in _build_components.
+    Adjacent peaks at the same m/z with total span < 1.1× combined widths are
+    merged into a single wider chromatogram (union of RT points, last-write wins
+    on RT collision, matching Java TreeMap.putAll behavior).
+    """
+    from collections import defaultdict
+
+    peak_data_list = [
+        _PeakData(
+            source=p,
+            left_peak_rt=float(p.rt_array[p.left_boundary_idx]),
+            right_peak_rt=float(p.rt_array[p.right_boundary_idx]),
+            rt_array=p.rt_array.copy(),
+            intensity_array=p.intensity_array.copy(),
+            apex_intensity=float(p.intensity_array[p.apex_idx]),
+        )
+        for p in peaks
+    ]
+
+    _correct_peak_boundaries(peak_data_list, edge_ratio, delta_ratio)
+
+    groups: dict = defaultdict(list)
+    for pd in peak_data_list:
+        key = (pd.source.mz, pd.left_peak_rt, pd.right_peak_rt)
+        groups[key].append(pd)
+
+    result = []
+    for group in groups.values():
+        if len(group) == 1:
+            result.append(group[0])
+            continue
+
+        group.sort(key=lambda p: p.source.rt_apex)
+
+        # Merge: union of RT points; later entries overwrite on collision
+        rt_to_int: dict = {}
+        for pd in group:
+            for rt, intensity in zip(pd.rt_array, pd.intensity_array):
+                rt_to_int[float(rt)] = float(intensity)
+
+        merged_rts = np.array(sorted(rt_to_int.keys()))
+        merged_ints = np.array([rt_to_int[rt] for rt in merged_rts])
+        apex_intensity = float(merged_ints.max())
+
+        # Source from highest-intensity peak (per PeakInfo.merge() in Java)
+        best = max(group, key=lambda p: p.apex_intensity)
+
+        result.append(_PeakData(
+            source=best.source,
+            left_peak_rt=group[0].left_peak_rt,
+            right_peak_rt=group[-1].right_peak_rt,
+            rt_array=merged_rts,
+            intensity_array=merged_ints,
+            apex_intensity=apex_intensity,
+        ))
+
+    return result
