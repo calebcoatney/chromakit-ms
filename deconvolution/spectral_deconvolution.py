@@ -296,3 +296,61 @@ def _merge_peaks(peaks: list, edge_ratio: float, delta_ratio: float) -> list:
         ))
 
     return result
+
+
+# ─── Layer 3: Clustering ──────────────────────────────────────────────────────
+
+def _cluster_by_rt(peaks: list, eps: float, min_samples: int,
+                   min_intensity: float) -> list:
+    """Cluster EIC peaks by apex RT using 1D DBSCAN.
+    Port of TwoStepDecomposition.getRetTimeClusters().
+
+    Noise points (label -1) are discarded. Clusters whose max apex intensity
+    is below min_intensity are dropped. Returns clusters sorted by mean RT.
+    """
+    if not peaks:
+        return []
+
+    rt_values = np.array([[p.rt_apex] for p in peaks])
+    labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(rt_values)
+
+    groups: dict = {}
+    for peak, label in zip(peaks, labels):
+        if label == -1:
+            continue
+        groups.setdefault(label, []).append(peak)
+
+    filtered = [
+        cluster for cluster in groups.values()
+        if max(p.intensity_array[p.apex_idx] for p in cluster) >= min_intensity
+    ]
+
+    filtered.sort(key=lambda c: float(np.mean([p.rt_apex for p in c])))
+    return filtered
+
+
+def _cluster_by_shape(peaks: list, threshold: float) -> list:
+    """Cluster peaks by elution profile similarity using complete-linkage hierarchical clustering.
+    Port of TwoStepDecomposition.getShapeClusters().
+
+    Distance metric: shape_similarity_angle (degrees, [0°, 90°]).
+    threshold is the max cluster diameter (complete-linkage criterion).
+    """
+    n = len(peaks)
+    if n == 1:
+        return [peaks]
+
+    dist_matrix = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i + 1, n):
+            angle = shape_similarity_angle(peaks[i], peaks[j])
+            dist_matrix[i, j] = angle
+            dist_matrix[j, i] = angle
+
+    Z = linkage(squareform(dist_matrix), method='complete')
+    labels = fcluster(Z, t=threshold, criterion='distance')
+
+    groups: dict = {}
+    for peak, label in zip(peaks, labels):
+        groups.setdefault(int(label), []).append(peak)
+    return list(groups.values())

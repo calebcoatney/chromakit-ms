@@ -5,7 +5,7 @@ import pytest
 from spectral_deconvolution import (
     EICPeak, DeconvolutedComponent, DeconvolutionParams,
     sharpness_yang, is_shared, shape_similarity_angle,
-    _merge_peaks,
+    _merge_peaks, _cluster_by_rt, _cluster_by_shape,
 )
 
 
@@ -155,3 +155,65 @@ class TestMergePeaks:
         assert merged[0].apex_intensity == pytest.approx(
             max(p1.intensity_array.max(), p2.intensity_array.max()), rel=0.01
         )
+
+
+class TestClusterByRT:
+    def test_two_well_separated_groups(self):
+        peaks = [
+            make_gaussian_peak(rt_center=1.000, height=500.0, mz=float(i))
+            for i in range(100, 103)
+        ] + [
+            make_gaussian_peak(rt_center=5.000, height=500.0, mz=float(i))
+            for i in range(200, 203)
+        ]
+        clusters = _cluster_by_rt(peaks, eps=0.01, min_samples=2, min_intensity=100.0)
+        assert len(clusters) == 2
+        # Clusters should be sorted by mean RT
+        mean_rts = [np.mean([p.rt_apex for p in c]) for c in clusters]
+        assert mean_rts[0] < mean_rts[1]
+
+    def test_low_intensity_cluster_dropped(self):
+        high = [make_gaussian_peak(rt_center=1.0, height=500.0, mz=float(i)) for i in range(2)]
+        low = [make_gaussian_peak(rt_center=5.0, height=50.0, mz=float(i)) for i in range(2)]
+        clusters = _cluster_by_rt(high + low, eps=0.01, min_samples=2, min_intensity=100.0)
+        assert len(clusters) == 1
+
+    def test_isolated_peak_dropped_as_noise(self):
+        peaks = [make_gaussian_peak(rt_center=1.0, height=500.0, mz=100.0)]
+        clusters = _cluster_by_rt(peaks, eps=0.01, min_samples=2, min_intensity=100.0)
+        assert len(clusters) == 0
+
+    def test_empty_input(self):
+        assert _cluster_by_rt([], eps=0.01, min_samples=2, min_intensity=100.0) == []
+
+
+class TestClusterByShape:
+    def test_identical_shapes_in_one_cluster(self):
+        peaks = [make_gaussian_peak(rt_center=5.0, mz=float(m)) for m in [100, 200, 300]]
+        clusters = _cluster_by_shape(peaks, threshold=30.0)
+        assert len(clusters) == 1
+        assert len(clusters[0]) == 3
+
+    def test_different_shapes_split_into_clusters(self):
+        rts = np.linspace(0, 10, 100)
+        ints_early = np.zeros(100); ints_early[10] = 1000.0
+        ints_late = np.zeros(100); ints_late[90] = 1000.0
+
+        def make_spike(ints, mz):
+            return EICPeak(rt_apex=rts[np.argmax(ints)], mz=mz,
+                           rt_array=rts, intensity_array=ints,
+                           left_boundary_idx=0, right_boundary_idx=99,
+                           apex_idx=int(np.argmax(ints)))
+
+        early = [make_spike(ints_early.copy(), float(m)) for m in [100, 101, 102]]
+        late = [make_spike(ints_late.copy(), float(m)) for m in [200, 201, 202]]
+        clusters = _cluster_by_shape(early + late, threshold=30.0)
+        assert len(clusters) == 2
+        sizes = sorted(len(c) for c in clusters)
+        assert sizes == [3, 3]
+
+    def test_single_peak_returns_one_cluster(self):
+        peak = make_gaussian_peak()
+        clusters = _cluster_by_shape([peak], threshold=30.0)
+        assert len(clusters) == 1
+        assert clusters[0][0] is peak
