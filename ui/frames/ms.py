@@ -22,8 +22,8 @@ from ui.dialogs.ms_options_dialog import MSOptionsDialog
 class MSFrame(QWidget):
     """Frame for MS library search and peak identification tools."""
     
-    # Add a signal for search completion
     search_completed = Signal()
+    inspect_requested = Signal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -177,6 +177,12 @@ class MSFrame(QWidget):
         self.spectrum_toggle_btn.setFixedWidth(120)
         self.spectrum_toggle_btn.clicked.connect(self._on_spectrum_toggle)
         mz_shift_layout.addWidget(self.spectrum_toggle_btn)
+
+        self.inspect_btn = QPushButton("Inspect")
+        self.inspect_btn.setEnabled(False)
+        self.inspect_btn.setFixedWidth(80)
+        self.inspect_btn.clicked.connect(self.inspect_requested)
+        mz_shift_layout.addWidget(self.inspect_btn)
 
         mz_shift_layout.addStretch()
         rt_layout.addLayout(mz_shift_layout)

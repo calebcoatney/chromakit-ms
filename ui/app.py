@@ -118,6 +118,8 @@ class ChromaKitApp(QMainWindow):
         self.setStatusBar(self.status_bar)
 
         self._last_ms_peak_index = None
+        self._deconvolve_ms_run = False
+        self._deconv_inspector = None
 
         # Connect signals - only connecting those signals that currently exist
         self.file_tree.file_selected.connect(self.on_file_selected)
@@ -151,6 +153,7 @@ class ChromaKitApp(QMainWindow):
         # Add connection for MS search completion (NEW)
         if hasattr(self.ms_frame, 'search_completed'):
             self.ms_frame.search_completed.connect(self.on_ms_search_completed)
+        self.ms_frame.inspect_requested.connect(self._on_inspect_requested)
         
         # Add this new connection for MS search request
         self.plot_frame.ms_search_requested.connect(self.on_ms_search_requested)
@@ -2791,7 +2794,13 @@ class ChromaKitApp(QMainWindow):
         self.status_bar.showMessage(
             f"Spectral deconvolution complete — {n_deconv} of {len(getattr(self, 'integrated_peaks', []))} peaks deconvolved"
         )
+        self._deconvolve_ms_run = True
+        self.ms_frame.inspect_btn.setEnabled(True)
         self._refresh_current_peak_ms_display()
+
+        if self._deconv_inspector is not None and self._deconv_inspector.isVisible():
+            self._deconv_inspector.set_controls_enabled(True)
+            self._deconv_inspector.refresh_current_window()
 
     def _on_deconvolve_ms_error(self, msg: str, progress_dialog=None):
         if progress_dialog:
@@ -2803,6 +2812,80 @@ class ChromaKitApp(QMainWindow):
         """Re-display spectrum for the last-viewed peak (picks up deconvolved spectrum)."""
         if hasattr(self, '_last_ms_peak_index') and self._last_ms_peak_index is not None:
             self.on_peak_spectrum_requested(self._last_ms_peak_index)
+
+    def _on_inspect_requested(self):
+        """Open (or bring to front) the spectral deconvolution inspector dialog."""
+        if not getattr(self, 'integrated_peaks', None):
+            return
+        if not getattr(self.data_handler, 'current_directory_path', None):
+            return
+
+        ms_path = self._get_ms_data_path()
+        if not ms_path:
+            self.status_bar.showMessage("Cannot open inspector: no MS data path available")
+            return
+
+        peak_index = self._last_ms_peak_index or 0
+
+        if self._deconv_inspector is not None and self._deconv_inspector.isVisible():
+            self._deconv_inspector.navigate_to_peak(peak_index)
+            self._deconv_inspector.raise_()
+            self._deconv_inspector.activateWindow()
+            return
+
+        from ui.dialogs.spectral_deconv_inspector import SpectralDeconvInspectorDialog
+        deconv_params, grouping_params = self._get_spectral_deconv_params()
+
+        self._deconv_inspector = SpectralDeconvInspectorDialog(
+            peaks=self.integrated_peaks,
+            ms_data_path=ms_path,
+            deconv_params=deconv_params,
+            grouping_params=grouping_params,
+            initial_peak_index=peak_index,
+            parent=self,
+        )
+        self._deconv_inspector.rerun_requested.connect(self._on_inspector_rerun_requested)
+        self._deconv_inspector.show()
+
+    def _on_inspector_rerun_requested(self, deconv_params, grouping_params):
+        """Dispatch a full spectral deconvolution run with parameters from the inspector."""
+        if not getattr(self, 'integrated_peaks', None):
+            return
+        if not getattr(self.data_handler, 'current_directory_path', None):
+            return
+
+        if self._deconv_inspector:
+            self._deconv_inspector.set_controls_enabled(False)
+
+        from logic.spectral_deconv_worker import SpectralDeconvWorker
+
+        worker = SpectralDeconvWorker(
+            peaks=self.integrated_peaks,
+            ms_data_path=self._get_ms_data_path(),
+            deconv_params=deconv_params,
+            grouping_params=grouping_params,
+        )
+
+        progress_dialog = QProgressDialog(
+            "Running spectral deconvolution...", "Cancel", 0, 100, self
+        )
+        progress_dialog.setWindowTitle("Spectral Deconvolution")
+        progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.canceled.connect(lambda: setattr(worker, 'cancelled', True))
+
+        worker.signals.progress.connect(
+            lambda pct: (progress_dialog.setValue(pct),
+                         self.status_bar.showMessage(f"Spectral deconvolution: {pct}%"))
+        )
+        worker.signals.finished.connect(
+            lambda: self._on_deconvolve_ms_finished(progress_dialog)
+        )
+        worker.signals.error.connect(
+            lambda msg: self._on_deconvolve_ms_error(msg, progress_dialog)
+        )
+
+        QThreadPool.globalInstance().start(worker)
 
     def _perform_quantitation(self):
         """Perform quantitation on integrated peaks using Polyarc + IS method."""
