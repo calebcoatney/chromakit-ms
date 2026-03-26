@@ -113,6 +113,10 @@ class BatchSearchWorker(QRunnable):
                     # Signal progress even when spectrum extraction fails
                     self.signals.progress.emit(i, f"No spectrum at RT {peak.retention_time:.3f}", [])
                     continue
+
+                if len(spectrum['mz']) == 0:
+                    self.signals.progress.emit(i, f"Empty spectrum at RT {peak.retention_time:.3f}", [])
+                    continue
                 
                 # Check for saturation and store in peak object
                 if 'is_saturated' in spectrum and spectrum['is_saturated']:
@@ -136,47 +140,50 @@ class BatchSearchWorker(QRunnable):
                 search_method = options.get('search_method', 'vector')
                 results = []
                 
-                if search_method == 'vector':
-                    # Vector search
-                    results = self.ms_toolkit.search_vector(
-                        query_spectrum,
-                        top_n=options.get('top_n', 5),
-                        composite=(options.get('similarity', 'composite') == 'composite'),
-                        weighting_scheme=options.get('weighting', 'NIST_GC'),
-                        unmatched_method=options.get('unmatched', 'keep_all'),
-                        top_k_clusters=options.get('top_k_clusters', 1)  # Add this parameter
+                try:
+                    if search_method == 'vector':
+                        results = self.ms_toolkit.search_vector(
+                            query_spectrum,
+                            top_n=options.get('top_n', 5),
+                            composite=(options.get('similarity', 'composite') == 'composite'),
+                            weighting_scheme=options.get('weighting', 'NIST_GC'),
+                            unmatched_method=options.get('unmatched', 'keep_all'),
+                            top_k_clusters=options.get('top_k_clusters', 1)
+                        )
+                    elif search_method == 'w2v':
+                        results = self.ms_toolkit.search_w2v(
+                            query_spectrum,
+                            top_n=options.get('top_n', 5),
+                            intensity_power=options.get('intensity_power', 0.6),
+                            top_k_clusters=options.get('top_k_clusters', 1)
+                        )
+                    elif search_method == 'hybrid':
+                        hybrid_method = options.get('hybrid_method', 'auto')
+                        results = self.ms_toolkit.search_hybrid(
+                            query_spectrum,
+                            method=hybrid_method,
+                            top_n=options.get('top_n', 5),
+                            intensity_power=options.get('intensity_power', 0.6),
+                            weighting_scheme=options.get('weighting', 'NIST_GC'),
+                            composite=(options.get('similarity', 'composite') == 'composite'),
+                            unmatched_method=options.get('unmatched', 'keep_all'),
+                            top_k_clusters=options.get('top_k_clusters', 1)
+                        )
+                    else:
+                        results = self.ms_toolkit.search_vector(
+                            query_spectrum,
+                            top_n=options.get('top_n', 5),
+                            composite=(options.get('similarity', 'composite') == 'composite'),
+                            weighting_scheme=options.get('weighting', 'NIST_GC'),
+                            unmatched_method=options.get('unmatched', 'keep_all'),
+                            top_k_clusters=options.get('top_k_clusters', 1)
+                        )
+                except Exception as e:
+                    self.signals.log_message.emit(
+                        f"Search error for peak {i+1} at RT={peak.retention_time:.3f}: {e}"
                     )
-                elif search_method == 'w2v':
-                    # Word2Vec search
-                    results = self.ms_toolkit.search_w2v(
-                        query_spectrum,
-                        top_n=options.get('top_n', 5),
-                        intensity_power=options.get('intensity_power', 0.6),
-                        top_k_clusters=options.get('top_k_clusters', 1)  # Add this parameter
-                    )
-                elif search_method == 'hybrid':
-                    # Hybrid search
-                    hybrid_method = options.get('hybrid_method', 'auto')
-                    results = self.ms_toolkit.search_hybrid(
-                        query_spectrum,
-                        method=hybrid_method,
-                        top_n=options.get('top_n', 5),
-                        intensity_power=options.get('intensity_power', 0.6),
-                        weighting_scheme=options.get('weighting', 'NIST_GC'),
-                        composite=(options.get('similarity', 'composite') == 'composite'),
-                        unmatched_method=options.get('unmatched', 'keep_all'),
-                        top_k_clusters=options.get('top_k_clusters', 1)
-                    )
-                else:
-                    # Default to vector search for unknown methods
-                    results = self.ms_toolkit.search_vector(
-                        query_spectrum,
-                        top_n=options.get('top_n', 5),
-                        composite=(options.get('similarity', 'composite') == 'composite'),
-                        weighting_scheme=options.get('weighting', 'NIST_GC'),
-                        unmatched_method=options.get('unmatched', 'keep_all'),
-                        top_k_clusters=options.get('top_k_clusters', 1)
-                    )
+                    self.signals.progress.emit(i, f"Search error at RT {peak.retention_time:.3f}", [])
+                    continue
                 
                 # Get best match
                 if results:

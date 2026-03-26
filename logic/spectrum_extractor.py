@@ -111,6 +111,10 @@ class SpectrumExtractor:
         # Merge with provided options
         opts = {**default_options, **(options or {})}
         
+        # Map search_options key 'subtract_enabled' to internal 'subtract_background'
+        if 'subtract_enabled' in opts and 'subtract_background' not in (options or {}):
+            opts['subtract_background'] = opts['subtract_enabled']
+        
         # Call the implementation method with explicit parameters
         return self._extract_peak_spectrum(
             data_directory, 
