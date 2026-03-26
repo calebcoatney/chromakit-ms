@@ -95,6 +95,7 @@ class SpectralDeconvInspectorDialog(QDialog):
     """Non-modal dialog for inspecting ADAP-GC deconvolution per window."""
 
     rerun_requested = Signal(object, object)  # (DeconvolutionParams, WindowGroupingParams)
+    cluster_search_requested = Signal(object, float)  # (spectrum_dict: dict, rt: float)
 
     def __init__(
         self,
@@ -296,6 +297,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._ax_scatter = self._fig.add_subplot(2, 1, 1)
         self._ax_eic = self._fig.add_subplot(2, 1, 2, sharex=self._ax_scatter)
         self._canvas = FigureCanvas(self._fig)
+        self._canvas.mpl_connect('button_press_event', self._on_scatter_click)
         layout.addWidget(self._canvas, stretch=1)
 
         # Status label
@@ -507,6 +509,80 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._preview_worker = None
         self.set_controls_enabled(True)
         self._status_label.setText(f"Error: {msg}")
+
+    # ── Click-to-search ────────────────────────────────────────────────────────
+
+    def _on_scatter_click(self, event):
+        """Handle click on the scatter plot to select a cluster for search."""
+        if event.inaxes is not self._ax_scatter:
+            return
+        if self._preview_worker is not None:
+            return
+        if self._scatter_tree is None or self._last_result is None:
+            return
+
+        # Convert a pixel tolerance (15 px) to data-coordinate distance
+        inv = self._ax_scatter.transData.inverted()
+        display_pt = self._ax_scatter.transData.transform([event.xdata, event.ydata])
+        offset_pt = inv.transform([display_pt[0] + 15, display_pt[1] + 15])
+        data_pt = np.array([event.xdata, event.ydata])
+        tol = np.linalg.norm(offset_pt - data_pt)
+
+        dist, idx = self._scatter_tree.query(data_pt)
+        if dist > tol:
+            self._clear_cluster_selection()
+            return
+
+        cluster_id = self._scatter_cluster_ids[idx]
+
+        if cluster_id == -1:
+            self._status_label.setText("Noise point — not assigned to any component")
+            self._clear_cluster_selection()
+            return
+
+        if cluster_id == self._selected_cluster_idx:
+            self._clear_cluster_selection()
+            return
+
+        self._selected_cluster_idx = cluster_id
+        self._highlight_cluster(cluster_id)
+
+        # Find the component for this cluster via its model peak
+        components = self._last_result.get('components', [])
+        rt_clusters = self._last_result['intermediates']['rt_clusters']
+        model_peaks = self._last_result['intermediates']['model_peaks']
+        model_peak_ids = {id(mp) for mp in model_peaks}
+
+        cluster_peaks = rt_clusters[cluster_id]
+        cluster_model = None
+        for peak in cluster_peaks:
+            if id(peak) in model_peak_ids:
+                cluster_model = peak
+                break
+
+        if cluster_model is None:
+            self._status_label.setText(
+                f"Cluster {cluster_id} has no model peak — cannot search"
+            )
+            return
+
+        target_component = None
+        for comp in components:
+            if abs(comp.rt - cluster_model.rt_apex) < 1e-6:
+                target_component = comp
+                break
+
+        if target_component is None or not target_component.spectrum:
+            self._status_label.setText(
+                f"Cluster {cluster_id}: no spectrum available"
+            )
+            return
+
+        self._status_label.setText(
+            f"Cluster {cluster_id} selected — RT {target_component.rt:.3f} min, "
+            f"{len(target_component.spectrum)} m/z ions — searching…"
+        )
+        self.cluster_search_requested.emit(target_component.spectrum, target_component.rt)
 
     # Scatter becomes unreadable beyond this many clusters; show guidance instead.
     _MAX_RENDERABLE_CLUSTERS = 100
