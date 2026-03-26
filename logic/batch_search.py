@@ -88,9 +88,6 @@ class BatchSearchWorker(QRunnable):
                         f"Processing peak {i+1}/{len(self.peaks)} at RT={peak.retention_time:.3f}"
                     )
                 
-                # Extract spectrum based on extraction method
-                extraction_method = options.get('extraction_method', 'apex')
-
                 # Extract spectrum: use deconvolved if available, otherwise point-in-time
                 if hasattr(peak, 'deconvolved_spectrum') and peak.deconvolved_spectrum is not None:
                     spectrum = peak.deconvolved_spectrum

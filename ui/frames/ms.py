@@ -470,13 +470,13 @@ class MSFrame(QWidget):
         if has_deconvolved and self.spectrum_toggle_btn.isChecked():
             spectrum = peak.deconvolved_spectrum
         else:
-            # Point-in-time extraction at TIC apex
             if self._current_data_path:
                 from logic.spectrum_extractor import SpectrumExtractor
                 extractor = SpectrumExtractor()
-                spectrum = extractor.extract_at_rt(
+                spectrum = extractor.extract_for_peak(
                     self._current_data_path,
-                    retention_time=peak.retention_time,
+                    peak,
+                    self.search_options,
                 )
             else:
                 return

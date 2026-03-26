@@ -2019,7 +2019,7 @@ class ChromaKitApp(QMainWindow):
         worker = BatchSearchWorker(
             self.ms_frame.ms_toolkit,
             self.integrated_peaks,
-            self.data_handler.current_directory_path,
+            self._get_ms_data_path(),
             options={
                 **search_options,
                 'mz_shift': mz_shift,
