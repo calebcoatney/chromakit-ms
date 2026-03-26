@@ -584,6 +584,100 @@ class SpectralDeconvInspectorDialog(QDialog):
         )
         self.cluster_search_requested.emit(target_component.spectrum, target_component.rt)
 
+    def _highlight_cluster(self, cluster_idx: int):
+        """Re-render scatter with the selected cluster highlighted."""
+        if self._last_result is None:
+            return
+
+        intermediates = self._last_result['intermediates']
+        rt_clusters = intermediates['rt_clusters']
+        noise_peaks = intermediates['noise_peaks']
+        model_peaks = intermediates['model_peaks']
+        model_peak_ids = {id(mp) for mp in model_peaks}
+        win_peaks = self._last_result['win_peaks']
+        fid_rts = [p.retention_time for p in win_peaks]
+
+        import matplotlib.pyplot as plt
+        cmap = plt.get_cmap('tab10')
+
+        self._ax_scatter.clear()
+
+        # FID span shading
+        if fid_rts:
+            fid_min, fid_max = min(fid_rts), max(fid_rts)
+            half_gap = (self._last_result['w_end'] - self._last_result['w_start']) * 0.05
+            self._ax_scatter.axvspan(
+                fid_min - half_gap, fid_max + half_gap,
+                alpha=0.08, color='steelblue', zorder=1,
+            )
+
+        # Noise points — always dimmed
+        if noise_peaks:
+            self._ax_scatter.scatter(
+                [p.rt_apex for p in noise_peaks],
+                [p.mz for p in noise_peaks],
+                color='gray', s=10, alpha=0.15, zorder=2,
+            )
+
+        # Clustered points — selected vs dimmed
+        for ci, cluster in enumerate(rt_clusters):
+            color = cmap(ci % 10)
+            rts = [p.rt_apex for p in cluster]
+            mzs = [p.mz for p in cluster]
+            is_selected = (ci == cluster_idx)
+
+            self._ax_scatter.scatter(
+                rts, mzs,
+                color=color,
+                s=30 if is_selected else 18,
+                alpha=1.0 if is_selected else 0.25,
+                edgecolors='black' if is_selected else 'none',
+                linewidths=0.8 if is_selected else 0,
+                zorder=5 if is_selected else 3,
+            )
+
+            if is_selected:
+                for peak in cluster:
+                    if id(peak) in model_peak_ids:
+                        self._ax_scatter.scatter(
+                            [peak.rt_apex], [peak.mz],
+                            color=color, marker='*', s=120,
+                            edgecolors='black', linewidths=0.8, zorder=6,
+                        )
+            else:
+                for peak in cluster:
+                    if id(peak) in model_peak_ids:
+                        self._ax_scatter.scatter(
+                            [peak.rt_apex], [peak.mz],
+                            color=color, marker='*', s=50, alpha=0.25, zorder=4,
+                        )
+
+        # FID peak RT lines
+        for rt in fid_rts:
+            self._ax_scatter.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
+            self._ax_scatter.text(
+                rt, 1.01, f"{rt:.3f}",
+                transform=self._ax_scatter.get_xaxis_transform(),
+                ha='center', va='bottom', fontsize=7, color='steelblue',
+            )
+
+        n_clusters = len(rt_clusters)
+        n_noise = len(noise_peaks)
+        self._ax_scatter.set_title(
+            f"RT Clusters — {n_clusters} cluster(s), {n_noise} noise — "
+            f"cluster {cluster_idx} selected"
+        )
+        self._ax_scatter.set_ylabel("m/z")
+        self._canvas.draw()
+
+    def _clear_cluster_selection(self):
+        """Remove cluster highlight and restore normal render."""
+        if self._selected_cluster_idx is None:
+            return
+        self._selected_cluster_idx = None
+        if self._last_result is not None:
+            self._render_plots(self._last_result)
+
     # Scatter becomes unreadable beyond this many clusters; show guidance instead.
     _MAX_RENDERABLE_CLUSTERS = 100
 
