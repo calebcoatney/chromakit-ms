@@ -577,29 +577,42 @@ class SpectralDeconvInspectorDialog(QDialog):
                 cluster_model = peak
                 break
 
-        if cluster_model is None:
-            self._status_label.setText(
-                f"Cluster {cluster_id} has no model peak — cannot search"
-            )
-            return
+        # Try to find the matching DeconvolutedComponent
+        target_spectrum = None
+        spectrum_rt = None
 
-        target_component = None
-        for comp in components:
-            if abs(comp.rt - cluster_model.rt_apex) < 1e-6:
-                target_component = comp
-                break
+        if cluster_model is not None:
+            for comp in components:
+                if abs(comp.rt - cluster_model.rt_apex) < 1e-6:
+                    target_spectrum = comp.spectrum
+                    spectrum_rt = comp.rt
+                    break
 
-        if target_component is None or not target_component.spectrum:
+        # Fallback: build a raw spectrum from the cluster's EIC peaks
+        if not target_spectrum and cluster_peaks:
+            target_spectrum = {}
+            for peak in cluster_peaks:
+                apex_val = float(peak.intensity_array[peak.apex_idx])
+                if peak.mz in target_spectrum:
+                    target_spectrum[peak.mz] = max(target_spectrum[peak.mz], apex_val)
+                else:
+                    target_spectrum[peak.mz] = apex_val
+            # Use the median RT of the cluster as the representative RT
+            spectrum_rt = float(np.median([p.rt_apex for p in cluster_peaks]))
+
+        if not target_spectrum:
             self._status_label.setText(
                 f"Cluster {cluster_id}: no spectrum available"
             )
             return
 
+        n_ions = len(target_spectrum)
+        source = "component" if cluster_model is not None else "raw cluster"
         self._status_label.setText(
-            f"Cluster {cluster_id} selected — RT {target_component.rt:.3f} min, "
-            f"{len(target_component.spectrum)} m/z ions — searching…"
+            f"Cluster {cluster_id} selected — RT {spectrum_rt:.3f} min, "
+            f"{n_ions} m/z ions ({source}) — searching…"
         )
-        self.cluster_search_requested.emit(target_component.spectrum, target_component.rt)
+        self.cluster_search_requested.emit(target_spectrum, spectrum_rt)
 
     def _highlight_cluster(self, cluster_idx: int):
         """Re-render scatter with the selected cluster highlighted."""

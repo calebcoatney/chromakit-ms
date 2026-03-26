@@ -2928,6 +2928,13 @@ class ChromaKitApp(QMainWindow):
         options = self.ms_frame.search_options
         toolkit = self.ms_frame.ms_toolkit
 
+        # Sync m/z shift from MS tab before searching
+        try:
+            mz_shift = int(self.ms_frame.mz_shift_entry.text() or 0)
+            toolkit.mz_shift = mz_shift
+        except (ValueError, AttributeError):
+            pass
+
         try:
             if options.get('search_method') == 'w2v':
                 results = toolkit.search_w2v(
