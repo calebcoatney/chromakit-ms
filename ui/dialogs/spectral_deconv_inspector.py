@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
+from scipy.spatial import cKDTree
+
 from logic.spectral_deconvolution import DeconvolutionParams, deconvolve
 from logic.spectral_deconv_runner import WindowGroupingParams, _group_peaks_into_windows
 from logic.eic_extractor import extract_eic_peaks
@@ -114,6 +116,13 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._windows: list = []      # [(w_start, w_end, [peaks_in_window]), ...]
         self._current_window_idx: int = 0
         self._preview_worker = None
+
+        # Click-to-search spatial index state
+        self._last_result: dict | None = None
+        self._scatter_coords: np.ndarray | None = None
+        self._scatter_cluster_ids: list[int] = []
+        self._scatter_tree: cKDTree | None = None
+        self._selected_cluster_idx: int | None = None
 
         # Build UI first, then populate params from arguments
         self._build_ui()
@@ -489,6 +498,8 @@ class SpectralDeconvInspectorDialog(QDialog):
 
     def _on_preview_finished(self, result: dict):
         self._preview_worker = None
+        self._last_result = result
+        self._selected_cluster_idx = None
         self.set_controls_enabled(True)
         self._render_plots(result)
 
@@ -512,6 +523,9 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._ax_scatter.set_title("No EIC peaks found in this window")
             self._ax_eic.set_title("(check Min Cluster Intensity setting)")
             self._canvas.draw()
+            self._scatter_coords = None
+            self._scatter_cluster_ids = []
+            self._scatter_tree = None
             self._status_label.setText(
                 "No EIC peaks found in this window — try lowering Min Cluster Intensity."
             )
@@ -558,6 +572,9 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._ax_scatter.set_title(
                 f"RT Clusters — {n_clusters} cluster(s), {n_noise} noise point(s) (too many to render)"
             )
+            self._scatter_coords = None
+            self._scatter_cluster_ids = []
+            self._scatter_tree = None
         else:
             # Shade FID peak span to distinguish "in-window" from padding zone
             if fid_rts:
@@ -603,6 +620,25 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._ax_scatter.set_title(
                 f"RT Clusters — {n_clusters} cluster(s), {n_noise} noise point(s)"
             )
+
+            # Build spatial index for click-to-search
+            all_coords = []
+            all_cluster_ids = []
+            for peak in noise_peaks:
+                all_coords.append([peak.rt_apex, peak.mz])
+                all_cluster_ids.append(-1)
+            for ci, cluster in enumerate(rt_clusters):
+                for peak in cluster:
+                    all_coords.append([peak.rt_apex, peak.mz])
+                    all_cluster_ids.append(ci)
+            if all_coords:
+                self._scatter_coords = np.array(all_coords)
+                self._scatter_cluster_ids = all_cluster_ids
+                self._scatter_tree = cKDTree(self._scatter_coords)
+            else:
+                self._scatter_coords = None
+                self._scatter_cluster_ids = []
+                self._scatter_tree = None
 
         self._ax_scatter.set_ylabel("m/z")
 
