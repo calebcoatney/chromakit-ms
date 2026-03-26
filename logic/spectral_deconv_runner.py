@@ -168,6 +168,7 @@ def run_spectral_deconvolution(
             t_start=window_start,
             t_end=window_end,
             min_intensity=deconv_params.min_cluster_intensity,
+            min_prominence=deconv_params.min_eic_prominence,
         )
 
         if not eic_peaks:

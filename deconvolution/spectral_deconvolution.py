@@ -46,6 +46,7 @@ class DeconvolutionParams:
     min_cluster_distance: float = 0.005    # DBSCAN eps (minutes)
     min_cluster_size: int = 2              # DBSCAN min_samples
     min_cluster_intensity: float = 200.0   # drop clusters below this max intensity
+    min_eic_prominence: float = 1000.0     # min prominence for EIC peak detection
     use_is_shared: bool = True             # filter chromatographically unresolved peaks
     edge_to_height_ratio: float = 0.3      # boundary/apex threshold for is_shared
     delta_to_height_ratio: float = 0.3     # |left-right|/apex threshold for is_shared
