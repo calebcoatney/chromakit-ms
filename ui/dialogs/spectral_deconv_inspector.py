@@ -48,6 +48,7 @@ class _PreviewWorker(QRunnable):
                 t_start=self._w_start,
                 t_end=self._w_end,
                 min_intensity=self._deconv_params.min_cluster_intensity,
+                min_prominence=self._deconv_params.min_eic_prominence,
             )
 
             if not eic_peaks:
@@ -187,6 +188,18 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._min_intensity_spin.setToolTip("Drop clusters below this max intensity (counts)")
         adap_form.addRow("Min cluster intensity:", self._min_intensity_spin)
 
+        self._prominence_spin = QDoubleSpinBox()
+        self._prominence_spin.setRange(0.0, 1e8)
+        self._prominence_spin.setDecimals(0)
+        self._prominence_spin.setSingleStep(500.0)
+        self._prominence_spin.setSpecialValueText("Off")
+        self._prominence_spin.setToolTip(
+            "Min prominence (counts) for EIC peak detection.\n"
+            "Rejects noise bumps that don't rise meaningfully above\n"
+            "their local baseline. 0 = disabled. Recommended: 1000-5000."
+        )
+        adap_form.addRow("Min EIC prominence:", self._prominence_spin)
+
         self._shape_sim_spin = QDoubleSpinBox()
         self._shape_sim_spin.setRange(0.0, 90.0)
         self._shape_sim_spin.setDecimals(1)
@@ -283,6 +296,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._min_dist_spin.setValue(dp.min_cluster_distance)
         self._min_size_spin.setValue(dp.min_cluster_size)
         self._min_intensity_spin.setValue(dp.min_cluster_intensity)
+        self._prominence_spin.setValue(dp.min_eic_prominence)
         self._shape_sim_spin.setValue(dp.shape_sim_threshold)
         idx = self._model_peak_combo.findText(dp.model_peak_choice)
         if idx >= 0:
@@ -307,6 +321,7 @@ class SpectralDeconvInspectorDialog(QDialog):
             min_cluster_distance=self._min_dist_spin.value(),
             min_cluster_size=self._min_size_spin.value(),
             min_cluster_intensity=self._min_intensity_spin.value(),
+            min_eic_prominence=self._prominence_spin.value(),
             shape_sim_threshold=self._shape_sim_spin.value(),
             model_peak_choice=self._model_peak_combo.currentText(),
             excluded_mz=excluded,
@@ -388,7 +403,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         for w in (self._preview_btn, self._apply_btn, self._prev_btn,
                   self._next_btn, self._window_combo,
                   self._gap_spin, self._padding_spin, self._rt_match_spin,
-                  self._min_dist_spin, self._min_size_spin, self._min_intensity_spin,
+                  self._min_dist_spin, self._min_size_spin, self._min_intensity_spin, self._prominence_spin,
                   self._shape_sim_spin, self._model_peak_combo,
                   self._excluded_mz_edit, self._top_n_spin,
                   self._normalize_eic_check):
@@ -419,6 +434,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         s.setValue("ms_spectral_deconv/min_cluster_distance", dp.min_cluster_distance)
         s.setValue("ms_spectral_deconv/min_cluster_size", dp.min_cluster_size)
         s.setValue("ms_spectral_deconv/min_cluster_intensity", dp.min_cluster_intensity)
+        s.setValue("ms_spectral_deconv/min_eic_prominence", dp.min_eic_prominence)
         s.setValue("ms_spectral_deconv/shape_sim_threshold", dp.shape_sim_threshold)
         s.setValue("ms_spectral_deconv/model_peak_choice", dp.model_peak_choice)
         s.setValue("ms_spectral_deconv/excluded_mz",
