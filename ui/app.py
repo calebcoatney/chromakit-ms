@@ -772,85 +772,20 @@ class ChromaKitApp(QMainWindow):
         # Show info in status bar
         self.status_bar.showMessage(f"Extracting mass spectrum for peak {peak.peak_number} at RT={peak.retention_time:.3f}")
         
-        # Check if we have the MS toolkit
-        if not hasattr(self.ms_frame, 'ms_toolkit') or not self.ms_frame.ms_toolkit:
-            self.status_bar.showMessage("MS toolkit not available")
-            return
-            
-        if not hasattr(self.data_handler, 'current_directory_path') or not self.data_handler.current_directory_path:
-            self.status_bar.showMessage("No data directory selected")
-            return
-        
-        # Get current MS search options
-        if hasattr(self.ms_frame, 'search_options'):
-            options = self.ms_frame.search_options
-        else:
-            # Default options if not configured
-            options = {
-                'extraction_method': 'apex',
-                'range_points': 5,
-                'tic_weight': True,
-                'subtract_background': True,  # renamed from subtract_enabled for consistency
-                'subtraction_method': 'min_tic',
-                'subtract_weight': 0.1,
-                'intensity_threshold': 0.01,
-                'midpoint_width_percent': 20
-            }
-        
-        try:
-            # Get the mz_shift from UI and set it on the toolkit
-            try:
-                mz_shift = int(self.ms_frame.mz_shift_entry.text() or 0)
-                self.ms_frame.ms_toolkit.mz_shift = mz_shift
-                print(f"Applied m/z shift of {mz_shift} to toolkit")
-            except (ValueError, AttributeError) as e:
-                print(f"Error setting m/z shift: {str(e)}")
-                
-            # Debug print showing extraction parameters
-            print(f"Extracting spectrum for peak {peak.peak_number} at RT={peak.retention_time:.3f}")
-            print(f"Method: {options.get('extraction_method', 'apex')}, Range points: {options.get('range_points', 5)}")
-            print(f"Start time: {peak.start_time:.3f}, End time: {peak.end_time:.3f}")
-            
-            # Use the data handler to extract the spectrum
-            # Resolve the inner .D path for .C folders (rainbow cannot read .C directly)
-            ms_path = self._get_ms_data_path()
-            spectrum = self.data_handler.spectrum_extractor.extract_for_peak(
-                ms_path,
-                peak,
-                {'extraction_method': 'apex', 'debug': False}
-            )
-            
-            if spectrum and 'mz' in spectrum and 'intensities' in spectrum:
-                # Plot the spectrum in the MS frame
-                self.ms_frame.plot_mass_spectrum(
-                    spectrum['mz'], 
-                    spectrum['intensities'],
-                    f"Peak {peak.peak_number} (RT={peak.retention_time:.3f})"
-                )
-                
-                # Also set current spectrum for possible searching with RT
-                self.ms_frame.set_current_spectrum(
-                    spectrum['mz'], 
-                    spectrum['intensities'],
-                    f"Peak {peak.peak_number} (RT={peak.retention_time:.3f})",
-                    rt=peak.retention_time
-                )
-                
-                # Explicitly update RT entry as well
-                self.ms_frame.rt_entry.setText(f"{peak.retention_time:.3f}")
-                
-                # Update status bar — note if deconvolved spectrum is available
-                has_deconv = getattr(peak, 'deconvolved_spectrum', None) is not None
-                deconv_note = " (deconvolved spectrum available — use Search All to apply)" if has_deconv else ""
-                self.status_bar.showMessage(
-                    f"Extracted mass spectrum for peak {peak.peak_number} at RT={peak.retention_time:.3f}{deconv_note}"
-                )
-            else:
-                self.status_bar.showMessage(f"Could not extract spectrum for peak {peak.peak_number}")
-                
-        except Exception as e:
-            self.status_bar.showMessage(f"Error extracting spectrum: {str(e)}")
-            print(f"Error extracting spectrum: {str(e)}")
+        # Route through display_peak_spectrum() — handles toggle, deconvolved vs raw,
+        # and calls set_current_spectrum() internally.
+        ms_path = self._get_ms_data_path()
+        self.ms_frame.display_peak_spectrum(peak, data_directory=ms_path)
+
+        # Update RT entry (display_peak_spectrum does not have access to rt_entry)
+        self.ms_frame.rt_entry.setText(f"{peak.retention_time:.3f}")
+
+        # Update status bar — note if deconvolved spectrum is available
+        has_deconv = getattr(peak, 'deconvolved_spectrum', None) is not None
+        deconv_note = " (deconvolved spectrum available — use Search All to apply)" if has_deconv else ""
+        self.status_bar.showMessage(
+            f"Extracted mass spectrum for peak {peak.peak_number} at RT={peak.retention_time:.3f}{deconv_note}"
+        )
     
     @Slot(int)
     def on_ms_search_requested(self, peak_index):
@@ -2792,9 +2727,25 @@ class ChromaKitApp(QMainWindow):
             deconv_params=deconv_params,
             grouping_params=grouping_params,
         )
-        worker.signals.progress.connect(self._on_deconvolve_ms_progress)
-        worker.signals.finished.connect(self._on_deconvolve_ms_finished)
-        worker.signals.error.connect(self._on_deconvolve_ms_error)
+
+        progress_dialog = QProgressDialog(
+            "Running spectral deconvolution...", "Cancel", 0, 100, self
+        )
+        progress_dialog.setWindowTitle("Spectral Deconvolution")
+        progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.canceled.connect(lambda: setattr(worker, 'cancelled', True))
+
+        worker.signals.progress.connect(
+            lambda pct: (progress_dialog.setValue(pct),
+                         self.status_bar.showMessage(f"Spectral deconvolution: {pct}%"))
+        )
+        worker.signals.finished.connect(
+            lambda: self._on_deconvolve_ms_finished(progress_dialog)
+        )
+        worker.signals.error.connect(
+            lambda msg: self._on_deconvolve_ms_error(msg, progress_dialog)
+        )
 
         print(f"Running MS spectral deconvolution on {len(self.integrated_peaks)} peaks...")
         QThreadPool.globalInstance().start(worker)
@@ -2828,10 +2779,11 @@ class ChromaKitApp(QMainWindow):
 
         return deconv, grouping
 
-    def _on_deconvolve_ms_progress(self, pct: int):
-        self.status_bar.showMessage(f"Spectral deconvolution: {pct}%")
+    def _on_deconvolve_ms_finished(self, progress_dialog=None):
+        if progress_dialog:
+            progress_dialog.setValue(100)
+            progress_dialog.close()
 
-    def _on_deconvolve_ms_finished(self):
         n_deconv = sum(
             1 for p in getattr(self, 'integrated_peaks', [])
             if getattr(p, 'deconvolved_spectrum', None) is not None
@@ -2841,7 +2793,9 @@ class ChromaKitApp(QMainWindow):
         )
         self._refresh_current_peak_ms_display()
 
-    def _on_deconvolve_ms_error(self, msg: str):
+    def _on_deconvolve_ms_error(self, msg: str, progress_dialog=None):
+        if progress_dialog:
+            progress_dialog.close()
         self.status_bar.showMessage("Spectral deconvolution failed")
         QMessageBox.critical(self, "Deconvolution Error", msg)
 

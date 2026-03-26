@@ -477,10 +477,16 @@ class MSFrame(QWidget):
         if spectrum is None:
             return
 
-        self.plot_mass_spectrum(
+        # Use same label format as old code — preserves peak_number for search results tree
+        label = f"Peak {getattr(peak, 'peak_number', '')} (RT={peak.retention_time:.3f})"
+        self.plot_mass_spectrum(spectrum['mz'], spectrum['intensities'], label)
+
+        # Populate single-peak search field with the spectrum just displayed.
+        self.set_current_spectrum(
             spectrum['mz'],
             spectrum['intensities'],
-            f"Peak (RT={peak.retention_time:.3f})",
+            label,
+            rt=peak.retention_time,
         )
 
     def _on_spectrum_toggle(self):
