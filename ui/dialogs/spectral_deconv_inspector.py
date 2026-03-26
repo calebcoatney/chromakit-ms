@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QVBoxLayout, QSplitter, QWidget,
     QGroupBox, QFormLayout, QLabel, QDoubleSpinBox, QSpinBox,
     QComboBox, QCheckBox, QLineEdit, QPushButton, QProgressBar,
+    QTreeWidget, QTreeWidgetItem, QHeaderView,
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -305,6 +306,20 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._status_label.setWordWrap(True)
         layout.addWidget(self._status_label)
 
+        # Inline search results panel
+        self._results_label = QLabel("Click a cluster to search")
+        self._results_label.setStyleSheet("font-weight: bold; margin-top: 4px;")
+        layout.addWidget(self._results_label)
+
+        self._results_tree = QTreeWidget()
+        self._results_tree.setHeaderLabels(["Rank", "Compound", "Score"])
+        self._results_tree.setRootIsDecorated(False)
+        self._results_tree.setMaximumHeight(140)
+        self._results_tree.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._results_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._results_tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        layout.addWidget(self._results_tree)
+
         return panel
 
     # ── Params load/save ───────────────────────────────────────────────────────
@@ -502,6 +517,8 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._preview_worker = None
         self._last_result = result
         self._selected_cluster_idx = None
+        self._results_tree.clear()
+        self._results_label.setText("Click a cluster to search")
         self.set_controls_enabled(True)
         self._render_plots(result)
 
@@ -677,6 +694,31 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._selected_cluster_idx = None
         if self._last_result is not None:
             self._render_plots(self._last_result)
+
+    def show_search_results(self, results: list, rt: float):
+        """Display MS library search results in the inline panel.
+
+        Args:
+            results: list of (compound_name, match_score) tuples from ms_toolkit.
+            rt: Component retention time in minutes.
+        """
+        self._results_tree.clear()
+
+        if not results:
+            self._results_label.setText(f"No matches for component at RT = {rt:.3f} min")
+            return
+
+        self._results_label.setText(f"Search results — component at RT = {rt:.3f} min")
+
+        for rank, (name, score) in enumerate(results, start=1):
+            item = QTreeWidgetItem([str(rank), str(name), f"{score:.4f}"])
+            item.setTextAlignment(0, Qt.AlignCenter)
+            item.setTextAlignment(2, Qt.AlignCenter)
+            self._results_tree.addTopLevelItem(item)
+
+        self._status_label.setText(
+            f"Cluster search complete — {len(results)} result(s) at RT = {rt:.3f} min"
+        )
 
     # Scatter becomes unreadable beyond this many clusters; show guidance instead.
     _MAX_RENDERABLE_CLUSTERS = 100
