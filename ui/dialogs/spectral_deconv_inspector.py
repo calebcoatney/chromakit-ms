@@ -564,55 +564,37 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._selected_cluster_idx = cluster_id
         self._highlight_cluster(cluster_id)
 
-        # Find the component for this cluster via its model peak
+        # Find the component for this cluster by RT proximity.
+        # Every cluster produces a component (either via NNLS or the fallback
+        # interpolation path in deconvolve()), and every cluster now has its
+        # model peak in intermediates['model_peaks'].
         components = self._last_result.get('components', [])
         rt_clusters = self._last_result['intermediates']['rt_clusters']
-        model_peaks = self._last_result['intermediates']['model_peaks']
-        model_peak_ids = {id(mp) for mp in model_peaks}
 
         cluster_peaks = rt_clusters[cluster_id]
-        cluster_model = None
-        for peak in cluster_peaks:
-            if id(peak) in model_peak_ids:
-                cluster_model = peak
-                break
+        cluster_median_rt = float(np.median([p.rt_apex for p in cluster_peaks]))
 
-        # Try to find the matching DeconvolutedComponent
-        target_spectrum = None
-        spectrum_rt = None
+        # Match to the component with the closest RT
+        target_component = None
+        best_dist = float('inf')
+        for comp in components:
+            d = abs(comp.rt - cluster_median_rt)
+            if d < best_dist:
+                best_dist = d
+                target_component = comp
 
-        if cluster_model is not None:
-            for comp in components:
-                if abs(comp.rt - cluster_model.rt_apex) < 1e-6:
-                    target_spectrum = comp.spectrum
-                    spectrum_rt = comp.rt
-                    break
-
-        # Fallback: build a raw spectrum from the cluster's EIC peaks
-        if not target_spectrum and cluster_peaks:
-            target_spectrum = {}
-            for peak in cluster_peaks:
-                apex_val = float(peak.intensity_array[peak.apex_idx])
-                if peak.mz in target_spectrum:
-                    target_spectrum[peak.mz] = max(target_spectrum[peak.mz], apex_val)
-                else:
-                    target_spectrum[peak.mz] = apex_val
-            # Use the median RT of the cluster as the representative RT
-            spectrum_rt = float(np.median([p.rt_apex for p in cluster_peaks]))
-
-        if not target_spectrum:
+        if target_component is None or not target_component.spectrum:
             self._status_label.setText(
                 f"Cluster {cluster_id}: no spectrum available"
             )
             return
 
-        n_ions = len(target_spectrum)
-        source = "component" if cluster_model is not None else "raw cluster"
+        n_ions = len(target_component.spectrum)
         self._status_label.setText(
-            f"Cluster {cluster_id} selected — RT {spectrum_rt:.3f} min, "
-            f"{n_ions} m/z ions ({source}) — searching…"
+            f"Cluster {cluster_id} selected — RT {target_component.rt:.3f} min, "
+            f"{n_ions} m/z ions — searching…"
         )
-        self.cluster_search_requested.emit(target_spectrum, spectrum_rt)
+        self.cluster_search_requested.emit(target_component.spectrum, target_component.rt)
 
     def _highlight_cluster(self, cluster_idx: int):
         """Re-render scatter with the selected cluster highlighted."""

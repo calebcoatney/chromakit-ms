@@ -494,6 +494,7 @@ def deconvolve(peaks: list,
     )
 
     model_peaks: list = []
+    fallback_model_peaks: list = []  # model peaks from clusters that failed filtering
     result: list = []
 
     for cluster in rt_clusters:
@@ -508,6 +509,8 @@ def deconvolve(peaks: list,
             model_peak = _find_model_peak(cluster, params.model_peak_choice)
             if model_peak is None:
                 continue
+
+            fallback_model_peaks.append(model_peak)
 
             span_rt = model_peak.rt_apex
             spectrum: dict = {}
@@ -544,7 +547,7 @@ def deconvolve(peaks: list,
         intermediates = {
             'rt_clusters': rt_clusters,
             'noise_peaks': noise_peaks,
-            'model_peaks': model_peaks,
+            'model_peaks': model_peaks + fallback_model_peaks,
         }
         return result, intermediates
 
