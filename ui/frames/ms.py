@@ -47,10 +47,10 @@ class MSFrame(QWidget):
         self.library_loaded = False
         self.models_loaded = False
         
-        # Initialize default search options
+        # Initialize default search options, then overlay any saved QSettings
         self.search_options = {
             'search_method': 'vector',
-            'hybrid_method': 'auto',  # Default hybrid method
+            'hybrid_method': 'auto',
             'extraction_method': 'apex',
             'range_points': 5,
             'range_time': 0.05,
@@ -63,8 +63,9 @@ class MSFrame(QWidget):
             'unmatched': 'keep_all',
             'intensity_power': 0.6,
             'top_n': 5,
-            'top_k_clusters': 1  # NEW: Add cluster option
+            'top_k_clusters': 1,
         }
+        self._load_search_options_from_settings()
         
         # Add initial library load message
         if HAS_MSTOOLKIT:
@@ -711,6 +712,44 @@ class MSFrame(QWidget):
         if dialog.exec() == QDialog.Accepted:
             self.search_options = dialog.get_options()
             print("MS search options updated:", self.search_options)
+
+    def _load_search_options_from_settings(self):
+        """Load persisted search options from QSettings into self.search_options.
+
+        Uses the same QSettings keys the MSOptionsDialog reads/writes, so
+        options saved in a previous session take effect immediately without
+        requiring the user to open Configure and click OK.
+        """
+        from PySide6.QtCore import QSettings
+        s = QSettings("CalebCoatney", "ChromaKit")
+
+        method_map = ['vector', 'w2v', 'hybrid']
+        hybrid_map = ['auto', 'fast', 'ensemble']
+        subtraction_map = ['left', 'right', 'min_tic', 'average']
+        similarity_map = ['cosine', 'composite']
+        weighting_map = ['None', 'NIST', 'NIST_GC']
+        unmatched_map = ['keep_all', 'remove_all', 'keep_library', 'keep_experimental']
+
+        def _idx(key, default, choices):
+            i = s.value(key, default, int)
+            return choices[i] if 0 <= i < len(choices) else choices[default]
+
+        self.search_options.update({
+            'search_method': _idx("ms_search/method", 0, method_map),
+            'hybrid_method': _idx("ms_search/hybrid_method", 0, hybrid_map),
+            'extraction_method': s.value("ms_search/extraction_method", "apex", str),
+            'range_points': s.value("ms_search/range_points", 5, int),
+            'tic_weight': s.value("ms_search/tic_weight", True, bool),
+            'subtract_enabled': s.value("ms_search/subtract_enabled", True, bool),
+            'subtraction_method': _idx("ms_search/subtraction_method", 2, subtraction_map),
+            'subtract_weight': s.value("ms_search/subtract_weight", 0.1, float),
+            'similarity': _idx("ms_search/similarity", 1, similarity_map),
+            'weighting': _idx("ms_search/weighting", 2, weighting_map),
+            'unmatched': _idx("ms_search/unmatched", 0, unmatched_map),
+            'intensity_power': s.value("ms_search/intensity_power", 0.6, float),
+            'top_n': s.value("ms_search/top_n", 5, int),
+            'top_k_clusters': s.value("ms_search/top_k_clusters", 1, int),
+        })
     
     def _init_mstoolkit(self):
         """Initialize the MSToolkit."""
