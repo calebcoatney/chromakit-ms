@@ -170,3 +170,50 @@ def test_run_spectral_deconvolution_empty_components_sets_count_zero():
 
     assert peak.deconvolution_component_count == 0
     assert peak.deconvolved_spectrum is None
+
+
+def test_max_window_peaks_splits_large_cluster():
+    """A chain of 20 overlapping peaks with max_window_peaks=8 should split."""
+    peaks = [_make_peak(1.0 + i * 0.05, 0.97 + i * 0.05, 1.03 + i * 0.05)
+             for i in range(20)]
+    params = WindowGroupingParams(gap_tolerance=0.1, padding_fraction=0.0,
+                                  max_window_peaks=8)
+    windows = _group_peaks_into_windows(peaks, params, rt_min=0.0, rt_max=20.0)
+
+    assert len(windows) >= 3  # 20 peaks / 8 max = at least 3 windows
+    for _, _, w_peaks in windows:
+        assert len(w_peaks) <= 8
+    # All peaks accounted for
+    assert sum(len(w[2]) for w in windows) == 20
+
+
+def test_max_window_peaks_zero_disables_splitting():
+    """max_window_peaks=0 means unlimited — no splitting."""
+    peaks = [_make_peak(1.0 + i * 0.05, 0.97 + i * 0.05, 1.03 + i * 0.05)
+             for i in range(20)]
+    params = WindowGroupingParams(gap_tolerance=0.1, padding_fraction=0.0,
+                                  max_window_peaks=0)
+    windows = _group_peaks_into_windows(peaks, params, rt_min=0.0, rt_max=20.0)
+
+    assert len(windows) == 1
+    assert len(windows[0][2]) == 20
+
+
+def test_split_at_largest_gap():
+    """Splitting prefers the largest internal gap."""
+    # 3 peaks close, then a gap, then 2 peaks close
+    peaks = [
+        _make_peak(1.0, 0.95, 1.05),
+        _make_peak(1.1, 1.05, 1.15),
+        _make_peak(1.2, 1.15, 1.25),
+        # gap of 0.3 min here
+        _make_peak(1.6, 1.55, 1.65),
+        _make_peak(1.7, 1.65, 1.75),
+    ]
+    params = WindowGroupingParams(gap_tolerance=0.5, padding_fraction=0.0,
+                                  max_window_peaks=3)
+    windows = _group_peaks_into_windows(peaks, params, rt_min=0.0, rt_max=20.0)
+
+    assert len(windows) == 2
+    assert len(windows[0][2]) == 3
+    assert len(windows[1][2]) == 2

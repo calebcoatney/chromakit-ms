@@ -163,6 +163,16 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._rt_match_spin.setSingleStep(0.005)
         self._rt_match_spin.setToolTip("Max RT gap (min) between FID peak and MS component")
         wg_form.addRow("RT match tolerance (min):", self._rt_match_spin)
+
+        self._max_window_peaks_spin = QSpinBox()
+        self._max_window_peaks_spin.setRange(0, 100)
+        self._max_window_peaks_spin.setSpecialValueText("Unlimited")
+        self._max_window_peaks_spin.setToolTip(
+            "Force a window split when this many FID peaks accumulate.\n"
+            "Splits at the largest internal RT gap. 0 = unlimited."
+        )
+        wg_form.addRow("Max peaks per window:", self._max_window_peaks_spin)
+
         layout.addWidget(wg_group)
 
         # ADAP-GC Parameters group
@@ -292,6 +302,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._gap_spin.setValue(gp.gap_tolerance or 0.0)
         self._padding_spin.setValue(gp.padding_fraction)
         self._rt_match_spin.setValue(gp.rt_match_tolerance)
+        self._max_window_peaks_spin.setValue(gp.max_window_peaks)
 
         self._min_dist_spin.setValue(dp.min_cluster_distance)
         self._min_size_spin.setValue(dp.min_cluster_size)
@@ -311,6 +322,7 @@ class SpectralDeconvInspectorDialog(QDialog):
             gap_tolerance=None if raw_gap == 0.0 else raw_gap,
             padding_fraction=self._padding_spin.value(),
             rt_match_tolerance=self._rt_match_spin.value(),
+            max_window_peaks=self._max_window_peaks_spin.value(),
         )
         excluded = [
             float(x.strip())
@@ -403,6 +415,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         for w in (self._preview_btn, self._apply_btn, self._prev_btn,
                   self._next_btn, self._window_combo,
                   self._gap_spin, self._padding_spin, self._rt_match_spin,
+                  self._max_window_peaks_spin,
                   self._min_dist_spin, self._min_size_spin, self._min_intensity_spin, self._prominence_spin,
                   self._shape_sim_spin, self._model_peak_combo,
                   self._excluded_mz_edit, self._top_n_spin,
@@ -442,6 +455,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         s.setValue("ms_spectral_deconv/gap_tolerance", self._gap_spin.value())
         s.setValue("ms_spectral_deconv/padding_fraction", gp.padding_fraction)
         s.setValue("ms_spectral_deconv/rt_match_tolerance", gp.rt_match_tolerance)
+        s.setValue("ms_spectral_deconv/max_window_peaks", gp.max_window_peaks)
         
         self.rerun_requested.emit(dp, gp)
 

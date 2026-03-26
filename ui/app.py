@@ -2779,6 +2779,7 @@ class ChromaKitApp(QMainWindow):
             gap_tolerance=None if raw_gap == 0.0 else raw_gap,
             padding_fraction=s.value("ms_spectral_deconv/padding_fraction", 0.5, float),
             rt_match_tolerance=s.value("ms_spectral_deconv/rt_match_tolerance", 0.05, float),
+            max_window_peaks=s.value("ms_spectral_deconv/max_window_peaks", 10, int),
         )
 
         return deconv, grouping

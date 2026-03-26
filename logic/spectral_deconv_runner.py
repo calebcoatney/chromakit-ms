@@ -22,6 +22,8 @@ class WindowGroupingParams:
     # Pad each side of cluster window by this fraction of cluster width
     rt_match_tolerance: float = 0.05
     # Max RT distance (min) to assign a DeconvolutedComponent to a FID peak
+    max_window_peaks: int = 10
+    # Force a split when a window accumulates this many peaks (0 = unlimited)
 
 
 def _group_peaks_into_windows(
@@ -48,8 +50,7 @@ def _group_peaks_into_windows(
         gap_tol = params.gap_tolerance
 
     # Merge adjacent peaks into clusters
-    clusters: list[tuple[float, float, list]] = []
-    cluster_start = sorted_peaks[0].start_time
+    raw_clusters: list[list] = []
     cluster_end = sorted_peaks[0].end_time
     cluster_peaks = [sorted_peaks[0]]
 
@@ -59,15 +60,25 @@ def _group_peaks_into_windows(
             cluster_end = max(cluster_end, peak.end_time)
             cluster_peaks.append(peak)
         else:
-            clusters.append((cluster_start, cluster_end, cluster_peaks))
-            cluster_start = peak.start_time
+            raw_clusters.append(cluster_peaks)
             cluster_end = peak.end_time
             cluster_peaks = [peak]
-    clusters.append((cluster_start, cluster_end, cluster_peaks))
+    raw_clusters.append(cluster_peaks)
 
-    # Pad each cluster and clamp to RT axis bounds
+    # Split oversized clusters at their largest internal RT gap
+    max_peaks = params.max_window_peaks
+    if max_peaks > 0:
+        split_clusters: list[list] = []
+        for cl in raw_clusters:
+            split_clusters.extend(_split_cluster(cl, max_peaks))
+    else:
+        split_clusters = raw_clusters
+
+    # Build windows with padding
     windows = []
-    for cl_start, cl_end, cl_peaks in clusters:
+    for cl_peaks in split_clusters:
+        cl_start = min(p.start_time for p in cl_peaks)
+        cl_end = max(p.end_time for p in cl_peaks)
         width = cl_end - cl_start
         pad = max(params.padding_fraction * width, 1e-6)
         w_start = max(rt_min, cl_start - pad)
@@ -75,6 +86,25 @@ def _group_peaks_into_windows(
         windows.append((w_start, w_end, cl_peaks))
 
     return windows
+
+
+def _split_cluster(peaks: list, max_peaks: int) -> list[list]:
+    """Recursively split a peak cluster at its largest internal RT gap.
+
+    Returns a list of sub-clusters, each with at most max_peaks peaks.
+    """
+    if len(peaks) <= max_peaks:
+        return [peaks]
+
+    # Find the largest gap between consecutive peak RTs
+    rts = [p.retention_time for p in peaks]
+    gaps = [(rts[i + 1] - rts[i], i) for i in range(len(rts) - 1)]
+    _, split_idx = max(gaps, key=lambda x: x[0])
+
+    left = peaks[:split_idx + 1]
+    right = peaks[split_idx + 1:]
+
+    return _split_cluster(left, max_peaks) + _split_cluster(right, max_peaks)
 
 
 def _assign_components_to_peaks(

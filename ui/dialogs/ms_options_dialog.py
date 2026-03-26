@@ -259,6 +259,15 @@ class MSOptionsDialog(QDialog):
         self.rt_match_tolerance_spin.setToolTip("Max RT gap (min) between FID peak and MS component")
         grouping_layout.addRow("RT match tolerance (min):", self.rt_match_tolerance_spin)
 
+        self.max_window_peaks_spin = QSpinBox()
+        self.max_window_peaks_spin.setRange(0, 100)
+        self.max_window_peaks_spin.setSpecialValueText("Unlimited")
+        self.max_window_peaks_spin.setToolTip(
+            "Force a window split when this many FID peaks accumulate.\n"
+            "Splits at the largest internal RT gap. 0 = unlimited."
+        )
+        grouping_layout.addRow("Max peaks per window:", self.max_window_peaks_spin)
+
         layout.addWidget(grouping_group)
 
         # --- ADAP-GC Parameters ---
@@ -536,6 +545,8 @@ class MSOptionsDialog(QDialog):
             self.settings.value("ms_spectral_deconv/padding_fraction", 0.5, float))
         self.rt_match_tolerance_spin.setValue(
             self.settings.value("ms_spectral_deconv/rt_match_tolerance", 0.05, float))
+        self.max_window_peaks_spin.setValue(
+            self.settings.value("ms_spectral_deconv/max_window_peaks", 10, int))
         self.min_cluster_distance_spin.setValue(
             self.settings.value("ms_spectral_deconv/min_cluster_distance", 0.005, float))
         self.min_cluster_size_spin.setValue(
@@ -606,6 +617,8 @@ class MSOptionsDialog(QDialog):
                                self.padding_fraction_spin.value())
         self.settings.setValue("ms_spectral_deconv/rt_match_tolerance",
                                self.rt_match_tolerance_spin.value())
+        self.settings.setValue("ms_spectral_deconv/max_window_peaks",
+                               self.max_window_peaks_spin.value())
         self.settings.setValue("ms_spectral_deconv/min_cluster_distance",
                                self.min_cluster_distance_spin.value())
         self.settings.setValue("ms_spectral_deconv/min_cluster_size",
@@ -667,6 +680,7 @@ class MSOptionsDialog(QDialog):
         self.gap_tolerance_spin.setValue(0.0)
         self.padding_fraction_spin.setValue(0.5)
         self.rt_match_tolerance_spin.setValue(0.05)
+        self.max_window_peaks_spin.setValue(10)
         self.min_cluster_distance_spin.setValue(0.005)
         self.min_cluster_size_spin.setValue(2)
         self.min_cluster_intensity_spin.setValue(200.0)
