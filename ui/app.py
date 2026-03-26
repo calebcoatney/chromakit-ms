@@ -2847,6 +2847,7 @@ class ChromaKitApp(QMainWindow):
             parent=self,
         )
         self._deconv_inspector.rerun_requested.connect(self._on_inspector_rerun_requested)
+        self._deconv_inspector.cluster_search_requested.connect(self._on_cluster_search_requested)
         self._deconv_inspector.show()
 
     def _on_inspector_rerun_requested(self, deconv_params, grouping_params):
@@ -2888,6 +2889,81 @@ class ChromaKitApp(QMainWindow):
         )
 
         QThreadPool.globalInstance().start(worker)
+
+    def _on_cluster_search_requested(self, spectrum_dict: dict, rt: float):
+        """Run MS library search for a deconvolved cluster spectrum.
+
+        Called when user clicks a cluster in the inspector scatter plot.
+        Uses MSFrame's ms_toolkit and search settings, then routes results
+        back to the inspector's inline results panel.
+        """
+        if not hasattr(self.ms_frame, 'ms_toolkit') or self.ms_frame.ms_toolkit is None:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "MS Library Not Loaded",
+                "The MS library must be loaded before searching.\n"
+                "Go to the MS tab and load a library first.",
+            )
+            return
+
+        if not self.ms_frame.library_loaded:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "MS Library Not Loaded",
+                "The MS library must be loaded before searching.\n"
+                "Go to the MS tab and load a library first.",
+            )
+            return
+
+        query = [(float(mz), float(intensity))
+                 for mz, intensity in spectrum_dict.items()]
+
+        if not query:
+            if self._deconv_inspector:
+                self._deconv_inspector.show_search_results([], rt)
+            return
+
+        options = self.ms_frame.search_options
+        toolkit = self.ms_frame.ms_toolkit
+
+        try:
+            if options.get('search_method') == 'w2v':
+                results = toolkit.search_w2v(
+                    query,
+                    top_n=options.get('top_n', 5),
+                    intensity_power=options.get('intensity_power', 0.6),
+                    top_k_clusters=options.get('top_k_clusters', 1),
+                )
+            elif options.get('search_method') == 'hybrid':
+                results = toolkit.search_hybrid(
+                    query,
+                    method=options.get('hybrid_method', 'auto'),
+                    top_n=options.get('top_n', 5),
+                    intensity_power=options.get('intensity_power', 0.6),
+                    weighting_scheme=options.get('weighting', 'NIST_GC'),
+                    composite=(options.get('similarity') == 'composite'),
+                    unmatched_method=options.get('unmatched', 'keep_all'),
+                    top_k_clusters=options.get('top_k_clusters', 1),
+                )
+            else:
+                results = toolkit.search_vector(
+                    query,
+                    top_n=options.get('top_n', 5),
+                    composite=(options.get('similarity') == 'composite'),
+                    weighting_scheme=options.get('weighting', 'NIST_GC'),
+                    unmatched_method=options.get('unmatched', 'keep_all'),
+                    top_k_clusters=options.get('top_k_clusters', 1),
+                )
+        except Exception as e:
+            if self._deconv_inspector:
+                self._deconv_inspector.show_search_results([], rt)
+                self._deconv_inspector._status_label.setText(f"Search error: {e}")
+            return
+
+        if self._deconv_inspector:
+            self._deconv_inspector.show_search_results(results, rt)
 
     def _perform_quantitation(self):
         """Perform quantitation on integrated peaks using Polyarc + IS method."""
