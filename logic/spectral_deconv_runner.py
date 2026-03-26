@@ -140,6 +140,8 @@ def _assign_components_to_peaks(
             continue
         if dist <= rt_match_tolerance:
             comp = components[ci]
+            if not comp.spectrum:
+                continue  # skip components with empty spectra
             peak = fid_peaks[pi]
             mz_arr = np.array(sorted(comp.spectrum.keys()))
             int_arr = np.array([comp.spectrum[m] for m in mz_arr])

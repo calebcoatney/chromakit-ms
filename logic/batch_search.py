@@ -94,6 +94,13 @@ class BatchSearchWorker(QRunnable):
                 # Extract spectrum: use deconvolved if available, otherwise point-in-time
                 if hasattr(peak, 'deconvolved_spectrum') and peak.deconvolved_spectrum is not None:
                     spectrum = peak.deconvolved_spectrum
+                    # Fall back to raw extraction if deconvolved spectrum is empty
+                    if len(spectrum.get('mz', [])) == 0:
+                        spectrum = self.spectrum_extractor.extract_for_peak(
+                            self.data_directory,
+                            peak,
+                            self.options
+                        )
                     # Deconvolved spectrum is already clean — skip background subtraction
                 else:
                     spectrum = self.spectrum_extractor.extract_for_peak(
