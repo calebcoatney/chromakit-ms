@@ -301,22 +301,25 @@ def _merge_peaks(peaks: list, edge_ratio: float, delta_ratio: float) -> list:
 # ─── Layer 3: Clustering ──────────────────────────────────────────────────────
 
 def _cluster_by_rt(peaks: list, eps: float, min_samples: int,
-                   min_intensity: float) -> list:
+                   min_intensity: float) -> tuple[list, list]:
     """Cluster EIC peaks by apex RT using 1D DBSCAN.
     Port of TwoStepDecomposition.getRetTimeClusters().
 
-    Noise points (label -1) are discarded. Clusters whose max apex intensity
-    is below min_intensity are dropped. Returns clusters sorted by mean RT.
+    Returns (clusters, noise_peaks) where noise_peaks are DBSCAN label=-1 points.
+    Clusters whose max apex intensity is below min_intensity are dropped.
+    Returns clusters sorted by mean RT.
     """
     if not peaks:
-        return []
+        return [], []
 
     rt_values = np.array([[p.rt_apex] for p in peaks])
     labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(rt_values)
 
     groups: dict = {}
+    noise_peaks: list = []
     for peak, label in zip(peaks, labels):
         if label == -1:
+            noise_peaks.append(peak)
             continue
         groups.setdefault(label, []).append(peak)
 
@@ -326,7 +329,7 @@ def _cluster_by_rt(peaks: list, eps: float, min_samples: int,
     ]
 
     filtered.sort(key=lambda c: float(np.mean([p.rt_apex for p in c])))
-    return filtered
+    return filtered, noise_peaks
 
 
 def _cluster_by_shape(peaks: list, threshold: float) -> list:
@@ -460,7 +463,8 @@ def _build_components(model_peaks: list, other_peaks: list) -> list:
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 def deconvolve(peaks: list,
-               params: Optional[DeconvolutionParams] = None) -> list:
+               params: Optional[DeconvolutionParams] = None,
+               return_intermediates: bool = False) -> list | tuple:
     """Spectral deconvolution via the ADAP-GC 3.2 two-step decomposition algorithm.
 
     Clusters EIC peaks by retention time, selects model peaks by shape and
@@ -473,16 +477,17 @@ def deconvolve(peaks: list,
     Args:
         peaks: Detected EIC peaks (one per m/z per chromatographic feature).
         params: Algorithm parameters. Uses default DeconvolutionParams if None.
+        return_intermediates: If True, returns (components, intermediates_dict).
 
     Returns:
-        List of DeconvolutedComponent, each with RT and fragmentation spectrum.
+        List of DeconvolutedComponent, OR (list, dict) if return_intermediates=True.
     """
     if params is None:
         params = DeconvolutionParams()
     if not peaks:
         return []
 
-    rt_clusters = _cluster_by_rt(
+    rt_clusters, noise_peaks = _cluster_by_rt(
         peaks, params.min_cluster_distance,
         params.min_cluster_size, params.min_cluster_intensity,
     )
@@ -533,5 +538,13 @@ def deconvolve(peaks: list,
         peaks, params.edge_to_height_ratio, params.delta_to_height_ratio
     )
     result += _build_components(model_peaks, other_peaks)
+
+    if return_intermediates:
+        intermediates = {
+            'rt_clusters': rt_clusters,
+            'noise_peaks': noise_peaks,
+            'model_peaks': model_peaks,
+        }
+        return result, intermediates
 
     return result

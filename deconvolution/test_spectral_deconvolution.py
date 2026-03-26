@@ -168,8 +168,9 @@ class TestClusterByRT:
             make_gaussian_peak(rt_center=5.000, height=500.0, mz=float(i))
             for i in range(200, 203)
         ]
-        clusters = _cluster_by_rt(peaks, eps=0.01, min_samples=2, min_intensity=100.0)
+        clusters, noise_peaks = _cluster_by_rt(peaks, eps=0.01, min_samples=2, min_intensity=100.0)
         assert len(clusters) == 2
+        assert noise_peaks == []
         # Clusters should be sorted by mean RT
         mean_rts = [np.mean([p.rt_apex for p in c]) for c in clusters]
         assert mean_rts[0] < mean_rts[1]
@@ -177,16 +178,43 @@ class TestClusterByRT:
     def test_low_intensity_cluster_dropped(self):
         high = [make_gaussian_peak(rt_center=1.0, height=500.0, mz=float(i)) for i in range(2)]
         low = [make_gaussian_peak(rt_center=5.0, height=50.0, mz=float(i)) for i in range(2)]
-        clusters = _cluster_by_rt(high + low, eps=0.01, min_samples=2, min_intensity=100.0)
+        clusters, noise_peaks = _cluster_by_rt(high + low, eps=0.01, min_samples=2, min_intensity=100.0)
         assert len(clusters) == 1
+        assert noise_peaks == []
 
-    def test_isolated_peak_dropped_as_noise(self):
+    def test_isolated_peak_is_noise(self):
         peaks = [make_gaussian_peak(rt_center=1.0, height=500.0, mz=100.0)]
-        clusters = _cluster_by_rt(peaks, eps=0.01, min_samples=2, min_intensity=100.0)
+        clusters, noise_peaks = _cluster_by_rt(peaks, eps=0.01, min_samples=2, min_intensity=100.0)
         assert len(clusters) == 0
+        assert len(noise_peaks) == 1
 
-    def test_empty_input(self):
-        assert _cluster_by_rt([], eps=0.01, min_samples=2, min_intensity=100.0) == []
+    def test_returns_tuple_of_clusters_and_noise(self):
+        # One isolated peak (noise) + two clustered peaks
+        noise = make_gaussian_peak(rt_center=10.0, height=500.0, mz=99.0)  # alone → noise
+        clustered = [
+            make_gaussian_peak(rt_center=1.0, height=500.0, mz=float(i))
+            for i in range(100, 103)
+        ]
+        clusters, noise_peaks = _cluster_by_rt(
+            clustered + [noise], eps=0.01, min_samples=2, min_intensity=100.0
+        )
+        assert len(clusters) == 1
+        assert len(noise_peaks) == 1
+        assert noise_peaks[0].mz == 99.0
+
+    def test_no_noise_returns_empty_noise_list(self):
+        peaks = [
+            make_gaussian_peak(rt_center=1.0, height=500.0, mz=float(i))
+            for i in range(100, 103)
+        ]
+        clusters, noise_peaks = _cluster_by_rt(peaks, eps=0.01, min_samples=2, min_intensity=100.0)
+        assert len(clusters) == 1
+        assert noise_peaks == []
+
+    def test_empty_input_returns_empty_tuple(self):
+        clusters, noise_peaks = _cluster_by_rt([], eps=0.01, min_samples=2, min_intensity=100.0)
+        assert clusters == []
+        assert noise_peaks == []
 
 
 class TestClusterByShape:
@@ -407,3 +435,40 @@ class TestDeconvolve:
         assert any(mz in comp_b.spectrum and comp_b.spectrum[mz] > 0 for mz in mz_b)
         assert comp_a.rt == pytest.approx(2.0, abs=0.1)
         assert comp_b.rt == pytest.approx(2.5, abs=0.1)
+
+    def test_return_intermediates_gives_tuple(self):
+        peaks = [
+            make_gaussian_peak(rt_center=5.0, mz=float(m), height=1000.0)
+            for m in [100, 200]
+        ]
+        result = deconvolve(peaks, return_intermediates=True)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        components, intermediates = result
+        assert isinstance(components, list)
+        assert 'rt_clusters' in intermediates
+        assert 'noise_peaks' in intermediates
+        assert 'model_peaks' in intermediates
+
+    def test_return_intermediates_false_gives_list(self):
+        peaks = [
+            make_gaussian_peak(rt_center=5.0, mz=float(m), height=1000.0)
+            for m in [100, 200]
+        ]
+        result = deconvolve(peaks, return_intermediates=False)
+        assert isinstance(result, list)
+
+    def test_intermediates_noise_peaks_are_eic_peaks(self):
+        # One isolated noise peak (min_samples=2, only 1 peak at that RT)
+        noise = make_gaussian_peak(rt_center=10.0, height=500.0, mz=99.0)
+        clustered = [
+            make_gaussian_peak(rt_center=1.0, mz=float(i), height=500.0)
+            for i in range(100, 103)
+        ]
+        params = DeconvolutionParams(
+            min_cluster_distance=0.01, min_cluster_size=2,
+            min_cluster_intensity=100.0, min_model_peak_sharpness=1.0,
+            use_is_shared=False,
+        )
+        _, intermediates = deconvolve(clustered + [noise], params, return_intermediates=True)
+        assert any(p.mz == 99.0 for p in intermediates['noise_peaks'])
