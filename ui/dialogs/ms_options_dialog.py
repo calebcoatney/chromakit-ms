@@ -284,6 +284,18 @@ class MSOptionsDialog(QDialog):
         self.min_cluster_intensity_spin.setToolTip("Drop clusters below this max intensity (counts)")
         adap_layout.addRow("Min cluster intensity:", self.min_cluster_intensity_spin)
 
+        self.min_eic_prominence_spin = QDoubleSpinBox()
+        self.min_eic_prominence_spin.setRange(0.0, 1e8)
+        self.min_eic_prominence_spin.setSingleStep(500.0)
+        self.min_eic_prominence_spin.setDecimals(0)
+        self.min_eic_prominence_spin.setSpecialValueText("Off")
+        self.min_eic_prominence_spin.setToolTip(
+            "Min prominence (counts) for EIC peak detection.\n"
+            "Rejects noise bumps that don't rise meaningfully above\n"
+            "their local baseline. 0 = disabled. Recommended: 1000-5000."
+        )
+        adap_layout.addRow("Min EIC prominence:", self.min_eic_prominence_spin)
+
         self.shape_sim_threshold_spin = QDoubleSpinBox()
         self.shape_sim_threshold_spin.setRange(1.0, 90.0)
         self.shape_sim_threshold_spin.setSingleStep(1.0)
@@ -530,6 +542,8 @@ class MSOptionsDialog(QDialog):
             self.settings.value("ms_spectral_deconv/min_cluster_size", 2, int))
         self.min_cluster_intensity_spin.setValue(
             self.settings.value("ms_spectral_deconv/min_cluster_intensity", 200.0, float))
+        self.min_eic_prominence_spin.setValue(
+            self.settings.value("ms_spectral_deconv/min_eic_prominence", 1000.0, float))
         self.shape_sim_threshold_spin.setValue(
             self.settings.value("ms_spectral_deconv/shape_sim_threshold", 30.0, float))
         choice_map = {"sharpness": 0, "intensity": 1, "mz": 2}
@@ -598,6 +612,8 @@ class MSOptionsDialog(QDialog):
                                self.min_cluster_size_spin.value())
         self.settings.setValue("ms_spectral_deconv/min_cluster_intensity",
                                self.min_cluster_intensity_spin.value())
+        self.settings.setValue("ms_spectral_deconv/min_eic_prominence",
+                               self.min_eic_prominence_spin.value())
         self.settings.setValue("ms_spectral_deconv/shape_sim_threshold",
                                self.shape_sim_threshold_spin.value())
         choice_list = ["sharpness", "intensity", "mz"]

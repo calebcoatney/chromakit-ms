@@ -2764,6 +2764,7 @@ class ChromaKitApp(QMainWindow):
             min_cluster_distance=s.value("ms_spectral_deconv/min_cluster_distance", 0.005, float),
             min_cluster_size=s.value("ms_spectral_deconv/min_cluster_size", 2, int),
             min_cluster_intensity=s.value("ms_spectral_deconv/min_cluster_intensity", 200.0, float),
+            min_eic_prominence=s.value("ms_spectral_deconv/min_eic_prominence", 1000.0, float),
             shape_sim_threshold=s.value("ms_spectral_deconv/shape_sim_threshold", 30.0, float),
             model_peak_choice=s.value("ms_spectral_deconv/model_peak_choice", "sharpness", str),
             excluded_mz=[
