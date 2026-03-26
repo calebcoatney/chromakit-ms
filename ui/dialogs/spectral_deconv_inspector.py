@@ -204,13 +204,20 @@ class SpectralDeconvInspectorDialog(QDialog):
         adap_form.addRow("Excluded m/z:", self._excluded_mz_edit)
         layout.addWidget(adap_group)
 
-        # Top N traces
+        # Top N traces + display options
         top_n_layout = QFormLayout()
         self._top_n_spin = QSpinBox()
         self._top_n_spin.setRange(1, 200)
         self._top_n_spin.setValue(20)
         top_n_layout.addRow("Top N EIC traces:", self._top_n_spin)
         layout.addLayout(top_n_layout)
+
+        self._normalize_eic_check = QCheckBox("Normalize EIC traces")
+        self._normalize_eic_check.setToolTip(
+            "Scale each EIC trace to its own maximum\n"
+            "so shapes can be compared regardless of intensity"
+        )
+        layout.addWidget(self._normalize_eic_check)
 
         layout.addStretch()
 
@@ -319,7 +326,18 @@ class SpectralDeconvInspectorDialog(QDialog):
         rt_min = float(self._ms.xlabels[0])
         rt_max = float(self._ms.xlabels[-1])
         self._windows = _group_peaks_into_windows(self._peaks, gp, rt_min, rt_max)
+
+        # Clamp current index to new window count, then resync combo + nav buttons.
+        # _populate_combo clears the QComboBox (resetting visual selection to index 0)
+        # so we must explicitly restore the correct index afterwards.
+        n = len(self._windows)
+        self._current_window_idx = min(self._current_window_idx, n - 1) if n > 0 else 0
         self._populate_combo()
+        self._window_combo.blockSignals(True)
+        self._window_combo.setCurrentIndex(self._current_window_idx)
+        self._window_combo.blockSignals(False)
+        self._prev_btn.setEnabled(self._current_window_idx > 0)
+        self._next_btn.setEnabled(self._current_window_idx < n - 1)
 
     def _populate_combo(self):
         self._window_combo.blockSignals(True)
@@ -372,7 +390,8 @@ class SpectralDeconvInspectorDialog(QDialog):
                   self._gap_spin, self._padding_spin, self._rt_match_spin,
                   self._min_dist_spin, self._min_size_spin, self._min_intensity_spin,
                   self._shape_sim_spin, self._model_peak_combo,
-                  self._excluded_mz_edit, self._top_n_spin):
+                  self._excluded_mz_edit, self._top_n_spin,
+                  self._normalize_eic_check):
             w.setEnabled(enabled)
 
     # ── Navigation slots ───────────────────────────────────────────────────────
@@ -448,6 +467,9 @@ class SpectralDeconvInspectorDialog(QDialog):
         self.set_controls_enabled(True)
         self._status_label.setText(f"Error: {msg}")
 
+    # Scatter becomes unreadable beyond this many clusters; show guidance instead.
+    _MAX_RENDERABLE_CLUSTERS = 100
+
     def _render_plots(self, result: dict):
         """Render DBSCAN scatter (top) and EIC traces (bottom) from preview result."""
         self._ax_scatter.clear()
@@ -466,17 +488,16 @@ class SpectralDeconvInspectorDialog(QDialog):
             return
 
         intermediates = result['intermediates']
-        rt_clusters = intermediates['rt_clusters']  # list[list[EICPeak]]
+        rt_clusters = intermediates['rt_clusters']
         noise_peaks = intermediates['noise_peaks']
         model_peaks = intermediates['model_peaks']
         top_eic = result['top_eic']
         components = result['components']
 
-        # Build color map: cluster index → matplotlib color
         import matplotlib.pyplot as plt
         cmap = plt.get_cmap('tab10')
         cluster_colors: dict[int, tuple] = {}
-        eic_to_color: dict[int, tuple] = {}  # id(EICPeak) → color
+        eic_to_color: dict[int, tuple] = {}
 
         for ci, cluster in enumerate(rt_clusters):
             color = cmap(ci % 10)
@@ -485,65 +506,98 @@ class SpectralDeconvInspectorDialog(QDialog):
                 eic_to_color[id(peak)] = color
 
         model_peak_ids = {id(mp) for mp in model_peaks}
+        n_clusters = len(rt_clusters)
+        n_noise = len(noise_peaks)
 
         # ── Top subplot: DBSCAN scatter ────────────────────────────────────────
-        # Noise points
-        if noise_peaks:
-            noise_rts = [p.rt_apex for p in noise_peaks]
-            noise_mzs = [p.mz for p in noise_peaks]
-            self._ax_scatter.scatter(
-                noise_rts, noise_mzs, color='gray', s=10, alpha=0.5,
-                label='Noise', zorder=2
-            )
-
-        # Clustered points
-        for ci, cluster in enumerate(rt_clusters):
-            color = cluster_colors[ci]
-            rts = [p.rt_apex for p in cluster]
-            mzs = [p.mz for p in cluster]
-            self._ax_scatter.scatter(rts, mzs, color=color, s=18, zorder=3)
-            # Model peaks: star marker
-            for peak in cluster:
-                if id(peak) in model_peak_ids:
-                    self._ax_scatter.scatter(
-                        [peak.rt_apex], [peak.mz],
-                        color=color, marker='*', s=80, zorder=4
-                    )
-
-        # FID peak RT lines with RT labels
-        for rt in fid_rts:
-            self._ax_scatter.axvline(rt, color='gray', linestyle='--', alpha=0.6, linewidth=1)
+        if n_clusters > self._MAX_RENDERABLE_CLUSTERS:
             self._ax_scatter.text(
-                rt, 1.01, f"{rt:.3f}",
-                transform=self._ax_scatter.get_xaxis_transform(),
-                ha='center', va='bottom', fontsize=7, color='gray',
+                0.5, 0.5,
+                f"{n_clusters} clusters from {len(result['eic_peaks'])} EIC peaks\n\n"
+                "Too many clusters to display usefully.\n\n"
+                "Suggestions:\n"
+                "• ↑ Min Cluster Size (currently too low for this data density)\n"
+                "• ↑ Min Cluster Intensity (filters weak EIC peaks)\n"
+                "• ↑ Min Cluster Distance (merges nearby clusters)\n"
+                "• ↓ Padding fraction (reduces EIC extraction range)",
+                transform=self._ax_scatter.transAxes,
+                ha='center', va='center', fontsize=10, color='#cc3300',
+                multialignment='center',
+                bbox=dict(boxstyle='round,pad=0.5', fc='#fff5f5', ec='#cc3300', alpha=0.9),
+            )
+            self._ax_scatter.set_title(
+                f"RT Clusters — {n_clusters} cluster(s), {n_noise} noise point(s) (too many to render)"
+            )
+        else:
+            # Shade FID peak span to distinguish "in-window" from padding zone
+            if fid_rts:
+                fid_min, fid_max = min(fid_rts), max(fid_rts)
+                # Add a half-peak-width margin so isolated peaks get a visible band
+                half_gap = (result['w_end'] - result['w_start']) * 0.05
+                self._ax_scatter.axvspan(
+                    fid_min - half_gap, fid_max + half_gap,
+                    alpha=0.08, color='steelblue', zorder=1, label='FID span'
+                )
+
+            # Noise points
+            if noise_peaks:
+                noise_rts = [p.rt_apex for p in noise_peaks]
+                noise_mzs = [p.mz for p in noise_peaks]
+                self._ax_scatter.scatter(
+                    noise_rts, noise_mzs, color='gray', s=10, alpha=0.5,
+                    label='Noise', zorder=2
+                )
+
+            # Clustered points
+            for ci, cluster in enumerate(rt_clusters):
+                color = cluster_colors[ci]
+                rts = [p.rt_apex for p in cluster]
+                mzs = [p.mz for p in cluster]
+                self._ax_scatter.scatter(rts, mzs, color=color, s=18, zorder=3)
+                for peak in cluster:
+                    if id(peak) in model_peak_ids:
+                        self._ax_scatter.scatter(
+                            [peak.rt_apex], [peak.mz],
+                            color=color, marker='*', s=80, zorder=4
+                        )
+
+            # FID peak RT lines with RT labels
+            for rt in fid_rts:
+                self._ax_scatter.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
+                self._ax_scatter.text(
+                    rt, 1.01, f"{rt:.3f}",
+                    transform=self._ax_scatter.get_xaxis_transform(),
+                    ha='center', va='bottom', fontsize=7, color='steelblue',
+                )
+
+            self._ax_scatter.set_title(
+                f"RT Clusters — {n_clusters} cluster(s), {n_noise} noise point(s)"
             )
 
-        n_noise = len(noise_peaks)
         self._ax_scatter.set_ylabel("m/z")
-        self._ax_scatter.set_title(
-            f"RT Clusters — {len(rt_clusters)} cluster(s), {n_noise} noise point(s)"
-        )
 
         # ── Bottom subplot: EIC traces ─────────────────────────────────────────
+        normalize = self._normalize_eic_check.isChecked()
         for peak in top_eic:
             color = eic_to_color.get(id(peak), 'gray')
             lw = 2.5 if id(peak) in model_peak_ids else 1.0
-            self._ax_eic.plot(
-                peak.rt_array, peak.intensity_array,
-                color=color, linewidth=lw, alpha=0.8
-            )
+            y = peak.intensity_array.astype(float)
+            if normalize:
+                peak_max = y.max()
+                if peak_max > 0:
+                    y = y / peak_max
+            self._ax_eic.plot(peak.rt_array, y, color=color, linewidth=lw, alpha=0.8)
 
-        # FID peak RT lines
         for rt in fid_rts:
-            self._ax_eic.axvline(rt, color='gray', linestyle='--', alpha=0.6, linewidth=1)
+            self._ax_eic.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
 
         shown = len(top_eic)
         total = len(result['eic_peaks'])
         self._ax_eic.set_xlabel("Retention Time (min)")
-        self._ax_eic.set_ylabel("Intensity")
+        self._ax_eic.set_ylabel("Norm. Intensity" if normalize else "Intensity")
         self._ax_eic.set_title(
-            f"EIC Traces (top {shown} of {total} shown)"
+            f"EIC Traces (top {shown} of {total} shown"
+            + (", normalized)" if normalize else ")")
         )
 
         self._canvas.draw()
@@ -554,21 +608,25 @@ class SpectralDeconvInspectorDialog(QDialog):
             p for p in win_peaks
             if getattr(p, 'deconvolved_spectrum', None) is not None
         ]
-        # Note: win_peaks here are from the window grouping at the time
-        # of dialog open; deconvolved_spectrum reflects the last full run,
-        # not this preview run
         if n_comp == 0:
-            self._status_label.setText("0 components found (all peaks filtered)")
+            status = "0 components found (all peaks filtered)"
         else:
             n_matched = len(matched)
             matched_rts = ", ".join(f"{p.retention_time:.3f}" for p in matched)
             unmatched = len(win_peaks) - n_matched
-            self._status_label.setText(
+            status = (
                 f"{n_comp} component(s) found — "
                 f"{n_matched} matched to FID peak(s)"
                 + (f" (RT {matched_rts} min)" if matched_rts else "")
                 + (f" — {unmatched} unmatched" if unmatched > 0 else "")
             )
+
+        # Hint when padding is pulling in far-from-peak EIC data
+        total_eic = len(result['eic_peaks'])
+        if total_eic > 0 and n_noise / max(total_eic, 1) > 0.4:
+            status += f"  ⚠ High noise ratio ({n_noise}/{total_eic} EIC peaks) — try ↑ Min Cluster Size or ↓ Padding"
+
+        self._status_label.setText(status)
 
     def closeEvent(self, event):
         self._ms = None  # release rainbow data
