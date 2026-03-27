@@ -1,4 +1,5 @@
 """Tests for the Mettler Toledo ReactIR CSV parser."""
+import numpy as np
 import pandas as pd
 import pytest
 from logic.loaders.reactir_parser import parse_reactir_csv
@@ -42,7 +43,6 @@ def test_parse_reactir_csv_data_loadable(tmp_path):
     result = parse_reactir_csv(str(csv_path))
     signal = result.load_signal()
 
-    import numpy as np
     np.testing.assert_allclose(signal["x"], [1000.0, 1001.0, 1002.0])
     np.testing.assert_allclose(signal["y"], [0.10, 0.20, 0.30])
 

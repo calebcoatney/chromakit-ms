@@ -37,27 +37,29 @@ def test_create_writes_manifest(tmp_path):
     assert "created" in manifest
 
 
-def test_create_copies_source_not_moves(tmp_path):
+def test_create_moves_source(tmp_path):
     csv = _make_csv(tmp_path)
-    CFolder.create(csv, "ftir")
-    # Original CSV should still exist at its original path
-    assert os.path.isfile(csv)
+    folder = CFolder.create(csv, "ftir")
+    # Original CSV should NOT exist at its original path
+    assert not os.path.isfile(csv)
+    # Source file should exist under .C/data/
+    assert os.path.isfile(os.path.join(folder.path, "data", os.path.basename(csv)))
 
 
 def test_create_atomic_on_error(tmp_path, monkeypatch):
-    """If copytree/copy2 fails, the partially created .C folder is removed."""
-    # Use a directory source so copytree is called
+    """If move fails, the partially created .C folder is removed."""
+    # Use a directory source so move is called
     d_dir = tmp_path / "MySample.D"
     d_dir.mkdir()
     (d_dir / "data.ch").write_text("fake")
 
     import shutil as _shutil
-    original_copytree = _shutil.copytree
+    original_move = _shutil.move
 
-    def failing_copytree(src, dst, **kwargs):
+    def failing_move(src, dst, **kwargs):
         raise OSError("simulated disk error")
 
-    monkeypatch.setattr("logic.c_folder.shutil.copytree", failing_copytree)
+    monkeypatch.setattr("logic.c_folder.shutil.move", failing_move)
 
     with pytest.raises(OSError, match="simulated disk error"):
         CFolder.create(str(d_dir), "gcms")
