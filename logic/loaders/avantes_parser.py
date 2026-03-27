@@ -72,5 +72,9 @@ def parse_avantes_uvvis(csv_path: str, output_dir: str = None) -> list[str]:
             if os.path.exists(temp_csv):
                 os.remove(temp_csv)
             created.append(c_path)
+        except Exception:
+            if os.path.exists(temp_csv):
+                os.remove(temp_csv)
+            raise
 
     return created
