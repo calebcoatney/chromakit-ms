@@ -202,6 +202,9 @@ class BatchConvertDialog(QDialog):
         if not path:
             return
 
+        if path in self._source_paths:
+            return
+
         try:
             df = pd.read_csv(path, header=None, dtype=str)
             datetime_strings = df.iloc[4, 1:].tolist()
