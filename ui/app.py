@@ -2115,7 +2115,7 @@ class ChromaKitApp(QMainWindow):
             print("No data available to process!")
             self.status_bar.showMessage("Load data first before changing parameters")
     
-    def process_and_display(self, x, y, new_file=False, profile=None):
+    def process_and_display(self, x, y, new_file=False, profile=None, skip_render=False):
         """Process data with current parameters and update display"""
         # Validate input data
         if x is None or y is None:
@@ -2150,15 +2150,19 @@ class ChromaKitApp(QMainWindow):
         if peak_mode == 'peak_splitting' and params['peaks']['enabled']:
             self._apply_peak_splitting(processed, params)
 
-        # Update the chromatogram plot
-        self.plot_frame.plot_chromatogram(
-            processed,
-            show_corrected=params['baseline']['show_corrected'],
-            new_file=new_file
-        )
+        # Always store for downstream use (integration, export)
+        self.current_processed = processed
 
-        # Force a repaint
-        self.plot_frame.canvas.draw_idle()
+        if not skip_render:
+            # Update the chromatogram plot
+            self.plot_frame.plot_chromatogram(
+                processed,
+                show_corrected=params['baseline']['show_corrected'],
+                new_file=new_file
+            )
+
+            # Force a repaint
+            self.plot_frame.canvas.draw_idle()
 
         # Store the processed data for reference
         self.current_processed = processed
