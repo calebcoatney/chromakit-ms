@@ -5,6 +5,7 @@ import traceback
 import datetime
 import json
 from logic.c_folder import CFolder
+from logic.signal_profiles import SignalProfileRegistry, PipelineStage
 from util.thread_helpers import main_thread_dispatcher
 
 class AutomationSignals(QObject):
@@ -42,6 +43,8 @@ class AutomationWorker(QRunnable):
         self.cancelled = False
         self.current_file_index = 0
         self.total_files = 0
+        # Timing: populated when self.app.batch_options['time_steps'] is True
+        self._timings: list[dict] = []
     
     @Slot()
     def run(self):
@@ -83,6 +86,25 @@ class AutomationWorker(QRunnable):
                 self.signals.file_started.emit(filename, i + 1, self.total_files)
                 self.signals.log_message.emit(f"Starting file {i+1}/{self.total_files}: {filename}")
                 
+                # Determine signal type from manifest so we can skip inapplicable steps.
+                try:
+                    _cf = CFolder.open(file_path)
+                    signal_type = _cf.get_manifest().get("signal_type", "gcms")
+                    profile_stages = set(SignalProfileRegistry.get(signal_type).pipeline_stages)
+                except Exception:
+                    signal_type = "gcms"
+                    profile_stages = {
+                        PipelineStage.SMOOTHING, PipelineStage.BASELINE,
+                        PipelineStage.PEAKS, PipelineStage.MS_SEARCH,
+                        PipelineStage.QUANTITATION,
+                    }
+                
+                is_chromatography = signal_type in ("gc", "gcms")
+                step_label = "Processing chromatogram" if is_chromatography else "Processing signal"
+                # Store on self so _process_and_integrate can read them
+                self._signal_type = signal_type
+                self._is_chromatography = is_chromatography
+                
                 try:
                     # Step 1: Load the file - 10% of one file's progress
                     self._update_directory_progress(filename, "Loading", 10)
@@ -93,7 +115,7 @@ class AutomationWorker(QRunnable):
                         continue
                     
                     # Step 2: Process and integrate - 40% of one file's progress
-                    self._update_directory_progress(filename, "Processing chromatogram", 40)
+                    self._update_directory_progress(filename, step_label, 40)
                     success = self._process_and_integrate()
                     
                     if not success or self.cancelled:
@@ -111,19 +133,24 @@ class AutomationWorker(QRunnable):
                         else:
                             self.signals.log_message.emit(f"Warning: Failed to save JSON for {filename}")
                     
-                    # Step 3: MS Library Search (if enabled) - 40% of one file's progress
-                    # Check if MS search is enabled in batch options
+                    # Step 3: MS Library Search (if enabled and applicable)
                     ms_search_enabled = True  # Default if not specified
                     if hasattr(self.app, 'batch_options') and 'ms_search' in self.app.batch_options:
                         ms_search_enabled = self.app.batch_options['ms_search']
                     
-                    if ms_search_enabled:
+                    ms_search_applicable = PipelineStage.MS_SEARCH in profile_stages
+
+                    if ms_search_enabled and ms_search_applicable:
                         self._update_directory_progress(filename, "MS Library Search", 70)
                         success = self._run_ms_search()
                         
                         if not success or self.cancelled:
                             self.signals.file_completed.emit(filename, False, "Failed to run MS search")
                             continue
+                    elif ms_search_enabled:
+                        self.signals.log_message.emit(
+                            f"Skipping MS search: not applicable for signal type '{signal_type}'"
+                        )
                     else:
                         # Skip MS search if disabled
                         self.signals.log_message.emit("MS search disabled in options - skipping")
@@ -146,6 +173,62 @@ class AutomationWorker(QRunnable):
             error_msg = f"Error in automation: {str(e)}\n{traceback.format_exc()}"
             self.signals.error.emit(error_msg)
             self.signals.log_message.emit(error_msg)
+
+    @staticmethod
+    def _format_timing_table(timings: list[dict]) -> str:
+        """Format per-file timing data as a log-friendly table.
+
+        Each entry in timings: {
+            'file': str,
+            'load': float,        # seconds
+            'process': float,     # seconds
+            'ms_search': float | None,  # None if not applicable
+            'save': float,
+        }
+        """
+        if not timings:
+            return "=== Batch Timing Report: no data ==="
+
+        lines = ["", "=== Batch Timing Report ==="]
+        header = f"{'File':<35} {'Load':>7} {'Process':>9} {'MS Search':>10} {'Save':>7} {'Total':>8}"
+        lines.append(header)
+        lines.append("-" * len(header))
+
+        ms_times = []
+        for t in timings:
+            ms_val = t.get('ms_search')
+            ms_str = f"{ms_val:>9.2f}s" if ms_val is not None else f"{'—':>9}"
+            total = t['load'] + t['process'] + (ms_val or 0.0) + t['save']
+            line = (
+                f"{t['file']:<35}"
+                f" {t['load']:>6.2f}s"
+                f" {t['process']:>8.2f}s"
+                f" {ms_str}"
+                f" {t['save']:>6.2f}s"
+                f" {total:>7.2f}s"
+            )
+            lines.append(line)
+            if ms_val is not None:
+                ms_times.append(ms_val)
+
+        # Averages
+        lines.append("-" * len(header))
+        n = len(timings)
+        avg_load = sum(t['load'] for t in timings) / n
+        avg_proc = sum(t['process'] for t in timings) / n
+        avg_save = sum(t['save'] for t in timings) / n
+        avg_ms_str = f"{sum(ms_times)/len(ms_times):>9.2f}s" if ms_times else f"{'—':>9}"
+        avg_total = avg_load + avg_proc + (sum(ms_times)/len(ms_times) if ms_times else 0.0) + avg_save
+        lines.append(
+            f"{'Average':<35}"
+            f" {avg_load:>6.2f}s"
+            f" {avg_proc:>8.2f}s"
+            f" {avg_ms_str}"
+            f" {avg_save:>6.2f}s"
+            f" {avg_total:>7.2f}s"
+        )
+        lines.append("")
+        return "\n".join(lines)
 
     def _update_directory_progress(self, filename, step, file_progress):
         """Update the directory progress based on current file and file progress.
@@ -323,12 +406,22 @@ class AutomationWorker(QRunnable):
                 time.sleep(0.1)
                 
             # Check if integration was successful
-            if not self.integration_results or not self.app.integrated_peaks:
-                self.signals.log_message.emit("No peaks found during integration")
+            if not self.integration_results:
+                self.signals.log_message.emit("Integration failed")
                 return False
-                
-            # Add this line to apply manual overrides after integration
-            self._apply_manual_overrides()
+
+            if not self.app.integrated_peaks:
+                self.signals.log_message.emit("No peaks found during integration")
+                # For chromatography signals an empty run is unexpected; for
+                # spectroscopy (FTIR, UV-Vis) it just means no bands were
+                # detected, which is a valid (if unusual) outcome.
+                if getattr(self, "_is_chromatography", True):
+                    return False
+                # Spectroscopy: fall through so results (even empty) get saved.
+            else:
+                # Apply manual RT overrides — only relevant for chromatography.
+                if getattr(self, "_is_chromatography", True):
+                    self._apply_manual_overrides()
             
             # Update the plot on the main thread (if needed)
             def update_plot():
@@ -554,8 +647,9 @@ class AutomationWorker(QRunnable):
                             )
                             
                             if json_success:
+                                from logic.csv_exporter import export_results_to_csv
                                 csv_filename = os.path.join(current_dir, "RESULTS.CSV")
-                                self.app.export_results_csv(csv_filename)
+                                export_results_to_csv(self.app.integrated_peaks, csv_filename)
                                 self.save_success = True
                                 self.signals.log_message.emit("Results updated with MS search and exported to CSV")
                             else:
@@ -569,8 +663,9 @@ class AutomationWorker(QRunnable):
                             json_success = self.app._save_integration_json(integration_results)
                             
                             if json_success:
+                                from logic.csv_exporter import export_results_to_csv
                                 csv_filename = os.path.join(current_dir, "RESULTS.CSV")
-                                self.app.export_results_csv(csv_filename)
+                                export_results_to_csv(self.app.integrated_peaks, csv_filename)
                                 self.save_success = True
                             
                     except Exception as e:
@@ -679,27 +774,8 @@ class AutomationWorker(QRunnable):
             # Add peaks data
             peaks = integration_results.get('peaks', [])
             for peak in peaks:
-                # Access peak attributes safely with getattr to avoid AttributeError
-                peak_data = {
-                    'compound_id': getattr(peak, 'compound_id', "Unknown"),
-                    'peak_number': getattr(peak, 'peak_number', 0),
-                    'retention_time': getattr(peak, 'retention_time', 0.0),
-                    'integrator': getattr(peak, 'integrator', "py"),
-                    'width': getattr(peak, 'width', 0.0),
-                    'area': getattr(peak, 'area', 0.0),
-                    'start_time': getattr(peak, 'start_time', 0.0),
-                    'end_time': getattr(peak, 'end_time', 0.0)
-                }
-                
-                # Add notebook style fields if they exist
-                if hasattr(peak, 'Compound_ID'):
-                    peak_data['Compound ID'] = peak.Compound_ID
-                if hasattr(peak, 'Qual'):
-                    peak_data['Qual'] = peak.Qual
-                if hasattr(peak, 'casno'):
-                    peak_data['casno'] = peak.casno
-                    
-                result_data['peaks'].append(peak_data)
+                from logic.json_exporter import _serialize_peak
+                result_data['peaks'].append(_serialize_peak(peak))
             
             # Define the file path and save the results as JSON
             result_filename = f"{result_data['notebook']} - {result_data['detector']}.json"
@@ -716,46 +792,8 @@ class AutomationWorker(QRunnable):
 
     def _export_csv_no_ui(self, filepath):
         """Export results to CSV without updating UI."""
-        try:
-            import csv
-            
-            # Create and write to the CSV file
-            with open(filepath, mode='w', newline='') as csv_file:
-                csv_writer = csv.writer(csv_file)
-                
-                # Skip the first 9 rows by initializing with empty rows
-                for _ in range(9):
-                    csv_writer.writerow([])
-                
-                # Write headers
-                headers = ['Library/ID', 'CAS', 'Qual', 'FID R.T.', 'FID Area']
-                csv_writer.writerow(headers)
-                
-                # Write peak data
-                for peak in self.app.integrated_peaks:
-                    # Use the exact field names from the notebook
-                    compound_id = getattr(peak, 'Compound_ID', None) or getattr(peak, 'compound_id', "Unknown")
-                    casno = getattr(peak, 'casno', "")
-                    qual = getattr(peak, 'Qual', "")
-                    
-                    # Format qual as a float with 4 decimal places if it's a number
-                    if isinstance(qual, (int, float)):
-                        qual = f"{qual:.4f}"
-                    
-                    row = [
-                        compound_id,
-                        casno,
-                        qual,
-                        f"{peak.retention_time:.3f}",
-                        f"{peak.area:.1f}"
-                    ]
-                    csv_writer.writerow(row)
-            
-            return True
-            
-        except Exception as e:
-            self.signals.log_message.emit(f"Error exporting CSV: {str(e)}")
-            return False
+        from logic.csv_exporter import export_results_to_csv
+        return export_results_to_csv(self.app.integrated_peaks, filepath)
     
     def _on_search_completed(self):
         """Handle MS search completion."""
@@ -798,7 +836,7 @@ class AutomationWorker(QRunnable):
                     override_rt = override.get('retention_time', float(rt_key))
                     
                     # Check if peak RT is within tolerance
-                    if abs(peak.retention_time - override_rt) <= rt_tolerance:
+                    if abs(peak.position - override_rt) <= rt_tolerance:
                         # We have a retention time match
                         # If we have spectrum data for both, we could check similarity
                         if 'spectrum' in override and hasattr(self.app, 'data_handler') and hasattr(self.app.data_handler, 'current_directory_path'):
@@ -874,7 +912,7 @@ class AutomationWorker(QRunnable):
                         peak.Qual = None
                         
                         applied_count += 1
-                        self.signals.log_message.emit(f"Applied manual override: Peak at RT={peak.retention_time:.3f} assigned to {override['compound_name']}")
+                        self.signals.log_message.emit(f"Applied manual override: Peak at position={peak.position:.3f} assigned to {override['compound_name']}")
                         break  # Done with this peak, move to next
             
             if applied_count > 0:
