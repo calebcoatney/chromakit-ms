@@ -26,7 +26,7 @@ class BatchJobDialog(QDialog):
         layout = QVBoxLayout(self)
         
         # Instructions
-        instructions = QLabel("Select one or more directories containing GC-MS data to process.")
+        instructions = QLabel("Select one or more directories containing .C sample folders to process.")
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
         
@@ -64,7 +64,21 @@ class BatchJobDialog(QDialog):
         self.ms_search_check = QCheckBox("Perform MS library search")
         self.ms_search_check.setChecked(True)
         options_layout.addWidget(self.ms_search_check)
-        
+
+        # Timing option
+        self.time_steps_check = QCheckBox("Time processing steps")
+        self.time_steps_check.setChecked(False)
+        options_layout.addWidget(self.time_steps_check)
+
+        # Speed option
+        self.skip_ui_check = QCheckBox("Skip UI updates during batch (faster)")
+        self.skip_ui_check.setToolTip(
+            "Skips chromatogram re-rendering between files. "
+            "Uncheck to watch the display update as files are processed."
+        )
+        self.skip_ui_check.setChecked(True)
+        options_layout.addWidget(self.skip_ui_check)
+
         # Add options group to main layout
         layout.addWidget(options_group)
         
@@ -123,21 +137,21 @@ class BatchJobDialog(QDialog):
                 )
                 return
             
-            # Check if it contains .D directories
+            # Check if it contains .C directories
             import os
             has_data_dirs = False
             
             for item in os.listdir(directory):
                 item_path = os.path.join(directory, item)
-                if os.path.isdir(item_path) and item.endswith('.D'):
+                if os.path.isdir(item_path) and item.endswith('.C'):
                     has_data_dirs = True
                     break
             
             if not has_data_dirs:
                 result = QMessageBox.question(
                     self,
-                    "No Data Directories Found",
-                    f"The directory {directory} does not contain any .D subdirectories. Add it anyway?",
+                    "No .C Folders Found",
+                    f"The directory {directory} does not contain any .C sample folders. Add it anyway?",
                     QMessageBox.Yes | QMessageBox.No
                 )
                 
@@ -196,10 +210,11 @@ class BatchJobDialog(QDialog):
         options = {
             'integration': self.integration_check.isChecked(),
             'ms_search': self.ms_search_check.isChecked(),
-            # Add the new options
             'save_results': self.save_results_check.isChecked(),
             'export_csv': self.export_csv_check.isChecked(),
-            'overwrite_existing': self.overwrite_check.isChecked()
+            'overwrite_existing': self.overwrite_check.isChecked(),
+            'time_steps': self.time_steps_check.isChecked(),
+            'skip_ui_updates': self.skip_ui_check.isChecked(),
         }
         
         # Emit signal with directories and options
