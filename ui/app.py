@@ -3287,16 +3287,15 @@ class ChromaKitApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Error exporting results: {str(e)}")
 
-    def export_results_csv(self, filepath=None):
-        """Export integration results to CSV (interactive file-save dialog)."""
+    def export_results_csv(self):
+        """Export integration results to CSV via interactive file-save dialog."""
         if not hasattr(self, 'integrated_peaks') or not self.integrated_peaks:
             QMessageBox.warning(self, "No Results", "No integrated peaks to export.")
             return False
 
-        if filepath is None:
-            filepath, _ = QFileDialog.getSaveFileName(
-                self, "Save Results CSV", "", "CSV Files (*.csv);;All Files (*.*)"
-            )
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Save Results CSV", "", "CSV Files (*.csv);;All Files (*.*)"
+        )
         if not filepath:
             return False
 
