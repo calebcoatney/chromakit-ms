@@ -1431,15 +1431,23 @@ class ChromaKitApp(QMainWindow):
         # Notify peaks integrated
         self.on_peaks_integrated(integration_results['peaks'])
 
-    def integrate_peaks_no_ui(self, ms_data=None, quality_options=None):
-        """Thread-safe version of integration without UI updates."""
+    def integrate_peaks_no_ui(self, ms_data=None, quality_options=None, params=None):
+        """Thread-safe version of integration without UI updates.
+
+        Args:
+            ms_data: Optional MS data dict.
+            quality_options: Optional quality assessment options.
+            params: Pre-fetched parameters dict. If None, fetches from parameters_frame
+                    (requires main thread).
+        """
         try:
             # Check for valid data (no UI messaging)
             if not hasattr(self, 'current_processed') or self.current_processed is None:
                 return None
 
             # Check if peak detection is enabled (positive or negative, no UI messaging)
-            params = self.parameters_frame.get_parameters()
+            if params is None:
+                params = self.parameters_frame.get_parameters()
             peaks_enabled = params['peaks']['enabled']
             neg_peaks_enabled = params.get('negative_peaks', {}).get('enabled', False)
             if not peaks_enabled and not neg_peaks_enabled:
@@ -2640,25 +2648,22 @@ class ChromaKitApp(QMainWindow):
                 
         except Exception as e:
             print(f"Error in export manager: {e}")
-            # Fallback to old method
+            # Fallback: call exporters directly
             try:
                 from logic.json_exporter import update_json_with_ms_search_results
+                from logic.csv_exporter import export_results_to_csv
                 detector = self.data_handler.current_detector if hasattr(self.data_handler, 'current_detector') else 'Unknown'
                 proc_params = self.parameters_frame.get_parameters() if hasattr(self, 'parameters_frame') else None
                 json_success = update_json_with_ms_search_results(self.integrated_peaks, current_dir, detector, processing_params=proc_params)
-                
+
                 if json_success:
-                    # Automatically export CSV to the same directory
                     csv_filename = os.path.join(current_dir, "RESULTS.CSV")
-                    csv_success = self.export_results_csv(csv_filename)
-                    
-                    if csv_success:
-                        self.status_bar.showMessage(f"Updated integration results and exported to {csv_filename}")
-                    
-                    # Only show info dialog if not cancelled
+                    export_results_to_csv(self.integrated_peaks, csv_filename)
+                    self.status_bar.showMessage(f"Updated integration results and exported to {csv_filename}")
+
                     if not (hasattr(self, 'batch_search_worker') and self.batch_search_worker.cancelled):
                         QMessageBox.information(
-                            self, "Batch Search Complete", 
+                            self, "Batch Search Complete",
                             f"MS library search completed with {match_count}/{total_peaks} peaks identified.\n\n"
                             f"Results saved to JSON and exported to {csv_filename}.",
                             QMessageBox.Ok
@@ -2668,31 +2673,6 @@ class ChromaKitApp(QMainWindow):
             except Exception as fallback_error:
                 print(f"Fallback export also failed: {fallback_error}")
                 self.status_bar.showMessage("Export failed")
-                
-        except Exception as e:
-            print(f"Error updating results: {e}")
-            self.status_bar.showMessage(f"Error updating results: {str(e)}")
-            
-            # Fallback to old method
-            integration_results = {'peaks': self.integrated_peaks}
-            json_success = self._save_integration_json(integration_results)
-            
-            if json_success:
-                csv_filename = os.path.join(current_dir, "RESULTS.CSV")
-                csv_success = self.export_results_csv(csv_filename)
-                
-                if csv_success:
-                    self.status_bar.showMessage(f"Updated integration results and exported to {csv_filename}")
-                
-                if not (hasattr(self, 'batch_search_worker') and self.batch_search_worker.cancelled):
-                    QMessageBox.information(
-                        self, "Batch Search Complete", 
-                        f"MS library search completed with {match_count}/{total_peaks} peaks identified.\n\n"
-                        f"Results saved to JSON and exported to {csv_filename}.",
-                        QMessageBox.Ok
-                    )
-            else:
-                self.status_bar.showMessage("Failed to save updated integration results")
 
     def _on_batch_search_error(self, error_message, dialog):
         """Handle batch search error."""
@@ -3308,104 +3288,25 @@ class ChromaKitApp(QMainWindow):
             QMessageBox.critical(self, "Export Error", f"Error exporting results: {str(e)}")
 
     def export_results_csv(self, filepath=None):
-        """Export integration results to a CSV file matching GCMS standard format."""
-        # If filepath is provided, we're in programmatic/batch mode — skip all UI
-        interactive = filepath is None
-        
+        """Export integration results to CSV (interactive file-save dialog)."""
         if not hasattr(self, 'integrated_peaks') or not self.integrated_peaks:
-            if interactive:
-                QMessageBox.warning(self, "No Results", "No integrated peaks to export.")
+            QMessageBox.warning(self, "No Results", "No integrated peaks to export.")
             return False
-        
-        if interactive:
-            # Get file path for saving
+
+        if filepath is None:
             filepath, _ = QFileDialog.getSaveFileName(
                 self, "Save Results CSV", "", "CSV Files (*.csv);;All Files (*.*)"
             )
-        
         if not filepath:
             return False
-        
-        try:
-            import csv
-            
-            # Create and write to the CSV file
-            with open(filepath, mode='w', newline='') as csv_file:
-                csv_writer = csv.writer(csv_file)
-                
-                # Skip the first 9 rows by initializing with empty rows - exactly as in notebook
-                for _ in range(9):
-                    csv_writer.writerow([])
-                
-                # Check if quantitation is enabled
-                has_quantitation = (hasattr(self, 'quantitation_frame') and 
-                                   self.quantitation_frame.is_enabled() and
-                                   any(hasattr(p, 'mol_C') and p.mol_C is not None 
-                                       for p in self.integrated_peaks))
-                
-                # Write headers - add quantitation columns if enabled
-                if has_quantitation:
-                    headers = ['Library/ID', 'CAS', 'Qual', 'FID R.T.', 'FID Area', 
-                              'mol C', 'mol', 'mass (mg)', 'mol %', 'wt %']
-                else:
-                    headers = ['Library/ID', 'CAS', 'Qual', 'FID R.T.', 'FID Area']
-                csv_writer.writerow(headers)
-                
-                # Write peak data
-                print(f"\n=== CSV EXPORT DEBUG: Processing {len(self.integrated_peaks)} peaks ===")
-                for i, peak in enumerate(self.integrated_peaks):
-                    # Use the exact field names from the notebook
-                    compound_id = getattr(peak, 'Compound_ID', None) or getattr(peak, 'compound_id', "Unknown")
-                    casno = getattr(peak, 'casno', "")
-                    qual = getattr(peak, 'Qual', "")
-                    
-                    # DEBUG: Show what we found
-                    print(f"CSV Peak {i}: Compound_ID={getattr(peak, 'Compound_ID', 'MISSING')}, "
-                          f"compound_id={getattr(peak, 'compound_id', 'MISSING')}, "
-                          f"Qual={getattr(peak, 'Qual', 'MISSING')}, "
-                          f"casno={getattr(peak, 'casno', 'MISSING')}")
-                    print(f"  -> Using compound_id: {compound_id}, qual: {qual}, casno: {casno}")
-                    
-                    # Format qual as a float with 4 decimal places if it's a number
-                    if isinstance(qual, (int, float)):
-                        qual = f"{qual:.4f}"
-                    
-                    row = [
-                        compound_id,
-                        casno,
-                        qual,
-                        f"{getattr(peak, 'retention_time', peak.position):.3f}",
-                        f"{peak.area:.1f}"
-                    ]
-                    
-                    # Add quantitation columns if enabled
-                    if has_quantitation:
-                        mol_c = getattr(peak, 'mol_C', '')
-                        mol = getattr(peak, 'mol', '')
-                        mass_mg = getattr(peak, 'mass_mg', '')
-                        mol_pct = getattr(peak, 'mol_percent', '')
-                        wt_pct = getattr(peak, 'wt_percent', '')
-                        
-                        # Format numeric values
-                        if mol_c: mol_c = f"{mol_c:.6e}"
-                        if mol: mol = f"{mol:.6e}"
-                        if mass_mg: mass_mg = f"{mass_mg:.4f}"
-                        if mol_pct: mol_pct = f"{mol_pct:.2f}"
-                        if wt_pct: wt_pct = f"{wt_pct:.2f}"
-                        
-                        row.extend([mol_c, mol, mass_mg, mol_pct, wt_pct])
-                    
-                    csv_writer.writerow(row)
-            
-            if interactive:
-                self.status_bar.showMessage(f"Results exported to {filepath}")
-            return True
-        
-        except Exception as e:
-            print(f"CSV export error: {str(e)}")
-            if interactive:
-                QMessageBox.critical(self, "Export Error", f"Error exporting results: {str(e)}")
-            return False
+
+        from logic.csv_exporter import export_results_to_csv
+        success = export_results_to_csv(self.integrated_peaks, filepath)
+        if success:
+            self.status_bar.showMessage(f"Results exported to {filepath}")
+        else:
+            QMessageBox.critical(self, "Export Error", "Error exporting results to CSV.")
+        return success
 
     def update_results_view(self):
         """Update the results view with current peak information."""
