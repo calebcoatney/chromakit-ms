@@ -50,10 +50,11 @@ class CFolder:
                 else os.path.splitext(source_path)[1].lstrip(".") or "unknown"
             )
 
+            sample_timestamp = metadata.pop("sample_timestamp", None)
             manifest = {
                 "signal_type": signal_type,
                 "source_format": source_format,
-                "created": datetime.datetime.now().isoformat(),
+                "created": sample_timestamp or datetime.datetime.now().isoformat(),
                 **metadata,
             }
             with open(os.path.join(c_path, "manifest.json"), "w") as f:

@@ -43,6 +43,21 @@ class Feature:
         """Generic x-axis position. ChromatographicPeak overrides this to return retention_time."""
         return self._position
 
+    def as_dict(self) -> dict:
+        """Return all fields as a dict. Subclasses should override to include their own fields."""
+        return {
+            "feature_id": self.feature_id,
+            "position": self.position,
+            "position_units": self.position_units,
+            "area": self.area,
+            "width": self.width,
+            "start": self.start,
+            "end": self.end,
+            "is_shoulder": self.is_shoulder,
+            "is_negative": self.is_negative,
+            "quality_issues": self.quality_issues,
+        }
+
 
 class SpectralFeature(Feature):
     """Feature for spectroscopic signals (FTIR, UV-Vis)."""

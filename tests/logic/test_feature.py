@@ -68,4 +68,5 @@ def test_spectral_feature_as_row():
     )
     row = sf.as_row()
     assert isinstance(row, list)
-    assert row[0] == round(1601.5678, 2)
+    assert row[0] == 5
+    assert row[1] == round(1601.5678, 2)

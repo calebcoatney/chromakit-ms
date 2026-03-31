@@ -46,7 +46,7 @@ def test_parse_avantes_manifest_metadata(tmp_path):
     assert manifest["instrument"] == "Avantes"
     assert manifest["integration_time_ms"] == 100.0
     assert manifest["n_averages"] == 300
-    assert manifest["sample_timestamp"] == "2026-02-26T12:20:00"
+    assert manifest["created"] == "2026-02-26T12:20:00"
     assert manifest["csv_columns"] == {"x_column": 0, "y_column": 1, "has_header": False}
 
 
@@ -56,9 +56,9 @@ def test_parse_avantes_timestamps_per_spectrum(tmp_path):
 
     results = parse_avantes_uvvis(str(csv_path), output_dir=str(tmp_path))
 
-    assert CFolder.open(results[0]).get_manifest()["sample_timestamp"] == "2026-02-26T12:20:00"
-    assert CFolder.open(results[1]).get_manifest()["sample_timestamp"] == "2026-02-26T12:21:00"
-    assert CFolder.open(results[2]).get_manifest()["sample_timestamp"] == "2026-02-26T12:22:00"
+    assert CFolder.open(results[0]).get_manifest()["created"] == "2026-02-26T12:20:00"
+    assert CFolder.open(results[1]).get_manifest()["created"] == "2026-02-26T12:21:00"
+    assert CFolder.open(results[2]).get_manifest()["created"] == "2026-02-26T12:22:00"
 
 
 def test_parse_avantes_data_content(tmp_path):

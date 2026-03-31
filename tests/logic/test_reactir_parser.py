@@ -55,3 +55,41 @@ def test_parse_reactir_csv_moves_source(tmp_path):
 
     assert not csv_path.exists()
     assert (tmp_path / "reactir_sample.C" / "data" / "reactir_sample.csv").exists()
+
+
+def test_parse_reactir_csv_timestamp_from_filename(tmp_path):
+    """Timestamp embedded in the filename is written to manifest['created']."""
+    filename = "260324_MoCO6_2026-03-24_12-27-11_Spectrum.csv"
+    csv_path = tmp_path / filename
+    _make_reactir_csv(str(csv_path))
+
+    result = parse_reactir_csv(str(csv_path))
+    manifest = result.get_manifest()
+
+    assert manifest["created"] == "2026-03-24T12:27:11"
+
+
+def test_parse_reactir_csv_explicit_timestamp_overrides_filename(tmp_path):
+    """Explicit sample_timestamp kwarg takes priority over any filename pattern."""
+    filename = "260324_MoCO6_2026-03-24_12-27-11_Spectrum.csv"
+    csv_path = tmp_path / filename
+    _make_reactir_csv(str(csv_path))
+
+    result = parse_reactir_csv(str(csv_path), sample_timestamp="2099-01-01T00:00:00")
+    manifest = result.get_manifest()
+
+    assert manifest["created"] == "2099-01-01T00:00:00"
+
+
+def test_parse_reactir_csv_fallback_to_now_when_no_timestamp(tmp_path):
+    """Files without a timestamp pattern fall back to current wall-clock time."""
+    import datetime, re
+    csv_path = tmp_path / "reactir_no_ts.csv"
+    _make_reactir_csv(str(csv_path))
+
+    before = datetime.datetime.now()
+    result = parse_reactir_csv(str(csv_path))
+    after = datetime.datetime.now()
+
+    created = datetime.datetime.fromisoformat(result.get_manifest()["created"])
+    assert before <= created <= after

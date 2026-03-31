@@ -323,7 +323,8 @@ class BatchConvertDialog(QDialog):
                     CFolder.create(path, signal_type, **kwargs)
 
                 elif row_type == "reactir":
-                    parse_reactir_csv(path)
+                    ts = _extract_timestamp(os.path.basename(path)) if extract_ts else None
+                    parse_reactir_csv(path, sample_timestamp=ts)
 
                 elif row_type == "avantes":
                     if path not in avantes_processed:

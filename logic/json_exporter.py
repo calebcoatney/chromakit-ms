@@ -205,6 +205,22 @@ def _build_processing_metadata(processing_params: Optional[Dict],
     return _strip_none(meta) or None
 
 
+def _serialize_peak(peak: Any) -> dict:
+    """Serialize a Feature subclass to a JSON-safe dict via as_dict()."""
+    raw = peak.as_dict()
+    result = {}
+    for k, v in raw.items():
+        if isinstance(v, np.integer):
+            result[k] = int(v)
+        elif isinstance(v, np.floating):
+            result[k] = float(v)
+        elif isinstance(v, np.ndarray):
+            result[k] = v.tolist()
+        else:
+            result[k] = v
+    return result
+
+
 def export_integration_results_to_json(peaks: List[Any], d_path: str,
                                       detector: str = "FID1A",
                                       quantitation_settings: Optional[Dict] = None,
@@ -247,77 +263,8 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
             result_data['quantitation'] = quantitation_settings
         
         # Add peaks data
-        for i, peak in enumerate(peaks):
-            peak_data = {
-                'Compound ID': getattr(peak, 'compound_id', 'Unknown'),
-                'peak_number': getattr(peak, 'peak_number', 0),
-                'retention_time': float(getattr(peak, 'retention_time', 0.0)),
-                'integrator': getattr(peak, 'integrator', 'py'),
-                'width': float(getattr(peak, 'width', 0.0)),
-                'area': float(getattr(peak, 'area', 0.0)),
-                'start_time': float(getattr(peak, 'start_time', 0.0)),
-                'end_time': float(getattr(peak, 'end_time', 0.0))
-            }
-            
-            # DEBUG: Check what fields are available on this peak
-            print(f"JSON Export DEBUG - Peak {i}: compound_id={getattr(peak, 'compound_id', 'MISSING')}, "
-                  f"Compound_ID={getattr(peak, 'Compound_ID', 'MISSING')}, "
-                  f"Qual={getattr(peak, 'Qual', 'MISSING')}")
-            
-            # Add MS search results if available
-            if hasattr(peak, 'Compound_ID') and peak.Compound_ID:
-                peak_data['Compound ID'] = peak.Compound_ID
-                print(f"  -> Using Compound_ID: {peak.Compound_ID}")
-            else:
-                print(f"  -> Using default compound_id: {getattr(peak, 'compound_id', 'Unknown')}")
-            
-            if hasattr(peak, 'Qual') and peak.Qual is not None:
-                peak_data['Qual'] = float(peak.Qual)
-                print(f"  -> Adding Qual: {peak.Qual}")
-            else:
-                print(f"  -> No Qual field found")
-                
-            if hasattr(peak, 'casno') and peak.casno:
-                peak_data['casno'] = peak.casno
-                print(f"  -> Adding casno: {peak.casno}")
-            else:
-                print(f"  -> No casno field found")
-            
-            # Add quality indicators
-            if hasattr(peak, 'is_saturated') and peak.is_saturated:
-                peak_data['is_saturated'] = True
-                if hasattr(peak, 'saturation_level'):
-                    peak_data['saturation_level'] = float(peak.saturation_level)
-            
-            if hasattr(peak, 'is_convoluted') and peak.is_convoluted:
-                peak_data['is_convoluted'] = True
-                
-            if hasattr(peak, 'quality_issues') and peak.quality_issues:
-                peak_data['quality_issues'] = peak.quality_issues
-            
-            # Add quantitation results if available
-            if hasattr(peak, 'mol_C') and peak.mol_C is not None:
-                peak_data['mol_C'] = float(peak.mol_C)
-            
-            if hasattr(peak, 'mol_C_percent') and peak.mol_C_percent is not None:
-                peak_data['mol_C_percent'] = float(peak.mol_C_percent)
-            
-            if hasattr(peak, 'num_carbons') and peak.num_carbons is not None:
-                peak_data['num_carbons'] = int(peak.num_carbons)
-            
-            if hasattr(peak, 'mol') and peak.mol is not None:
-                peak_data['mol'] = float(peak.mol)
-            
-            if hasattr(peak, 'mass_mg') and peak.mass_mg is not None:
-                peak_data['mass_mg'] = float(peak.mass_mg)
-            
-            if hasattr(peak, 'mol_percent') and peak.mol_percent is not None:
-                peak_data['mol_percent'] = float(peak.mol_percent)
-            
-            if hasattr(peak, 'wt_percent') and peak.wt_percent is not None:
-                peak_data['wt_percent'] = float(peak.wt_percent)
-            
-            result_data['peaks'].append(peak_data)
+        for peak in peaks:
+            result_data['peaks'].append(_serialize_peak(peak))
         
         # Write JSON file
         with open(result_file_path, 'w') as f:
@@ -369,79 +316,7 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
             }
         
         # Update peaks with MS search results
-        updated_peaks = []
-        print(f"\n=== JSON UPDATE DEBUG: Processing {len(peaks)} peaks ===")
-        for i, peak in enumerate(peaks):
-            peak_data = {
-                'Compound ID': getattr(peak, 'compound_id', 'Unknown'),
-                'peak_number': getattr(peak, 'peak_number', 0),
-                'retention_time': float(getattr(peak, 'retention_time', 0.0)),
-                'integrator': getattr(peak, 'integrator', 'py'),
-                'width': float(getattr(peak, 'width', 0.0)),
-                'area': float(getattr(peak, 'area', 0.0)),
-                'start_time': float(getattr(peak, 'start_time', 0.0)),
-                'end_time': float(getattr(peak, 'end_time', 0.0))
-            }
-            
-            # DEBUG: Check what fields are available on this peak
-            print(f"Update Peak {i}: compound_id={getattr(peak, 'compound_id', 'MISSING')}, "
-                  f"Compound_ID={getattr(peak, 'Compound_ID', 'MISSING')}, "
-                  f"Qual={getattr(peak, 'Qual', 'MISSING')}")
-            
-            # Add MS search results if available
-            if hasattr(peak, 'Compound_ID') and peak.Compound_ID:
-                peak_data['Compound ID'] = peak.Compound_ID
-                print(f"  -> Using Compound_ID: {peak.Compound_ID}")
-            else:
-                print(f"  -> Using default compound_id: {getattr(peak, 'compound_id', 'Unknown')}")
-            
-            if hasattr(peak, 'Qual') and peak.Qual is not None:
-                peak_data['Qual'] = float(peak.Qual)
-                print(f"  -> Adding Qual: {peak.Qual}")
-            else:
-                print(f"  -> No Qual field found")
-                
-            if hasattr(peak, 'casno') and peak.casno:
-                peak_data['casno'] = peak.casno
-                print(f"  -> Adding casno: {peak.casno}")
-            else:
-                print(f"  -> No casno field found")
-            
-            # Add quality indicators
-            if hasattr(peak, 'is_saturated') and peak.is_saturated:
-                peak_data['is_saturated'] = True
-                if hasattr(peak, 'saturation_level'):
-                    peak_data['saturation_level'] = float(peak.saturation_level)
-            
-            if hasattr(peak, 'is_convoluted') and peak.is_convoluted:
-                peak_data['is_convoluted'] = True
-                
-            if hasattr(peak, 'quality_issues') and peak.quality_issues:
-                peak_data['quality_issues'] = peak.quality_issues
-            
-            # Add quantitation results if available
-            if hasattr(peak, 'mol_C') and peak.mol_C is not None:
-                peak_data['mol_C'] = float(peak.mol_C)
-            
-            if hasattr(peak, 'mol_C_percent') and peak.mol_C_percent is not None:
-                peak_data['mol_C_percent'] = float(peak.mol_C_percent)
-            
-            if hasattr(peak, 'num_carbons') and peak.num_carbons is not None:
-                peak_data['num_carbons'] = int(peak.num_carbons)
-            
-            if hasattr(peak, 'mol') and peak.mol is not None:
-                peak_data['mol'] = float(peak.mol)
-            
-            if hasattr(peak, 'mass_mg') and peak.mass_mg is not None:
-                peak_data['mass_mg'] = float(peak.mass_mg)
-            
-            if hasattr(peak, 'mol_percent') and peak.mol_percent is not None:
-                peak_data['mol_percent'] = float(peak.mol_percent)
-            
-            if hasattr(peak, 'wt_percent') and peak.wt_percent is not None:
-                peak_data['wt_percent'] = float(peak.wt_percent)
-            
-            updated_peaks.append(peak_data)
+        updated_peaks = [_serialize_peak(peak) for peak in peaks]
         
         # Update the peaks data
         result_data['peaks'] = updated_peaks

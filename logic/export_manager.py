@@ -136,22 +136,19 @@ class ExportManager:
         # Export CSV if enabled for this trigger
         if self.should_export_csv(trigger_type):
             try:
-                if self.app and hasattr(self.app, 'export_results_csv'):
-                    # For .C folders, write CSV into results/ subdirectory
-                    if d_path.endswith('.C'):
-                        results_dir = os.path.join(d_path, "results")
-                        os.makedirs(results_dir, exist_ok=True)
-                        csv_filename = os.path.join(results_dir, "RESULTS.CSV")
-                    else:
-                        csv_filename = os.path.join(d_path, "RESULTS.CSV")
-                    success = self.app.export_results_csv(csv_filename)
-                    result['csv'] = success
-                    if success:
-                        result['messages'].append(f"CSV exported to RESULTS.CSV")
-                    else:
-                        result['messages'].append(f"CSV export failed")
+                from logic.csv_exporter import export_results_to_csv
+                if d_path.endswith('.C'):
+                    results_dir = os.path.join(d_path, "results")
+                    os.makedirs(results_dir, exist_ok=True)
+                    csv_filename = os.path.join(results_dir, "RESULTS.CSV")
                 else:
-                    result['messages'].append(f"CSV export not available (no app reference)")
+                    csv_filename = os.path.join(d_path, "RESULTS.CSV")
+                success = export_results_to_csv(peaks, csv_filename)
+                result['csv'] = success
+                if success:
+                    result['messages'].append(f"CSV exported to RESULTS.CSV")
+                else:
+                    result['messages'].append(f"CSV export failed")
             except Exception as e:
                 result['messages'].append(f"CSV export error: {str(e)}")
         else:

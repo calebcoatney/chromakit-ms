@@ -100,10 +100,11 @@ class ChromatographicPeak(Feature):
             round(self.end_time, 3)
         ]
     
-    def as_dict(self):
-        """Return a dictionary representation of the peak."""
-        result = {
-            'compound_id': self.compound_id,
+    def as_dict(self) -> dict:
+        """Return all fields as a dict for export (JSON/CSV). Always-present fields first,
+        then optional fields only when they hold a value."""
+        d = {
+            'compound_id': getattr(self, 'Compound_ID', None) or self.compound_id,
             'peak_number': self.peak_number,
             'retention_time': self.retention_time,
             'integrator': self.integrator,
@@ -111,53 +112,52 @@ class ChromatographicPeak(Feature):
             'area': self.area,
             'start_time': self.start_time,
             'end_time': self.end_time,
-            'start_index': self.start_index,
-            'end_index': self.end_index,
+            'is_shoulder': self.is_shoulder,
+            'is_negative': self.is_negative,
             'is_convoluted': self.is_convoluted,
-            'asymmetry': self.asymmetry,
-            'spectral_coherence': self.spectral_coherence,
             'is_saturated': self.is_saturated,
-            'saturation_level': self.saturation_level,
-            'is_shoulder': getattr(self, 'is_shoulder', False),
-            'is_negative': getattr(self, 'is_negative', False),
-            'is_grouped': getattr(self, 'is_grouped', False),
-            'grouped_peak_count': getattr(self, 'grouped_peak_count', None)
+            'is_grouped': self.is_grouped,
+            'quality_issues': self.quality_issues,
         }
-        
-        # Add quality issues
-        if hasattr(self, 'quality_issues') and self.quality_issues:
-            result['quality_issues'] = self.quality_issues
-            
-        # Add fields using the exact same names as in the notebook
-        if hasattr(self, 'Compound_ID'):
-            result['Compound ID'] = self.Compound_ID
-            
-        if hasattr(self, 'Qual'):
-            result['Qual'] = self.Qual
-            
-        if hasattr(self, 'casno'):
-            result['casno'] = self.casno
-        
-        # Add quantitation fields
-        if hasattr(self, 'mol_C') and self.mol_C is not None:
-            result['mol_C'] = self.mol_C
-            
-        if hasattr(self, 'num_carbons') and self.num_carbons is not None:
-            result['num_carbons'] = self.num_carbons
-            
-        if hasattr(self, 'mol') and self.mol is not None:
-            result['mol'] = self.mol
-            
-        if hasattr(self, 'mass_mg') and self.mass_mg is not None:
-            result['mass_mg'] = self.mass_mg
-            
-        if hasattr(self, 'mol_percent') and self.mol_percent is not None:
-            result['mol_percent'] = self.mol_percent
-            
-        if hasattr(self, 'wt_percent') and self.wt_percent is not None:
-            result['wt_percent'] = self.wt_percent
-            
-        return result
+
+        # MS identification fields (set post-search)
+        qual = getattr(self, 'Qual', None)
+        if qual is not None:
+            d['Qual'] = float(qual)
+        if self.casno:
+            d['casno'] = self.casno
+        if self.compound_name:
+            d['compound_name'] = self.compound_name
+        if self.match_score is not None:
+            d['match_score'] = self.match_score
+
+        # Quality detail fields (omit when None/empty)
+        if self.asymmetry is not None:
+            d['asymmetry'] = self.asymmetry
+        if self.spectral_coherence is not None:
+            d['spectral_coherence'] = self.spectral_coherence
+        if self.saturation_level is not None:
+            d['saturation_level'] = self.saturation_level
+        if self.grouped_peak_count is not None:
+            d['grouped_peak_count'] = self.grouped_peak_count
+
+        # Quantitation fields (Polyarc + IS method)
+        if self.mol_C is not None:
+            d['mol_C'] = self.mol_C
+        if self.mol_C_percent is not None:
+            d['mol_C_percent'] = self.mol_C_percent
+        if self.num_carbons is not None:
+            d['num_carbons'] = self.num_carbons
+        if self.mol is not None:
+            d['mol'] = self.mol
+        if self.mass_mg is not None:
+            d['mass_mg'] = self.mass_mg
+        if self.mol_percent is not None:
+            d['mol_percent'] = self.mol_percent
+        if self.wt_percent is not None:
+            d['wt_percent'] = self.wt_percent
+
+        return d
     
     @property
     def apex_time(self):
