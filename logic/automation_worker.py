@@ -45,7 +45,10 @@ class AutomationWorker(QRunnable):
         self.total_files = 0
         # Timing: populated when self.app.batch_options['time_steps'] is True
         self._timings: list[dict] = []
-    
+        self._skip_ui_updates: bool = True   # Default: skip renders for speed
+        self._time_steps: bool = False        # Default: no timing
+        self._current_params = None           # Pre-fetched per-file in _load_file
+
     @Slot()
     def run(self):
         """Run the automation worker."""
@@ -122,7 +125,6 @@ class AutomationWorker(QRunnable):
 
                     # Step 2: Process and integrate - 40% of one file's progress
                     t1 = time.perf_counter()
-                    self._update_directory_progress(filename, step_label, 40)
                     success = self._process_and_integrate()
                     t_process = time.perf_counter() - t1
 
@@ -389,6 +391,9 @@ class AutomationWorker(QRunnable):
                         return False
                     time.sleep(0.05)
                 params = self._current_params
+                if params is None:
+                    self.signals.log_message.emit("Failed to fetch parameters")
+                    return False
 
             if not params['peaks']['enabled']:
                 self.signals.log_message.emit("Peak detection is not enabled in parameters")
@@ -425,11 +430,24 @@ class AutomationWorker(QRunnable):
                 self._update_directory_progress(filename, "Integrating peaks", 40)
                 self.signals.log_message.emit("Integrating peaks...")
 
-                try:
-                    integration_results = self.app.integrate_peaks_no_ui(params=params)
-                except Exception as e:
-                    self.signals.log_message.emit(f"Error integrating: {str(e)}")
-                    return False
+                self.integrate_complete = False
+                self.integration_results_fast = None
+
+                def main_thread_integrate_fast():
+                    try:
+                        self.integration_results_fast = self.app.integrate_peaks_no_ui(params=params)
+                    except Exception as e:
+                        self.signals.log_message.emit(f"Error integrating: {str(e)}")
+                    finally:
+                        self.integrate_complete = True
+
+                main_thread_dispatcher.run_on_main_thread(main_thread_integrate_fast)
+                timeout, start = 30, time.time()
+                while not self.integrate_complete:
+                    if self.cancelled or time.time() - start > timeout:
+                        return False
+                    time.sleep(0.1)
+                integration_results = self.integration_results_fast
 
             else:
                 # ── Original path: dispatch to main thread ────────────────────
