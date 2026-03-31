@@ -306,7 +306,14 @@ class AutomationWorker(QRunnable):
                     
                     # Set our success flag
                     self.load_success = True
-                    
+
+                    # Pre-fetch params while we're on the main thread
+                    # so _process_and_integrate can use them off-thread
+                    try:
+                        self._current_params = self.app.parameters_frame.get_parameters()
+                    except Exception:
+                        self._current_params = None
+
                     # Update our log via signals (thread-safe)
                     self.signals.log_message.emit(f"Successfully loaded {os.path.basename(file_path)}")
                 except Exception as e:
@@ -354,28 +361,81 @@ class AutomationWorker(QRunnable):
     def _process_and_integrate(self):
         """Process and integrate the current file."""
         try:
-            # Update progress to show we're starting integration (20% of file progress)
-            self._update_directory_progress(
-                os.path.basename(self.app.data_handler.current_directory_path),
-                "Processing chromatogram", 
-                20
+            filename = os.path.basename(
+                self.app.data_handler.current_directory_path
             )
-            
-            # Get current parameters
-            params = self.app.parameters_frame.get_parameters()
-            
-            # Ensure peak detection is enabled
+
+            self._update_directory_progress(filename, "Processing chromatogram", 20)
+
+            if not (hasattr(self.app, 'current_x') and hasattr(self.app, 'current_y')
+                    and self.app.current_x is not None and self.app.current_y is not None):
+                self.signals.log_message.emit("No data available for processing")
+                return False
+
+            # Use pre-fetched params when available; fall back to main-thread fetch.
+            params = getattr(self, '_current_params', None)
+            if params is None:
+                # Fetch on main thread (legacy path / params not pre-fetched)
+                self._fetch_params_complete = False
+                def fetch_params():
+                    try:
+                        self._current_params = self.app.parameters_frame.get_parameters()
+                    finally:
+                        self._fetch_params_complete = True
+                main_thread_dispatcher.run_on_main_thread(fetch_params)
+                timeout, start = 10, time.time()
+                while not self._fetch_params_complete:
+                    if self.cancelled or time.time() - start > timeout:
+                        return False
+                    time.sleep(0.05)
+                params = self._current_params
+
             if not params['peaks']['enabled']:
                 self.signals.log_message.emit("Peak detection is not enabled in parameters")
                 return False
-            
-            # First process data with current parameters
-            self.signals.log_message.emit("Processing chromatogram...")
-            if hasattr(self.app, 'current_x') and hasattr(self.app, 'current_y'):
-                # Use a thread-safe version of processing with no UI updates
+
+            if getattr(self, '_skip_ui_updates', True):
+                # ── Fast path: run math directly on this worker thread ──────────
+                self.signals.log_message.emit("Processing chromatogram...")
+                try:
+                    ms_range = None
+                    if (hasattr(self.app, 'plot_frame')
+                            and hasattr(self.app.plot_frame, 'tic_data')
+                            and self.app.plot_frame.tic_data is not None):
+                        td = self.app.plot_frame.tic_data
+                        if 'x' in td and len(td['x']) > 0:
+                            ms_range = (float(td['x'].min()), float(td['x'].max()))
+
+                    profile = getattr(self.app, 'current_profile', None)
+                    processed = self.app.processor.process(
+                        self.app.current_x,
+                        self.app.current_y,
+                        params,
+                        ms_range,
+                        profile=profile,
+                    )
+                except Exception as e:
+                    self.signals.log_message.emit(f"Error processing: {str(e)}")
+                    return False
+
+                # Store result so integrate_peaks_no_ui can read it
+                self.app.current_processed = processed
+                self.app.current_profile = profile
+
+                self._update_directory_progress(filename, "Integrating peaks", 40)
+                self.signals.log_message.emit("Integrating peaks...")
+
+                try:
+                    integration_results = self.app.integrate_peaks_no_ui(params=params)
+                except Exception as e:
+                    self.signals.log_message.emit(f"Error integrating: {str(e)}")
+                    return False
+
+            else:
+                # ── Original path: dispatch to main thread ────────────────────
                 self.process_complete = False
                 self.process_success = False
-                
+
                 def main_thread_process():
                     try:
                         self.app.process_and_display(self.app.current_x, self.app.current_y)
@@ -384,95 +444,67 @@ class AutomationWorker(QRunnable):
                         self.signals.log_message.emit(f"Error processing: {str(e)}")
                     finally:
                         self.process_complete = True
-                
-                # Run on main thread
+
                 main_thread_dispatcher.run_on_main_thread(main_thread_process)
-                
-                # Wait for completion
-                timeout = 30
-                start_time = time.time()
+                timeout, start = 30, time.time()
                 while not self.process_complete:
-                    if self.cancelled or time.time() - start_time > timeout:
+                    if self.cancelled or time.time() - start > timeout:
                         return False
                     time.sleep(0.1)
-                    
                 if not self.process_success:
                     return False
-            else:
-                self.signals.log_message.emit("No data available for processing")
-                return False
-                
-            # Now update progress to show we're integrating (40% of file progress)
-            self._update_directory_progress(
-                os.path.basename(self.app.data_handler.current_directory_path),
-                "Integrating peaks", 
-                40
-            )
-            
-            # Now integrate peaks using the non-UI method
-            self.signals.log_message.emit("Integrating peaks...")
-            
-            # Use our integrate_peaks_no_ui method through main thread
-            self.integrate_complete = False
-            self.integration_results = None
-            
-            def main_thread_integrate():
-                try:
-                    self.integration_results = self.app.integrate_peaks_no_ui()
-                finally:
-                    self.integrate_complete = True
-            
-            # Run on main thread
-            main_thread_dispatcher.run_on_main_thread(main_thread_integrate)
-            
-            # Wait for completion
-            timeout = 30
-            start_time = time.time()
-            while not self.integrate_complete:
-                if self.cancelled or time.time() - start_time > timeout:
-                    return False
-                time.sleep(0.1)
-                
-            # Check if integration was successful
-            if not self.integration_results:
+
+                self._update_directory_progress(filename, "Integrating peaks", 40)
+                self.signals.log_message.emit("Integrating peaks...")
+
+                self.integrate_complete = False
+                self.integration_results = None
+
+                def main_thread_integrate():
+                    try:
+                        self.integration_results = self.app.integrate_peaks_no_ui()
+                    finally:
+                        self.integrate_complete = True
+
+                main_thread_dispatcher.run_on_main_thread(main_thread_integrate)
+                timeout, start = 30, time.time()
+                while not self.integrate_complete:
+                    if self.cancelled or time.time() - start > timeout:
+                        return False
+                    time.sleep(0.1)
+
+                integration_results = self.integration_results
+
+            # ── Common completion path ────────────────────────────────────────
+            if not integration_results:
                 self.signals.log_message.emit("Integration failed")
                 return False
 
             if not self.app.integrated_peaks:
                 self.signals.log_message.emit("No peaks found during integration")
-                # For chromatography signals an empty run is unexpected; for
-                # spectroscopy (FTIR, UV-Vis) it just means no bands were
-                # detected, which is a valid (if unusual) outcome.
                 if getattr(self, "_is_chromatography", True):
                     return False
-                # Spectroscopy: fall through so results (even empty) get saved.
             else:
-                # Apply manual RT overrides — only relevant for chromatography.
                 if getattr(self, "_is_chromatography", True):
                     self._apply_manual_overrides()
-            
-            # Update the plot on the main thread (if needed)
-            def update_plot():
-                try:
-                    # Update plot with integration results
-                    self.app.plot_frame.shade_integration_areas(self.integration_results)
-                except Exception as e:
-                    print(f"Error updating plot: {str(e)}")
-            
-            main_thread_dispatcher.run_on_main_thread(update_plot)
-            
-            self.signals.log_message.emit(f"Integration complete: {len(self.app.integrated_peaks)} peaks found")
-            
-            # If we get here, integration succeeded
-            self._update_directory_progress(
-                os.path.basename(self.app.data_handler.current_directory_path),
-                f"Integrated {len(self.app.integrated_peaks)} peaks", 
-                50
+
+            # Update plot shading (if UI updates are on)
+            if not getattr(self, '_skip_ui_updates', True):
+                def update_plot():
+                    try:
+                        self.app.plot_frame.shade_integration_areas(integration_results)
+                    except Exception as e:
+                        print(f"Error updating plot: {str(e)}")
+                main_thread_dispatcher.run_on_main_thread(update_plot)
+
+            self.signals.log_message.emit(
+                f"Integration complete: {len(self.app.integrated_peaks)} peaks found"
             )
-            
-            # Success
+            self._update_directory_progress(
+                filename, f"Integrated {len(self.app.integrated_peaks)} peaks", 50
+            )
             return True
-            
+
         except Exception as e:
             self.signals.log_message.emit(f"Error in processing/integration: {str(e)}")
             return False
