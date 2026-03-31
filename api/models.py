@@ -6,6 +6,19 @@ the data structures from logic/.
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
+# ── Processing param models — canonical definitions live in logic/method.py ──
+from logic.method import (
+    SmoothingParams,
+    BreakPoint,
+    FastchromParams,
+    BaselineParams,
+    PeakParams,
+    DeconvolutionParams,
+    NegativePeakParams,
+    ShoulderParams,
+    IntegrationSubParams,
+)
+
 
 # ─── Request Models ───────────────────────────────────────────────────
 
@@ -13,96 +26,6 @@ class LoadFileRequest(BaseModel):
     """Request to load a .D file."""
     file_path: str = Field(..., description="Full path to .D directory")
     detector: Optional[str] = Field(None, description="Specific detector to use (e.g. 'FID1A'). Auto-detects if omitted.")
-
-
-class SmoothingParams(BaseModel):
-    """Smoothing parameters — mirrors logic/processor defaults."""
-    enabled: bool = False
-    method: str = Field(default="whittaker", description="'whittaker' or 'savgol'")
-    median_enabled: bool = Field(default=False, description="Apply median pre-filter for spike removal")
-    median_kernel: int = Field(default=5, ge=3, description="Median filter kernel size (odd)")
-    lambda_: float = Field(default=1e-1, alias="lambda", description="Whittaker smoothing lambda")
-    diff_order: int = Field(default=1, ge=1, le=2, description="Whittaker difference order")
-    savgol_window: int = Field(default=3, ge=3, description="Savitzky-Golay window length (odd)")
-    savgol_polyorder: int = Field(default=1, ge=1, description="Savitzky-Golay polynomial order")
-
-    class Config:
-        populate_by_name = True
-
-
-class BreakPoint(BaseModel):
-    """Signal break point for segmented baseline fitting."""
-    time: float = Field(..., description="Break point time in minutes")
-    tolerance: float = Field(default=0.1, description="Tolerance window around break point")
-
-
-class FastchromParams(BaseModel):
-    """FastChrom baseline method parameters."""
-    half_window: Optional[int] = None
-    smooth_half_window: Optional[int] = None
-
-
-class BaselineParams(BaseModel):
-    """Baseline correction parameters."""
-    show_corrected: bool = False
-    method: str = Field(default="arpls", description="asls|arpls|airpls|imodpoly|modpoly|snip|mixture_model|irsqr|fastchrom")
-    lambda_: float = Field(default=1e4, alias="lambda")
-    asymmetry: float = 0.01
-    baseline_offset: float = Field(default=0.0, description="Offset subtracted from baseline (positive = lower baseline = larger areas)")
-    align_tic: bool = Field(default=False, description="Align MS TIC to FID time axis")
-    break_points: Optional[List[BreakPoint]] = Field(default=None, description="Break points for segmented baseline")
-    fastchrom: Optional[FastchromParams] = None
-
-    class Config:
-        populate_by_name = True
-
-
-class PeakParams(BaseModel):
-    """Peak detection parameters."""
-    enabled: bool = False
-    mode: str = Field(default="classical", description="'classical' or 'deconvolution'")
-    window_length: int = 41
-    polyorder: int = 3
-    peak_prominence: float = 0.05
-    peak_width: int = 5
-    min_prominence: Optional[float] = Field(default=1e5, description="Minimum peak prominence")
-    min_height: Optional[float] = Field(default=0.0)
-    min_width: Optional[float] = Field(default=0.0)
-    range_filters: Optional[List[List[float]]] = Field(default=None, description="List of [start, end] time ranges")
-
-
-class DeconvolutionParams(BaseModel):
-    """Deconvolution (peak splitting) parameters."""
-    splitting_method: str = Field(default="geometric", description="'geometric' or 'emg'")
-    windows: Optional[List[List[float]]] = Field(default=None, description="[start, end] windows; empty = all peaks")
-    heatmap_threshold: float = 0.36
-    pre_fit_signal_threshold: float = 0.001
-    min_area_frac: float = 0.15
-    valley_threshold_frac: float = 0.48
-    mu_bound_factor: float = 0.68
-    fat_threshold_frac: float = 0.44
-    dedup_sigma_factor: float = 1.32
-    dedup_rt_tolerance: float = 0.005
-
-
-class NegativePeakParams(BaseModel):
-    """Negative peak detection parameters."""
-    enabled: bool = False
-    min_prominence: float = 1e5
-
-
-class ShoulderParams(BaseModel):
-    """Shoulder detection parameters."""
-    enabled: bool = False
-    window_length: int = 41
-    polyorder: int = 3
-    sensitivity: int = Field(default=8, ge=1, le=10, description="Detection sensitivity 1-10")
-    apex_distance: int = 10
-
-
-class IntegrationSubParams(BaseModel):
-    """Integration-specific sub-parameters (peak grouping)."""
-    peak_groups: Optional[List[List[float]]] = Field(default=None, description="[start, end] time windows for grouping")
 
 
 class ProcessingParams(BaseModel):
@@ -276,3 +199,26 @@ class NavigationResponse(BaseModel):
     file_path: Optional[str]
     available_count: int
     current_index: int
+
+
+class RunRequest(BaseModel):
+    """Request to run the full Phase 1 pipeline: load → process → integrate → export JSON."""
+    data_path: str = Field(..., description="Path to Agilent .D or .C directory")
+    method_path: str = Field(..., description="Path to .chromethod file")
+    detector: Optional[str] = Field(
+        None,
+        description="Detector to use (e.g. 'FID1A'). Auto-detected if omitted.",
+    )
+
+
+class RunResponse(BaseModel):
+    """Response from POST /api/run."""
+    status: str = Field(..., description="'complete' or 'error'")
+    data_path: str
+    method: str = Field(..., description="Method name from the .chromethod file")
+    signal_type: str
+    peak_count: int
+    peaks: List[Dict[str, Any]]
+    output_files: List[str] = Field(
+        ..., description="Absolute paths of JSON files written to disk"
+    )
