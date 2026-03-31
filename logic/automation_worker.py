@@ -50,6 +50,10 @@ class AutomationWorker(QRunnable):
     def run(self):
         """Run the automation worker."""
         try:
+            batch_opts = getattr(self.app, 'batch_options', {}) or {}
+            self._time_steps = batch_opts.get('time_steps', False)
+            self._skip_ui_updates = batch_opts.get('skip_ui_updates', True)
+
             # Get list of .C folders in the directory
             c_files = []
             for item in sorted(os.listdir(self.directory_path)):
@@ -107,22 +111,27 @@ class AutomationWorker(QRunnable):
                 
                 try:
                     # Step 1: Load the file - 10% of one file's progress
+                    t0 = time.perf_counter()
                     self._update_directory_progress(filename, "Loading", 10)
                     success = self._load_file(file_path)
-                    
+                    t_load = time.perf_counter() - t0
+
                     if not success or self.cancelled:
                         self.signals.file_completed.emit(filename, False, "Failed to load file")
                         continue
-                    
+
                     # Step 2: Process and integrate - 40% of one file's progress
+                    t1 = time.perf_counter()
                     self._update_directory_progress(filename, step_label, 40)
                     success = self._process_and_integrate()
-                    
+                    t_process = time.perf_counter() - t1
+
                     if not success or self.cancelled:
                         self.signals.file_completed.emit(filename, False, "Failed to integrate")
                         continue
-                    
+
                     # Step 2.5: Save integration results to JSON - 50% of one file's progress
+                    t2 = time.perf_counter()
                     self._update_directory_progress(filename, "Saving integration results", 50)
                     if hasattr(self.app, 'integrated_peaks') and self.app.integrated_peaks:
                         current_dir = self.app.data_handler.current_directory_path
@@ -132,18 +141,22 @@ class AutomationWorker(QRunnable):
                             self.signals.log_message.emit(f"Integration results saved to JSON for {filename}")
                         else:
                             self.signals.log_message.emit(f"Warning: Failed to save JSON for {filename}")
-                    
+                    t_save_integration = time.perf_counter() - t2
+
                     # Step 3: MS Library Search (if enabled and applicable)
                     ms_search_enabled = True  # Default if not specified
                     if hasattr(self.app, 'batch_options') and 'ms_search' in self.app.batch_options:
                         ms_search_enabled = self.app.batch_options['ms_search']
-                    
+
                     ms_search_applicable = PipelineStage.MS_SEARCH in profile_stages
+                    t_ms = None
 
                     if ms_search_enabled and ms_search_applicable:
                         self._update_directory_progress(filename, "MS Library Search", 70)
+                        t3 = time.perf_counter()
                         success = self._run_ms_search()
-                        
+                        t_ms = time.perf_counter() - t3
+
                         if not success or self.cancelled:
                             self.signals.file_completed.emit(filename, False, "Failed to run MS search")
                             continue
@@ -154,7 +167,17 @@ class AutomationWorker(QRunnable):
                     else:
                         # Skip MS search if disabled
                         self.signals.log_message.emit("MS search disabled in options - skipping")
-                    
+
+                    # Record timing for this file
+                    if self._time_steps:
+                        self._timings.append({
+                            'file': filename,
+                            'load': t_load,
+                            'process': t_process,
+                            'save': t_save_integration,
+                            'ms_search': t_ms,
+                        })
+
                     # File completed successfully
                     self._update_directory_progress(filename, "Completed", 100)
                     self.signals.file_completed.emit(filename, True, "Processing completed")
@@ -165,6 +188,11 @@ class AutomationWorker(QRunnable):
                     self.signals.log_message.emit(error_msg)
                     self.signals.file_completed.emit(filename, False, error_msg)
             
+            # Emit timing report if enabled
+            if self._time_steps and self._timings:
+                table = self._format_timing_table(self._timings)
+                self.signals.log_message.emit(table)
+
             # Signal completion
             self.signals.finished.emit()
             self.signals.log_message.emit("Automation completed")
