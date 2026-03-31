@@ -57,11 +57,13 @@ def test_creates_with_defaults():
 
 
 def test_invalid_signal_type_raises():
-    with pytest.raises(Exception):  # ValueError or KeyError from registry
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
         ChromaMethod(name="Bad", signal_type="nonexistent_instrument")
 
 
 def test_round_trip_to_from_file():
+    import os
     m = ChromaMethod(name="CO2 Hydro GC", signal_type="gc")
     m.smoothing.enabled = True
     m.baseline.method = "snip"
@@ -70,14 +72,17 @@ def test_round_trip_to_from_file():
     with tempfile.NamedTemporaryFile(suffix=".chromethod", delete=False, mode="w") as f:
         path = f.name
 
-    m.to_file(path)
-    loaded = ChromaMethod.from_file(path)
+    try:
+        m.to_file(path)
+        loaded = ChromaMethod.from_file(path)
 
-    assert loaded.name == "CO2 Hydro GC"
-    assert loaded.signal_type == "gc"
-    assert loaded.smoothing.enabled is True
-    assert loaded.baseline.method == "snip"
-    assert loaded.chemstation_area_factor == pytest.approx(0.05)
+        assert loaded.name == "CO2 Hydro GC"
+        assert loaded.signal_type == "gc"
+        assert loaded.smoothing.enabled is True
+        assert loaded.baseline.method == "snip"
+        assert loaded.chemstation_area_factor == pytest.approx(0.05)
+    finally:
+        os.unlink(path)
 
 
 def test_to_processor_params_excludes_metadata():

@@ -53,8 +53,8 @@ class BaselineParams(BaseModel):
     asymmetry: float = 0.01
     baseline_offset: float = Field(default=0.0)
     align_tic: bool = Field(default=False, description="Align MS TIC to FID time axis")
-    break_points: Optional[List[BreakPoint]] = Field(default_factory=list)
-    fastchrom: Optional[FastchromParams] = Field(default_factory=FastchromParams)
+    break_points: Optional[List[BreakPoint]] = Field(default=None)
+    fastchrom: Optional[FastchromParams] = Field(default=None)
 
     model_config = {"populate_by_name": True}
 
@@ -69,12 +69,12 @@ class PeakParams(BaseModel):
     min_prominence: Optional[float] = Field(default=1e5)
     min_height: Optional[float] = 0.0
     min_width: Optional[float] = 0.0
-    range_filters: Optional[List[List[float]]] = Field(default_factory=list)
+    range_filters: Optional[List[List[float]]] = Field(default=None)
 
 
 class DeconvolutionParams(BaseModel):
     splitting_method: str = Field(default="geometric", description="'geometric' or 'emg'")
-    windows: Optional[List[List[float]]] = Field(default_factory=list)
+    windows: Optional[List[List[float]]] = Field(default=None)
     heatmap_threshold: float = 0.36
     pre_fit_signal_threshold: float = 0.001
     min_area_frac: float = 0.15
@@ -100,7 +100,7 @@ class ShoulderParams(BaseModel):
 
 class IntegrationSubParams(BaseModel):
     peak_groups: Optional[List[List[float]]] = Field(
-        default_factory=list,
+        default=None,
         description="[start, end] time windows for peak grouping",
     )
 
@@ -150,7 +150,10 @@ class ChromaMethod(BaseModel):
     @classmethod
     def _validate_signal_type(cls, v: str) -> str:
         from logic.signal_profiles import SignalProfileRegistry
-        SignalProfileRegistry.get(v)  # raises KeyError if unregistered
+        try:
+            SignalProfileRegistry.get(v)
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
         return v
 
     @classmethod
