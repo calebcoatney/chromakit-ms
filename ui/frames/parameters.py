@@ -133,7 +133,18 @@ class ParametersFrame(QWidget):
         
         # Set the widget for the scroll area
         self.params_scroll.setWidget(self.params_widget)
-        
+
+        # ── Method file buttons ─────────────────────────────────────────
+        _method_bar = QHBoxLayout()
+        self._load_method_btn = QPushButton("Load Method\u2026")
+        self._save_method_btn = QPushButton("Save Method\u2026")
+        _method_bar.addWidget(self._load_method_btn)
+        _method_bar.addWidget(self._save_method_btn)
+        self._load_method_btn.clicked.connect(self._on_load_method)
+        self._save_method_btn.clicked.connect(self._on_save_method)
+        self.layout.addLayout(_method_bar)
+        # ───────────────────────────────────────────────────────────────
+
         # Add scroll area to main layout
         self.layout.addWidget(self.params_scroll)
     
@@ -1640,3 +1651,88 @@ class ParametersFrame(QWidget):
         except ValueError:
             self.prominence_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
             QTimer.singleShot(800, lambda: self.prominence_entry.setStyleSheet(""))
+
+    # ── Method file I/O ────────────────────────────────────────────────────
+
+    def _on_save_method(self):
+        """Serialize current widget state to a .chromethod file."""
+        from PySide6.QtWidgets import QFileDialog, QInputDialog
+        from logic.method import ChromaMethod
+
+        name, ok = QInputDialog.getText(self, "Save Method", "Method name:")
+        if not ok or not name.strip():
+            return
+
+        signal_type, ok = QInputDialog.getItem(
+            self, "Save Method", "Signal type:",
+            ["gc", "gcms", "ftir", "uvvis"], 0, False,
+        )
+        if not ok:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Method", f"{name.strip()}.chromethod",
+            "ChromaKit Method (*.chromethod)",
+        )
+        if not path:
+            return
+
+        try:
+            method = ChromaMethod.from_gui_params(
+                self.current_params, name=name.strip(), signal_type=signal_type,
+            )
+            method.to_file(path)
+        except Exception as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Save Method Failed", str(e))
+
+    def _on_load_method(self):
+        """Load a .chromethod file and apply it to the parameter widgets."""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from logic.method import ChromaMethod
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Method", "", "ChromaKit Method (*.chromethod)",
+        )
+        if not path:
+            return
+
+        try:
+            method = ChromaMethod.from_file(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Load Method Failed", str(e))
+            return
+
+        self.current_params = method.to_gui_params()
+        self._reinitialize_controls()
+        self.parameters_changed.emit(self.current_params)
+
+    def _reinitialize_controls(self):
+        """Rebuild all parameter widgets from self.current_params.
+
+        Called after loading a method file. Because all _init_*_controls()
+        methods read from self.current_params when creating their widgets,
+        clearing the layout and re-running them is sufficient to restore
+        the full widget state.
+        """
+        # Remove all existing widgets from params_layout
+        while self.params_layout.count():
+            item = self.params_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Rebuild title
+        parameters_label = QLabel("Integration Parameters")
+        parameters_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.params_layout.addWidget(parameters_label)
+
+        # Rebuild all control sections — must match the order in __init__
+        self.section_groups = {}
+        self._init_smoothing_controls()
+        self._init_baseline_controls()
+        self._init_peaks_controls()
+        self._init_negative_peaks_controls()
+        self._init_shoulder_controls()
+        self._init_range_filter_controls()
+        self._init_peak_grouping_controls()
+        self.params_layout.addStretch()
