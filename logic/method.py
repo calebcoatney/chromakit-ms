@@ -109,7 +109,7 @@ class IntegrationSubParams(BaseModel):
 
 _METADATA_FIELDS = frozenset({
     "name", "version", "signal_type", "created_at",
-    "chemstation_area_factor", "export_output_dir",
+    "chemstation_area_factor",
 })
 
 
@@ -140,10 +140,6 @@ class ChromaMethod(BaseModel):
     chemstation_area_factor: float = Field(
         default=0.0784,
         description="Chemstation area conversion factor applied during integration",
-    )
-    export_output_dir: Optional[str] = Field(
-        default=None,
-        description="Output directory for exported JSON; None = same dir as data file",
     )
 
     @field_validator("signal_type")
@@ -183,7 +179,6 @@ class ChromaMethod(BaseModel):
         name: str,
         signal_type: str,
         chemstation_area_factor: float = 0.0784,
-        export_output_dir: Optional[str] = None,
     ) -> "ChromaMethod":
         """Build a ChromaMethod from ParametersFrame.current_params.
 
@@ -196,7 +191,6 @@ class ChromaMethod(BaseModel):
             name=name,
             signal_type=signal_type,
             chemstation_area_factor=chemstation_area_factor,
-            export_output_dir=export_output_dir,
             **d,
         )
 

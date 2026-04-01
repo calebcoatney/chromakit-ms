@@ -8,7 +8,6 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtCore import QRegularExpression
 import numpy as np
-import numpy as np
 
 class ParametersFrame(QWidget):
     """Frame containing integration parameters for chromatogram processing."""
