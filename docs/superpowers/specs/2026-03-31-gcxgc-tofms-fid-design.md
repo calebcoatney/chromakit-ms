@@ -49,6 +49,7 @@ SignalProfileRegistry.register(SignalProfile(
     x_label="1st Dimension RT (min)",
     y_label="2nd Dimension RT (s)",
     pipeline_stages=[
+        PipelineStage.BASELINE,
         PipelineStage.PEAKS,
         PipelineStage.MS_SEARCH,
         PipelineStage.QUANTITATION,
@@ -129,6 +130,20 @@ Key fields:
 
 `GCxGCProcessor` takes the loader metadata dict and produces `list[GCxGC2DPeak]`.
 
+### Step 0 — 2D Baseline correction (optional)
+The FID signal is raw and benefits from baseline correction before peak detection. Uses `pybaselines.Baseline2D.arpls`:
+
+```python
+from pybaselines import Baseline2D
+fitter = Baseline2D()
+baseline, _ = fitter.arpls(fid_2d, lam=lam, diff_order=diff_order)
+fid_corrected = np.maximum(fid_2d - baseline, 0)
+```
+
+`lam` controls smoothness of the fitted baseline (larger = smoother). `diff_order=2` is the standard default. The `num_eigens=(10, 10)` default uses eigendecomposition approximation for speed on large arrays — this is left at its default and not exposed to the UI. Baseline correction runs on the worker thread alongside peak detection.
+
+If the user disables baseline correction, `fid_corrected = fid_2d` (raw signal passed through).
+
 ### Step 1 — Column-by-column peak detection
 ```python
 for i in range(n_mods):
@@ -156,6 +171,8 @@ Computes the absolute scan index in the `.dbc.lsc` from `(apex_mod_index × scan
 ### Parameters exposed to UI
 | Parameter | Default | Description |
 |---|---|---|
+| `lam` | 1e5 | Baseline smoothing (larger = smoother; same semantics as 1D arpls) |
+| `diff_order` | 2 | Baseline differential order |
 | `min_height` | — | Absolute FID threshold |
 | `min_prominence` | — | scipy prominence threshold |
 | `rt2_grouping_tolerance` | 2 scans | Max 2tR shift between adjacent sub-peaks |
@@ -176,7 +193,7 @@ New method `render_gcxgc(fid_2d, tic_2d, pm, hz)` alongside the existing line-pl
 - Detected peaks overlaid as scatter markers on both axes at their (rt1, rt2)
 
 ### `ParametersFrame`
-When `ui_mode == "gcxgc"`: hide smoothing and baseline correction widgets. Show four GCxGC controls: min height, min prominence, 2tR grouping tolerance (scans), min sub-peaks per compound.
+When `ui_mode == "gcxgc"`: hide smoothing widget; show a GCxGC baseline section (lam, diff_order) and peak detection section (min height, min prominence, 2tR grouping tolerance, min sub-peaks).
 
 ### `RTTableFrame`
 When GCxGC mode: add `rt2` column ("2D RT (s)"), rename area column to "Volume". All other columns (compound name, match score, CAS#, quantitation) unchanged.
