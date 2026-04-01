@@ -30,6 +30,7 @@ from api.models import (
     AlignTICRequest, AlignTICResponse,
     AssignmentRequest, ScalingFactorsRequest,
     NavigationResponse,
+    ExportRequest,
 )
 from api.utils import serialize_numpy, convert_params_for_processor
 
@@ -358,10 +359,43 @@ async def quantitate(request: dict):
 # ─── Export ───────────────────────────────────────────────────────────
 
 @app.post("/api/export")
-async def export_results(request: dict):
-    """Export integration results to JSON/CSV/XLSX."""
-    # TODO: Wire up ExportManager + json_exporter
-    raise HTTPException(status_code=501, detail="Export endpoint not yet implemented")
+async def export_results(request: ExportRequest):
+    """Export serialized peak results to a JSON file.
+
+    Accepts peak dicts from a prior /api/integrate call.
+    Writes to the same location as the GUI exporter (inside the .D directory,
+    or inside {.C}/results/ for .C folders).
+
+    Only 'json' format is supported in Phase 1.
+    """
+    import json as _json
+    from logic.json_exporter import _resolve_export_context
+
+    try:
+        if request.format != "json":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Format '{request.format}' not supported. Only 'json' is available.",
+            )
+
+        metadata, output_path = _resolve_export_context(
+            request.file_path, data_handler.current_detector
+        )
+
+        result_data = {
+            **metadata,
+            "peaks": request.peaks,
+        }
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            _json.dump(result_data, f, indent=4)
+
+        return {"status": "exported", "output_file": output_path}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
 
 
 # ─── MS Baseline Correction (stub) ───────────────────────────────────
