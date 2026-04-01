@@ -31,6 +31,7 @@ from api.models import (
     AssignmentRequest, ScalingFactorsRequest,
     NavigationResponse,
     ExportRequest,
+    RunRequest, RunResponse,
 )
 from api.utils import serialize_numpy, convert_params_for_processor
 
@@ -396,6 +397,89 @@ async def export_results(request: ExportRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
+
+
+# ─── Full Pipeline Run ────────────────────────────────────────────────
+
+@app.post("/api/run", response_model=RunResponse)
+async def run_pipeline(request: RunRequest):
+    """Run the full Phase 1 pipeline in one call: load → process → integrate → export JSON.
+
+    Requires a .chromethod file (save one from the GUI via Load/Save Method buttons).
+    Writes a JSON result file alongside the data file and returns the peak table
+    plus the output file path.
+    """
+    import numpy as np
+    from logic.method import ChromaMethod
+    from logic.json_exporter import export_integration_results_to_json, _resolve_export_context
+
+    try:
+        # 1. Load method
+        try:
+            method = ChromaMethod.from_file(request.method_path)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404, detail=f"Method file not found: {request.method_path}"
+            )
+
+        # 2. Load data
+        try:
+            data = data_handler.load_data_directory(
+                request.data_path, detector=request.detector
+            )
+        except (FileNotFoundError, ValueError) as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+        x = np.array(data["chromatogram"]["x"])
+        y = np.array(data["chromatogram"]["y"])
+
+        # 3. Process (smoothing + baseline + peak detection)
+        raw_params = method.to_processor_params()
+        proc_params = convert_params_for_processor(raw_params)
+        processed = processor.process(x, y, params=proc_params)
+
+        # 4. Integrate
+        integrated = processor.integrate_peaks(
+            processed_data=processed,
+            rt_table=None,
+            chemstation_area_factor=method.chemstation_area_factor,
+            peak_groups=method.integration.peak_groups or [],
+        )
+        peaks = integrated.get("peaks", [])
+
+        # 5. Export JSON (writes alongside data file, same as GUI behavior)
+        export_integration_results_to_json(
+            peaks=peaks,
+            d_path=request.data_path,
+            detector=data_handler.current_detector,
+            processing_params=raw_params,
+        )
+
+        # 6. Determine output file path
+        _, output_file = _resolve_export_context(
+            request.data_path, data_handler.current_detector
+        )
+
+        # 7. Serialize peaks for response
+        peaks_dicts = []
+        for peak in peaks:
+            d = peak.as_dict() if hasattr(peak, "as_dict") else peak
+            peaks_dicts.append(serialize_numpy(d))
+
+        return RunResponse(
+            status="complete",
+            data_path=request.data_path,
+            method=method.name,
+            signal_type=method.signal_type,
+            peak_count=len(peaks_dicts),
+            peaks=peaks_dicts,
+            output_files=[str(output_file)],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
 
 
 # ─── MS Baseline Correction (stub) ───────────────────────────────────
