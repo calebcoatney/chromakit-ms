@@ -444,3 +444,14 @@ build/
 .github/copilot-instructions.md
 CLAUDE.md
 .worktrees/
+
+# Dev notes / AI-generated analysis docs
+QUICK_REFERENCE.md
+DOCUMENTATION_INDEX.md
+LOGIC_ANALYSIS.md
+COMPREHENSIVE_UI_ANALYSIS.md
+api/QUICKSTART.md
+api/IMPLEMENTATION_SUMMARY.md
+react-ui/UPDATE_SUMMARY.md
+docs/superpowers/
+deconvolution/adap-gc-source-reference/TRANSLATION_GUIDE*.md
