@@ -55,6 +55,12 @@ class ChromaKitApp(QMainWindow):
         # Initialize data handler
         self.data_handler = DataHandler()
         
+        # GCxGC mode flags
+        self._gcxgc_mode: bool = False
+        self._gcxgc_metadata: dict = {}
+        self._gcxgc_proc = None
+        self._gcxgc_peaks: list = []
+        
         # Load scaling factors from settings
         _settings = QSettings("CalebCoatney", "ChromaKit")
         self.signal_factor = _settings.value("scaling/signal_factor", 1.0, type=float)
@@ -126,7 +132,9 @@ class ChromaKitApp(QMainWindow):
         self.file_tree.d_folder_opened.connect(self.on_file_selected)
         self.file_tree.directory_opened.connect(self.on_directory_opened)
         self.plot_frame.point_selected.connect(self.on_point_selected)
+        self.plot_frame.peak_selected.connect(self._on_gcxgc_peak_selected)
         self.parameters_frame.parameters_changed.connect(self.on_parameters_changed)
+        self.parameters_frame.gcxgc_params_changed.connect(self._on_gcxgc_params_changed)
         
         # Connect button frame signals
         self.button_frame.export_clicked.connect(self.on_export)
@@ -494,14 +502,31 @@ class ChromaKitApp(QMainWindow):
         
         # 3. Toggle panel visibility
         is_chrom = (ui_mode == "chromatography")
+        is_gcxgc = (ui_mode == "gcxgc")
         ms_idx = self.right_tabs.indexOf(self.ms_frame)
         quant_idx = self.right_tabs.indexOf(self.quantitation_frame)
-        
-        self.right_tabs.setTabVisible(ms_idx, is_chrom)
+        rt_idx = self.right_tabs.indexOf(self.rt_table_frame)
+
+        self.right_tabs.setTabVisible(ms_idx, is_chrom or is_gcxgc)
         self.right_tabs.setTabVisible(quant_idx, is_chrom)
+        self.right_tabs.setTabVisible(rt_idx, is_chrom)
+
+        if is_gcxgc:
+            self.right_tabs.setCurrentIndex(ms_idx)
+
+        # Hide GCxGC-irrelevant buttons
+        self.button_frame.deconvolve_ms_button.setVisible(not is_gcxgc)
+        if hasattr(self.ms_frame, 'inspect_btn'):
+            self.ms_frame.inspect_btn.setVisible(not is_gcxgc)
+        if hasattr(self.ms_frame, 'spectrum_toggle_btn'):
+            self.ms_frame.spectrum_toggle_btn.setVisible(not is_gcxgc)
         
         # 4. Update window title
         self.setWindowTitle(f"ChromaKit - {profile.display_name}")
+        
+        # 5. Forward ui_mode to ParametersFrame for widget visibility
+        if hasattr(self.parameters_frame, 'set_mode'):
+            self.parameters_frame.set_mode(profile.ui_mode)
 
     @Slot(str)
     def on_directory_opened(self, dir_path):
@@ -569,6 +594,10 @@ class ChromaKitApp(QMainWindow):
                 self.current_cf = CFolder.open(folder_path)
                 self.current_profile = self.current_cf.profile
                 data = self.current_cf.load_signal(signal_factor=self.signal_factor, detector=detector)
+                # Sync the auto-detected detector back to data_handler so exports see the real name
+                detected = data.get('metadata', {}).get('detector', '')
+                if detected and detected != 'Unknown':
+                    self.data_handler.current_detector = detected
             elif folder_path.endswith('.D'):
                 # Legacy .D path — load directly via DataHandler
                 from logic.signal_profiles import SignalProfileRegistry
@@ -629,46 +658,73 @@ class ChromaKitApp(QMainWindow):
             # Show loading message
             self.status_bar.showMessage(f"Loading: {folder_path}")
             
-            # Process signal data if available
-            if 'x' in data and len(data['x']) > 0:
-                # Get raw data
-                raw_x = np.array(data['x'])
-                raw_y = np.array(data['y'])
-                
-                # Interpolate to standard length at load time
-                from logic.interpolation import interpolate_arrays
-                interp_x, interp_y = interpolate_arrays(raw_x, raw_y, target_length=10000)
-                
-                # Store both original and interpolated data
-                self.original_x = raw_x
-                self.original_y = raw_y
-                self.current_x = interp_x
-                self.current_y = interp_y
-                
-                # Process with current parameters and display
-                # Pass the active profile to process() for stage-gating and defaults
-                self.process_and_display(self.current_x, self.current_y, profile=self.current_profile)
-                
-                # Set flag that real data is loaded
+            # Detect GCxGC data
+            is_gcxgc = data.get('metadata', {}).get('is_gcxgc', False)
+            self._gcxgc_mode = is_gcxgc
+            
+            if is_gcxgc:
+                # GCxGC mode: render heatmaps using user-specified pm + phase shift
+                self._gcxgc_metadata = data['metadata']
+                # Inform the parameters panel whether .dbc.lsc is available
+                dbc_available = data['metadata'].get('dbc_lsc_path') is not None
+                self.parameters_frame.set_gcxgc_dbc_available(dbc_available)
+                params = self.parameters_frame.get_gcxgc_params()
+                from logic.loaders.sepsolve_loader import _reshape_to_2d
+                pm = params['pm']
+                hz = data['metadata']['hz']
+                phase_scans = int(params['phase_shift'] * hz)
+                scans_per_mod = int(pm * hz)
+                fid_2d = np.roll(_reshape_to_2d(data['metadata']['fid_1d'], scans_per_mod), phase_scans, axis=1)
+                tic_source_1d = (
+                    data['metadata']['dbc_tic_1d']
+                    if params.get('tic_source') == 'dbc' and data['metadata'].get('dbc_tic_1d') is not None
+                    else data['metadata']['tic_1d']
+                )
+                tic_2d = np.roll(_reshape_to_2d(tic_source_1d, scans_per_mod), phase_scans, axis=1)
+                self.plot_frame.render_gcxgc(fid_2d, tic_2d, pm, hz)
                 self.real_data_loaded = True
+            else:
+                # Process signal data if available
+                if 'x' in data and len(data['x']) > 0:
+                    # Get raw data
+                    raw_x = np.array(data['x'])
+                    raw_y = np.array(data['y'])
+                    
+                    # Interpolate to standard length at load time
+                    from logic.interpolation import interpolate_arrays
+                    interp_x, interp_y = interpolate_arrays(raw_x, raw_y, target_length=10000)
+                    
+                    # Store both original and interpolated data
+                    self.original_x = raw_x
+                    self.original_y = raw_y
+                    self.current_x = interp_x
+                    self.current_y = interp_y
+                    
+                    # Process with current parameters and display
+                    # Pass the active profile to process() for stage-gating and defaults
+                    self.process_and_display(self.current_x, self.current_y, profile=self.current_profile)
+                    
+                    # Set flag that real data is loaded
+                    self.real_data_loaded = True
             
             # Check if MS data is available from metadata
             has_ms_data = data.get('metadata', {}).get('has_ms_data', False)
-            
-            # Show or hide TIC plot based on MS data availability
-            self.plot_frame.set_tic_visible(has_ms_data)
-            
-            # Enable or disable MS tab
-            ms_tab_index = self.right_tabs.indexOf(self.ms_frame)
-            self.right_tabs.setTabEnabled(ms_tab_index, has_ms_data)
-            
-            # Plot TIC only if MS data is available
-            metadata = data.get('metadata', {})
-            if has_ms_data and metadata.get('tic_x') is not None:
-                self.plot_frame.plot_tic(metadata['tic_x'], metadata['tic_y'], new_file=True)
-            else:
-                if hasattr(self.plot_frame, 'clear_tic'):
-                    self.plot_frame.clear_tic()
+
+            if not self._gcxgc_mode:
+                # Show or hide TIC plot based on MS data availability
+                self.plot_frame.set_tic_visible(has_ms_data)
+
+                # Enable or disable MS tab
+                ms_tab_index = self.right_tabs.indexOf(self.ms_frame)
+                self.right_tabs.setTabEnabled(ms_tab_index, has_ms_data)
+
+                # Plot TIC only if MS data is available
+                metadata = data.get('metadata', {})
+                if has_ms_data and metadata.get('tic_x') is not None:
+                    self.plot_frame.plot_tic(metadata['tic_x'], metadata['tic_y'], new_file=True)
+                else:
+                    if hasattr(self.plot_frame, 'clear_tic'):
+                        self.plot_frame.clear_tic()
             
             # Update status bar with success message
             sample_name = os.path.basename(folder_path)
@@ -678,8 +734,9 @@ class ChromaKitApp(QMainWindow):
             # Enable export button
             self.button_frame.enable_export(True)
 
-            # Final display update
-            self.process_and_display(self.current_x, self.current_y, new_file=True, profile=self.current_profile)
+            # Final display update (skip for GCxGC mode)
+            if not self._gcxgc_mode:
+                self.process_and_display(self.current_x, self.current_y, new_file=True, profile=self.current_profile)
             
         except Exception as e:
             # Handle any errors during loading
@@ -710,6 +767,26 @@ class ChromaKitApp(QMainWindow):
         self.status_bar.showMessage(f"Selected point at x={x_value}")
         # Update the RT entry in the MS frame
         self.ms_frame.rt_entry.setText(str(x_value))
+    
+    def _on_gcxgc_peak_selected(self, peak) -> None:
+        """Handle peak click on GCxGC heatmap — display MS spectrum."""
+        if self._gcxgc_proc is None:
+            return
+        spectrum = self._gcxgc_proc.extract_spectrum(peak)
+        if spectrum:
+            import numpy as np
+            mz_arr = np.array([m for m, _ in spectrum])
+            int_arr = np.array([i for _, i in spectrum])
+            self.ms_frame.plot_mass_spectrum(
+                mz_arr, int_arr,
+                title=f"rt1={peak.rt1:.3f} min, rt2={peak.rt2:.3f} s"
+            )
+            # Switch to MS tab
+            ms_idx = self.right_tabs.indexOf(self.ms_frame)
+            self.right_tabs.setCurrentIndex(ms_idx)
+        self.status_bar.showMessage(
+            f"Peak {peak.peak_number}: rt1={peak.rt1:.3f} min, rt2={peak.rt2:.3f} s, vol={peak.volume:.0f}"
+        )
         
     @Slot(float, float, float)
     def on_view_spectrum(self, rt, subtract_rt, mz_shift):
@@ -1341,8 +1418,234 @@ class ChromaKitApp(QMainWindow):
             else:
                 self.status_bar.showMessage("No next sample available")
         
+    def _on_gcxgc_params_changed(self) -> None:
+        """Slot for lightweight GCxGC display parameter changes (e.g. TIC source toggle).
+        Only re-renders the heatmap — does not re-run baseline or peak detection."""
+        if self._gcxgc_mode and self._gcxgc_metadata:
+            self._run_gcxgc_processing()
+
+    def _run_gcxgc_processing(self) -> None:
+        """Run GCxGC processing: re-reshape with user pm, apply phase shift,
+        optionally apply 2D baseline correction, optionally detect peaks."""
+        from logic.gcxgc_processor import GCxGCProcessor
+        from logic.loaders.sepsolve_loader import _reshape_to_2d
+
+        meta = self._gcxgc_metadata
+        params = self.parameters_frame.get_gcxgc_params()
+
+        pm = params['pm']
+        hz = meta['hz']
+        phase_scans = int(params['phase_shift'] * hz)
+        scans_per_mod = int(pm * hz)
+
+        fid_2d = np.roll(_reshape_to_2d(meta['fid_1d'], scans_per_mod), phase_scans, axis=1)
+        tic_source_1d = (
+            meta['dbc_tic_1d']
+            if params.get('tic_source') == 'dbc' and meta.get('dbc_tic_1d') is not None
+            else meta['tic_1d']
+        )
+        tic_2d = np.roll(_reshape_to_2d(tic_source_1d, scans_per_mod), phase_scans, axis=1)
+
+        # Render heatmap with current pm/phase settings
+        self.plot_frame.render_gcxgc(fid_2d, tic_2d, pm, hz)
+
+        if not params['baseline_enabled'] and not params['peaks_enabled']:
+            self.status_bar.showMessage("GCxGC: heatmap updated (baseline and peak detection disabled)")
+            return
+
+        self.status_bar.showMessage("Running GCxGC processing…")
+
+        proc = GCxGCProcessor(
+            fid_2d=fid_2d,
+            tic_2d=tic_2d,
+            pm=pm,
+            hz=hz,
+            lsc_path=meta['lsc_path'],
+            phase_scans=phase_scans,
+            dbc_lsc_path=meta.get('dbc_lsc_path'),
+            use_dbc=params.get('use_dbc', True),
+        )
+
+        try:
+            if params['baseline_enabled']:
+                self.status_bar.showMessage("GCxGC: applying 2D baseline correction…")
+                proc.apply_baseline(lam=params['lam'], diff_order=params['diff_order'])
+                # Re-render with the corrected FID so user sees the change
+                self.plot_frame.render_gcxgc(proc._fid_corrected, tic_2d, pm, hz)
+
+            peaks = []
+            if params['peaks_enabled']:
+                self.status_bar.showMessage("GCxGC: detecting peaks…")
+                peaks = proc.detect_peaks(
+                    min_height=params['min_height'],
+                    min_prominence=params['min_prominence'],
+                    rt2_grouping_tolerance=params['rt2_grouping_tolerance'],
+                    min_sub_peaks=params['min_sub_peaks'],
+                )
+        except Exception as e:
+            self.status_bar.showMessage(f"GCxGC processing error: {e}")
+            import traceback; traceback.print_exc()
+            return
+
+        self._gcxgc_proc = proc
+        self._gcxgc_peaks = peaks
+        # Make peaks available to run_batch_ms_search via integrated_peaks
+        self.integrated_peaks = peaks
+        self.plot_frame._gcxgc_peaks = peaks
+        self.plot_frame.overlay_gcxgc_peaks(peaks)
+
+        if peaks:
+            self.button_frame.batch_search_button.setEnabled(True)
+            self._show_gcxgc_results_button(peaks)
+            self.status_bar.showMessage(f"GCxGC: detected {len(peaks)} peaks — click a peak to view spectrum, or use MS Search All")
+        else:
+            self.status_bar.showMessage(f"GCxGC: heatmap updated — no peaks detected")
+
+    def _show_gcxgc_results_button(self, peaks: list) -> None:
+        """Show/update the 'View Results' button in the status bar for GCxGC peaks."""
+        if hasattr(self, 'view_results_button'):
+            self.view_results_button.setVisible(True)
+            try:
+                self.view_results_button.clicked.disconnect()
+            except RuntimeError:
+                pass
+        else:
+            self.view_results_button = QPushButton("View Peak Results")
+            self.statusBar().addPermanentWidget(self.view_results_button)
+        self.view_results_button.clicked.connect(lambda: self._show_gcxgc_results(peaks))
+
+    def _show_gcxgc_results(self, peaks: list) -> None:
+        """Show GCxGC peak results in a dialog table."""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox
+        from PySide6.QtGui import QBrush, QColor
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("GCxGC Peak Results")
+        dialog.resize(900, 500)
+        layout = QVBoxLayout(dialog)
+
+        headers = ["Peak #", "RT1 (min)", "RT2 (s)", "Volume", "Modulations", "Compound", "Match Score"]
+        table = QTableWidget(len(peaks), len(headers))
+        table.setHorizontalHeaderLabels(headers)
+
+        for i, p in enumerate(peaks):
+            table.setItem(i, 0, QTableWidgetItem(str(p.peak_number)))
+            table.setItem(i, 1, QTableWidgetItem(f"{p.rt1:.3f}"))
+            table.setItem(i, 2, QTableWidgetItem(f"{p.rt2:.3f}"))
+            table.setItem(i, 3, QTableWidgetItem(f"{p.volume:.0f}"))
+            table.setItem(i, 4, QTableWidgetItem(str(p.n_sub_peaks)))
+            table.setItem(i, 5, QTableWidgetItem(p.compound_name or ""))
+            score_text = f"{p.match_score:.3f}" if p.match_score is not None else ""
+            score_item = QTableWidgetItem(score_text)
+            if p.match_score is not None:
+                color = QColor(0, 180, 0) if p.match_score >= 0.8 else (QColor(200, 130, 0) if p.match_score >= 0.5 else QColor(200, 0, 0))
+                score_item.setForeground(QBrush(color))
+            table.setItem(i, 6, score_item)
+
+        hdr = table.horizontalHeader()
+        for col in range(len(headers)):
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(5, QHeaderView.Stretch)
+        table.setSortingEnabled(True)
+        layout.addWidget(table)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+        dialog.exec()
+
+    def _run_gcxgc_batch_search(self) -> None:
+        """Run MS library search on all GCxGC detected peaks."""
+        from PySide6.QtWidgets import QProgressDialog
+        from PySide6.QtCore import Qt
+
+        if not hasattr(self.ms_frame, 'ms_toolkit') or not self.ms_frame.ms_toolkit:
+            self.status_bar.showMessage("MS toolkit not available")
+            return
+        if not self.ms_frame.library_loaded:
+            self.status_bar.showMessage("MS library not loaded")
+            return
+        if not self._gcxgc_peaks:
+            self.status_bar.showMessage("No GCxGC peaks — run peak detection first")
+            return
+        if self._gcxgc_proc is None:
+            self.status_bar.showMessage("No GCxGC processor — run peak detection first")
+            return
+
+        toolkit = self.ms_frame.ms_toolkit
+        try:
+            mz_shift = int(self.ms_frame.mz_shift_entry.text() or 0)
+            toolkit.mz_shift = mz_shift
+        except (ValueError, AttributeError):
+            pass
+
+        # Read search configuration from the MS frame — same source as manual search.
+        options = self.ms_frame.search_options if hasattr(self.ms_frame, 'search_options') else {}
+        method = options.get('search_method', 'vector')
+
+        peaks = self._gcxgc_peaks
+        progress = QProgressDialog("Searching MS library…", "Cancel", 0, len(peaks), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+
+        for i, peak in enumerate(peaks):
+            if progress.wasCanceled():
+                break
+            progress.setValue(i)
+            progress.setLabelText(f"Peak {i+1}/{len(peaks)}  rt1={peak.rt1:.2f} min")
+
+            spectrum = self._gcxgc_proc.extract_spectrum(peak)
+            if not spectrum:
+                continue
+            try:
+                if method == 'w2v':
+                    results = toolkit.search_w2v(
+                        spectrum,
+                        top_n=1,
+                        intensity_power=options.get('intensity_power', 0.6),
+                        top_k_clusters=options.get('top_k_clusters', 1),
+                    )
+                elif method == 'hybrid':
+                    results = toolkit.search_hybrid(
+                        spectrum,
+                        method=options.get('hybrid_method', 'auto'),
+                        top_n=1,
+                        intensity_power=options.get('intensity_power', 0.6),
+                        weighting_scheme=options.get('weighting', 'NIST_GC'),
+                        composite=(options.get('similarity') == 'composite'),
+                        unmatched_method=options.get('unmatched', 'keep_all'),
+                        top_k_clusters=options.get('top_k_clusters', 1),
+                    )
+                else:  # 'vector' (default)
+                    results = toolkit.search_vector(
+                        spectrum,
+                        top_n=1,
+                        composite=(options.get('similarity') == 'composite'),
+                        weighting_scheme=options.get('weighting', 'NIST_GC'),
+                        unmatched_method=options.get('unmatched', 'keep_all'),
+                        top_k_clusters=options.get('top_k_clusters', 1),
+                    )
+                if results:
+                    peak.compound_name = results[0][0]
+                    peak.match_score = float(results[0][1])
+            except Exception as e:
+                print(f"MS search error for peak {peak.peak_number}: {e}")
+
+        progress.setValue(len(peaks))
+        self.status_bar.showMessage(
+            f"GCxGC MS search complete ({method}): "
+            f"{sum(1 for p in peaks if p.compound_name)} / {len(peaks)} peaks matched"
+        )
+        self._show_gcxgc_results_button(peaks)
+        self.plot_frame.overlay_gcxgc_peaks(peaks)
+
     def on_integrate(self):
         """Handle integrate button click."""
+        # GCxGC mode: run 2D processing instead of 1D integration
+        if self._gcxgc_mode:
+            self._run_gcxgc_processing()
+            return
+        
         if not hasattr(self, 'current_processed') or self.current_processed is None:
             self.status_bar.showMessage("No data available for integration")
             return
@@ -1615,11 +1918,13 @@ class ChromaKitApp(QMainWindow):
 
     def _apply_rt_matching_to_peaks(self, peaks):
         """Apply RT table matching to integrated peaks."""
-        if not hasattr(self, 'rt_settings') or not self.rt_settings.get('enabled', False):
-            return
-        
         rt_table_frame = self.rt_table_frame
-        high_priority = self.rt_settings.get('high_priority', False)
+        # Use the frame's live state as the authoritative source so this works
+        # even when rt_settings was never emitted (e.g. app restarted with RT
+        # table already loaded but checkbox not toggled again this session).
+        if not rt_table_frame.is_enabled():
+            return
+        high_priority = rt_table_frame.high_priority_checkbox.isChecked()
         
         for peak in peaks:
             # Look up compound by retention time
@@ -2372,6 +2677,11 @@ class ChromaKitApp(QMainWindow):
 
     def run_batch_ms_search(self):
         """Run MS library search on all integrated peaks."""
+        # GCxGC mode uses its own spectrum extraction path
+        if self._gcxgc_mode:
+            self._run_gcxgc_batch_search()
+            return
+
         # Check if we have the required components
         if not hasattr(self.ms_frame, 'ms_toolkit') or not self.ms_frame.ms_toolkit:
             self.status_bar.showMessage("MS toolkit not available")

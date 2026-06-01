@@ -11,6 +11,12 @@ import os
 import json
 
 
+GCXGC_COLUMN_HEADERS = [
+    'Peak #', '1D RT (min)', '2D RT (s)', 'Volume',
+    'Compound', 'Score', 'CAS#', 'mol%', 'wt%',
+]
+
+
 class AddToRTTableDialog(QDialog):
     """Dialog for adding a peak to the RT table."""
     
@@ -238,6 +244,41 @@ class RTTableFrame(QWidget):
         """Update table headers to match the active signal profile (e.g., 'Wavenumber')."""
         labels = ["Compound", f"Start {position_label}", f"Apex {position_label}", f"End {position_label}"]
         self.table_widget.setHorizontalHeaderLabels(labels)
+    
+    def populate_gcxgc(self, peaks: list) -> None:
+        """Display GCxGC2DPeak results in the table.
+
+        Replaces whatever is currently shown with a flat peak results table.
+        Does not modify rt_table_data or affect compound matching.
+        """
+        from logic.gcxgc_peak import GCxGC2DPeak
+
+        self.table_widget.clearContents()
+        self.table_widget.setColumnCount(len(GCXGC_COLUMN_HEADERS))
+        self.table_widget.setHorizontalHeaderLabels(GCXGC_COLUMN_HEADERS)
+        self.table_widget.setRowCount(len(peaks))
+
+        for row, p in enumerate(peaks):
+            if not isinstance(p, GCxGC2DPeak):
+                continue
+            values = [
+                str(p.peak_number),
+                f"{p.rt1:.4f}",
+                f"{p.rt2:.4f}",
+                f"{p.volume:.2f}",
+                p.compound_name or '',
+                f"{p.match_score:.4f}" if p.match_score is not None else '',
+                p.casno or '',
+                f"{p.mol_percent:.4f}" if p.mol_percent is not None else '',
+                f"{p.wt_percent:.4f}" if p.wt_percent is not None else '',
+            ]
+            for col, val in enumerate(values):
+                item = QTableWidgetItem(val)
+                item.setTextAlignment(Qt.AlignCenter)
+                self.table_widget.setItem(row, col, item)
+
+        # Resize columns to content
+        self.table_widget.resizeColumnsToContents()
     
     def _init_settings(self):
         """Initialize RT matching settings."""

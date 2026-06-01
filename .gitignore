@@ -454,4 +454,9 @@ api/QUICKSTART.md
 api/IMPLEMENTATION_SUMMARY.md
 react-ui/UPDATE_SUMMARY.md
 docs/superpowers/
-deconvolution/adap-gc-source-reference/TRANSLATION_GUIDE*.md
+
+# ADAP-GC / mzmine Java reference source — kept locally, not committed
+deconvolution/adap-gc-source-reference/
+
+# Large example data (too big for GitHub)
+example GCxGC data/

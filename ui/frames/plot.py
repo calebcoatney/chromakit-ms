@@ -14,6 +14,9 @@ class PlotFrame(QWidget):
     # Signal to notify when a point has been selected on the plot
     point_selected = Signal(float)
     
+    # Signal for GCxGC peak selection
+    peak_selected = Signal(object)  # emits GCxGC2DPeak on heatmap click
+    
     # New signal for MS spectrum viewing
     ms_spectrum_requested = Signal(float)
     
@@ -71,6 +74,9 @@ class PlotFrame(QWidget):
         # Replace existing mouse click connection with new connections
         self.canvas.mpl_connect('button_press_event', self._on_plot_click)
         self.canvas.mpl_connect('button_release_event', self._on_button_release)
+        
+        # GCxGC mode state
+        self._gcxgc_peaks: list = []
         
         # Track click information
         self._click_time = 0
@@ -555,6 +561,11 @@ class PlotFrame(QWidget):
 
     def _on_plot_click(self, event):
         """Handle mouse button press on the plot."""
+        # GCxGC mode: delegate to gcxgc click handler
+        if hasattr(self, '_gcxgc_ax_fid'):
+            self._on_gcxgc_click(event)
+            return
+        
         if event.inaxes is None:
             return
             
@@ -1171,3 +1182,90 @@ class PlotFrame(QWidget):
         """Add a peak to the RT table."""
         # Emit signal to request adding peak to RT table
         self.add_to_rt_table_requested.emit(peak_index)
+    
+    def render_gcxgc(self, fid_2d, tic_2d, pm: float, hz: float) -> None:
+        """Replace line-plot axes with two stacked GCxGC heatmaps.
+
+        Top axis: TIC (identification context)
+        Bottom axis: FID (quantitation signal)
+        Both use linear normalization clipped at the 99th percentile, matching
+        the Gemini reference visualization so that near-zero background appears
+        dark rather than colored.
+        X: 1st dim RT (min), Y: 2nd dim RT (s), origin at bottom-left.
+        """
+        import numpy as np
+
+        self.figure.clear()
+        self.figure.set_constrained_layout(True)
+        ax_tic = self.figure.add_subplot(2, 1, 1)
+        ax_fid = self.figure.add_subplot(2, 1, 2, sharex=ax_tic, sharey=ax_tic)
+
+        n_mods = fid_2d.shape[0]
+        t1_max = n_mods * pm / 60.0
+        t2_max = pm
+        extent = [0, t1_max, 0, t2_max]
+
+        def _vmax(data):
+            """99th-percentile clip — keeps peaks visible without log distortion."""
+            return float(np.percentile(data, 99))
+
+        ax_tic.imshow(
+            tic_2d.T, aspect='auto', origin='lower',
+            cmap='viridis', vmin=0, vmax=_vmax(tic_2d), extent=extent,
+        )
+        ax_tic.set_ylabel("2D RT (s)")
+        ax_tic.set_title("TIC")
+        ax_tic.tick_params(labelbottom=False)
+
+        im = ax_fid.imshow(
+            fid_2d.T, aspect='auto', origin='lower',
+            cmap='viridis', vmin=0, vmax=_vmax(fid_2d), extent=extent,
+        )
+        ax_fid.set_xlabel("1st Dimension RT (min)")
+        ax_fid.set_ylabel("2D RT (s)")
+        ax_fid.set_title("FID")
+
+        self.figure.colorbar(im, ax=[ax_tic, ax_fid], label="Intensity")
+        self.canvas.draw()
+
+        self._gcxgc_ax_tic = ax_tic
+        self._gcxgc_ax_fid = ax_fid
+    
+    def overlay_gcxgc_peaks(self, peaks: list) -> None:
+        """Overlay detected peaks as red + markers on both heatmap axes."""
+        if not hasattr(self, '_gcxgc_ax_tic'):
+            return
+        self._gcxgc_peaks = peaks
+        rt1_vals = [p.rt1 for p in peaks]
+        rt2_vals = [p.rt2 for p in peaks]
+        for ax in (self._gcxgc_ax_tic, self._gcxgc_ax_fid):
+            for artist in getattr(ax, '_gcxgc_peak_scatter', []):
+                try:
+                    artist.remove()
+                except Exception:
+                    pass
+            sc = ax.scatter(rt1_vals, rt2_vals, c='red', s=15, marker='+',
+                            linewidths=0.8, zorder=5)
+            ax._gcxgc_peak_scatter = [sc]
+        self.canvas.draw()
+    
+    def _on_gcxgc_click(self, event) -> None:
+        """Map a click on the FID heatmap to the nearest GCxGC2DPeak."""
+        if event.inaxes is not getattr(self, '_gcxgc_ax_fid', None):
+            return
+        if not self._gcxgc_peaks:
+            return
+        clicked_rt1 = event.xdata
+        clicked_rt2 = event.ydata
+        if clicked_rt1 is None or clicked_rt2 is None:
+            return
+        rt1_range = self._gcxgc_ax_fid.get_xlim()
+        rt2_range = self._gcxgc_ax_fid.get_ylim()
+        rt1_scale = (rt1_range[1] - rt1_range[0]) or 1
+        rt2_scale = (rt2_range[1] - rt2_range[0]) or 1
+        best = min(
+            self._gcxgc_peaks,
+            key=lambda p: ((p.rt1 - clicked_rt1) / rt1_scale) ** 2
+                        + ((p.rt2 - clicked_rt2) / rt2_scale) ** 2,
+        )
+        self.peak_selected.emit(best)

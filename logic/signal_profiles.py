@@ -138,4 +138,31 @@ def _update_chromatographic_profiles(feature_class) -> None:
             SignalProfileRegistry._profiles[name].feature_class = feature_class
 
 
+def _register_gcxgc_profile() -> None:
+    from logic.loaders.sepsolve_loader import SepSolveLoader
+    SignalProfileRegistry.register(SignalProfile(
+        name="gcxgc",
+        display_name="GCxGC-TOFMS/FID",
+        feature_class=None,   # set by _update_gcxgc_profile() after GCxGC2DPeak is defined
+        loader_class=SepSolveLoader,
+        x_label="1st Dimension RT (min)",
+        y_label="2nd Dimension RT (s)",
+        pipeline_stages=[
+            PipelineStage.BASELINE,
+            PipelineStage.PEAKS,
+            PipelineStage.MS_SEARCH,
+            PipelineStage.QUANTITATION,
+        ],
+        ui_mode="gcxgc",
+        default_params={},
+    ))
+
+
+def _update_gcxgc_profile(feature_class) -> None:
+    """Called by logic/gcxgc_peak.py after GCxGC2DPeak is defined."""
+    if "gcxgc" in SignalProfileRegistry._profiles:
+        SignalProfileRegistry._profiles["gcxgc"].feature_class = feature_class
+
+
 _register_builtin_profiles()
+_register_gcxgc_profile()

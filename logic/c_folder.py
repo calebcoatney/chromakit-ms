@@ -74,6 +74,56 @@ class CFolder:
         return folder
 
     @staticmethod
+    def create_multi(source_paths: list[str], signal_type: str, **metadata) -> "CFolder":
+        """Create a .C folder from multiple source files (e.g. SepSolve .rsd + .dbc.lsc).
+
+        All source files are moved into data/. The .C folder is named after the
+        stem of the first file in source_paths (expected to be the .rsd file).
+        """
+        if not source_paths:
+            raise ValueError("source_paths must not be empty")
+
+        first = source_paths[0]
+        base = os.path.splitext(os.path.basename(first))[0]
+        parent = os.path.dirname(os.path.abspath(first))
+        c_path = os.path.join(parent, base + ".C")
+
+        if os.path.exists(c_path):
+            raise FileExistsError(f".C folder already exists: {c_path}")
+
+        moved: list[tuple[str, str]] = []
+        try:
+            os.makedirs(os.path.join(c_path, "data"))
+            os.makedirs(os.path.join(c_path, "results"))
+
+            for src in source_paths:
+                dest = os.path.join(c_path, "data", os.path.basename(src))
+                shutil.move(src, dest)
+                moved.append((dest, src))
+
+            sample_timestamp = metadata.pop("sample_timestamp", None)
+            manifest = {
+                "signal_type": signal_type,
+                "source_format": "sepsolve",
+                "created": sample_timestamp or datetime.datetime.now().isoformat(),
+                **metadata,
+            }
+            with open(os.path.join(c_path, "manifest.json"), "w") as f:
+                json.dump(manifest, f, indent=2)
+
+        except Exception:
+            for dest, src in moved:
+                if os.path.exists(dest) and not os.path.exists(src):
+                    shutil.move(dest, src)
+            if os.path.exists(c_path):
+                shutil.rmtree(c_path, ignore_errors=True)
+            raise
+
+        folder = CFolder(c_path)
+        folder._manifest = manifest
+        return folder
+
+    @staticmethod
     def open(path: str) -> "CFolder":
         manifest_path = os.path.join(path, "manifest.json")
         if not os.path.isfile(manifest_path):
@@ -156,6 +206,10 @@ class CFolder:
         Returns the restored path. If *delete_wrapper* is True the .C folder
         is removed after extraction (results/ will be lost).
         """
+        if self.get_manifest().get("source_format") == "sepsolve":
+            raise NotImplementedError(
+                "CFolder.extract() is not supported for multi-file SepSolve sources."
+            )
         data_dir = os.path.join(self.path, "data")
         if not os.path.isdir(data_dir):
             raise FileNotFoundError(f"No data/ directory in {self.path}")

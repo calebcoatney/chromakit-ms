@@ -367,14 +367,29 @@ def _resolve_export_context(path: str, detector: str) -> tuple:
         with open(os.path.join(path, 'manifest.json')) as f:
             manifest = json.load(f)
         sample_id = manifest.get('sample_id', '') or os.path.splitext(os.path.basename(path))[0]
-        meta = {
-            'sample_id': sample_id,
-            'timestamp': manifest.get('created', datetime.datetime.now().isoformat()),
-            'method': '',
-            'detector': detector,
-            'signal': '',
-            'notebook': sample_id,
-        }
+
+        # Try to scrape rich metadata from the .D folder inside data/
+        data_dir = os.path.join(path, 'data')
+        d_folders = [
+            os.path.join(data_dir, name)
+            for name in os.listdir(data_dir)
+            if name.endswith('.D') and os.path.isdir(os.path.join(data_dir, name))
+        ] if os.path.isdir(data_dir) else []
+
+        if d_folders:
+            meta = scrape_metadata_from_d_directory(d_folders[0], detector)
+            # Prefer the manifest sample_id over whatever rainbow returns
+            meta['sample_id'] = sample_id
+        else:
+            meta = {
+                'sample_id': sample_id,
+                'timestamp': manifest.get('created', datetime.datetime.now().isoformat()),
+                'method': '',
+                'detector': detector,
+                'signal': '',
+                'notebook': sample_id,
+            }
+
         results_dir = os.path.join(path, 'results')
         os.makedirs(results_dir, exist_ok=True)
         json_path = os.path.join(results_dir, f"{sample_id} - {detector}.json")

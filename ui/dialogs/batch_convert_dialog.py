@@ -21,7 +21,7 @@ def _detect_signal_type(d_path: str) -> str:
     return "gcms" if os.path.isfile(os.path.join(d_path, "data.ms")) else "gc"
 
 
-_DISPLAY_TO_KEY = {"GC-MS": "gcms", "GC": "gc", "FTIR": "ftir", "UV-Vis": "uvvis"}
+_DISPLAY_TO_KEY = {"GC-MS": "gcms", "GC": "gc", "FTIR": "ftir", "UV-Vis": "uvvis", "GCxGC-TOFMS/FID": "gcxgc"}
 _KEY_TO_DISPLAY = {v: k for k, v in _DISPLAY_TO_KEY.items()}
 
 _TIMESTAMP_PATTERNS = [
@@ -43,6 +43,55 @@ def _extract_timestamp(filename: str) -> str | None:
     return None
 
 
+def _find_sepsolve_stems(directory: str) -> dict[str, list[str]]:
+    """Scan a directory for SepSolve file groups sharing a common stem.
+
+    A valid group must contain at least one .rsd file and one .dbc.lsc file.
+    All files sharing the .rsd file's stem (e.g. 'Sample A') are grouped.
+
+    Returns:
+        dict mapping stem → list of absolute file paths in that group
+    """
+    by_stem: dict[str, list[str]] = {}
+    rsd_stems: set[str] = set()
+
+    for fname in os.listdir(directory):
+        fpath = os.path.join(directory, fname)
+        if not os.path.isfile(fpath):
+            continue
+        lower = fname.lower()
+        if lower.endswith('.rsd'):
+            stem = os.path.splitext(fname)[0]
+            rsd_stems.add(stem)
+            by_stem.setdefault(stem, []).append(fpath)
+        elif (lower.endswith('.dbc.lsc') or lower.endswith('.lsc') or
+              lower.endswith('.hdr') or lower.endswith('.dat') or lower.endswith('.dax')):
+            by_stem.setdefault('__pending__' + fname, [fpath])
+
+    # Assign non-rsd files to their stem
+    grouped: dict[str, list[str]] = {s: paths for s, paths in by_stem.items()
+                                     if s in rsd_stems}
+    for key, paths in by_stem.items():
+        if not key.startswith('__pending__'):
+            continue
+        fpath = paths[0]
+        fname = os.path.basename(fpath)
+        for stem in rsd_stems:
+            if fname.startswith(stem):
+                grouped.setdefault(stem, []).append(fpath)
+                break
+
+    # Keep only groups with both .rsd and .dbc.lsc
+    valid: dict[str, list[str]] = {}
+    for stem, paths in grouped.items():
+        lowers = [os.path.basename(p).lower() for p in paths]
+        if (any(p.endswith('.rsd') for p in lowers) and
+                any(p.endswith('.dbc.lsc') for p in lowers)):
+            valid[stem] = paths
+
+    return valid
+
+
 # ---------------------------------------------------------------------------
 # Convert to .C
 # ---------------------------------------------------------------------------
@@ -55,8 +104,9 @@ class BatchConvertDialog(QDialog):
         self.setWindowTitle("Batch Convert to .C")
         self.setMinimumSize(820, 600)
         self._source_paths: list[str] = []
-        self._row_types: list[str] = []   # "d" | "reactir" | "avantes" | "generic"
+        self._row_types: list[str] = []   # "d" | "reactir" | "avantes" | "generic" | "sepsolve"
         self._has_generic_csvs = False
+        self._sepsolve_files: dict[int, list[str]] = {}
         self._build_ui()
 
     def _build_ui(self):
@@ -66,6 +116,8 @@ class BatchConvertDialog(QDialog):
         btn_row = QHBoxLayout()
         self._add_d_btn = QPushButton("Add .D Folders…")
         self._add_d_btn.clicked.connect(self._add_d_folders)
+        self._add_gcxgc_btn = QPushButton("Add GCxGC Files…")
+        self._add_gcxgc_btn.clicked.connect(self._add_gcxgc_files)
         self._add_reactir_btn = QPushButton("Add ReactIR Files…")
         self._add_reactir_btn.clicked.connect(self._add_reactir_files)
         self._add_avantes_btn = QPushButton("Add Avantes UV-Vis File…")
@@ -75,6 +127,7 @@ class BatchConvertDialog(QDialog):
         self._clear_btn = QPushButton("Clear All")
         self._clear_btn.clicked.connect(self._clear_all)
         btn_row.addWidget(self._add_d_btn)
+        btn_row.addWidget(self._add_gcxgc_btn)
         btn_row.addWidget(self._add_reactir_btn)
         btn_row.addWidget(self._add_avantes_btn)
         btn_row.addWidget(self._add_csv_btn)
@@ -187,6 +240,32 @@ class BatchConvertDialog(QDialog):
                 detected = _detect_signal_type(p)
                 self._add_row(p, "d", display_type=_KEY_TO_DISPLAY.get(detected, "GC"))
 
+    def _add_gcxgc_files(self):
+        dir_path = QFileDialog.getExistingDirectory(
+            self, "Select directory containing SepSolve GCxGC files"
+        )
+        if not dir_path:
+            return
+        stems = _find_sepsolve_stems(dir_path)
+        if not stems:
+            QMessageBox.information(
+                self, "No GCxGC Files Found",
+                "No SepSolve GCxGC file groups found in the selected directory.\n"
+                "Expected: at least one .rsd and one .dbc.lsc file sharing a common stem."
+            )
+            return
+        for stem, file_paths in sorted(stems.items()):
+            # Use first file path to derive parent directory; key on stem name
+            key = os.path.join(dir_path, stem)
+            if key not in self._source_paths:
+                self._add_row(
+                    key, "sepsolve",
+                    dest_name=stem + ".C",
+                    display_type="GCxGC-TOFMS/FID",
+                )
+                # Store file list for this stem on the row index
+                self._sepsolve_files[len(self._source_paths) - 1] = file_paths
+
     def _add_reactir_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Select ReactIR CSV files", "", "CSV files (*.csv)"
@@ -290,6 +369,7 @@ class BatchConvertDialog(QDialog):
         self._source_paths.clear()
         self._row_types.clear()
         self._has_generic_csvs = False
+        self._sepsolve_files.clear()
         self._csv_group.setVisible(False)
         self._preview_table.setVisible(False)
         self._preview_label.setVisible(False)
@@ -321,6 +401,23 @@ class BatchConvertDialog(QDialog):
                         if ts:
                             kwargs["sample_timestamp"] = ts
                     CFolder.create(path, signal_type, **kwargs)
+
+                elif row_type == "sepsolve":
+                    file_paths = self._sepsolve_files.get(row, [])
+                    if not file_paths:
+                        errors.append(f"{os.path.basename(path)}: no files found")
+                        continue
+                    kwargs = {}
+                    if extract_ts:
+                        ts = _extract_timestamp(os.path.basename(path))
+                        if ts:
+                            kwargs["sample_timestamp"] = ts
+                    CFolder.create_multi(
+                        file_paths,
+                        signal_type='gcxgc',
+                        sample_id=os.path.basename(path),
+                        **kwargs,
+                    )
 
                 elif row_type == "reactir":
                     ts = _extract_timestamp(os.path.basename(path)) if extract_ts else None

@@ -212,7 +212,11 @@ class ProcessingThread(QThread):
                        'mol_percent', 'wt_percent'}
         _int_keys = {'peak_number', 'num_carbons'}
 
-        raw = peak.get(key)
+        # 'Compound ID' in the config maps to 'compound_id' in serialized peak dicts
+        if key == 'Compound ID':
+            raw = peak.get('Compound ID') or peak.get('compound_id')
+        else:
+            raw = peak.get(key)
         if raw is None:
             return ""
         try:
@@ -265,22 +269,31 @@ class ProcessingThread(QThread):
         # by the timestamp in the first JSON file of each directory.
         dir_file_pairs = []
         for root, _, files in os.walk(directory):
-            json_files = sorted(f for f in files if f.endswith('.json'))
+            json_files = sorted(
+                f for f in files
+                if f.endswith('.json') and not f.startswith('._') and f != 'manifest.json'
+            )
             if json_files:
                 dir_file_pairs.append((root, json_files))
 
         def _dir_sort_key(pair):
-            """Return a datetime for the first JSON file in the directory."""
+            """Return a (datetime, path) tuple for stable chronological sort.
+
+            Path is used as a tiebreaker so that samples with identical or
+            unparseable timestamps (e.g. all written during the same batch run)
+            still sort by directory name, which for Agilent sequential sample
+            IDs (SIG14970, SIG14971, …) equals run order.
+            """
             root, jfiles = pair
             try:
                 with open(os.path.join(root, jfiles[0]), 'r', encoding='utf-8') as fh:
                     ts = json.load(fh).get('timestamp', '')
                 dt = _parse_timestamp(str(ts)) if ts else None
                 if dt is not None:
-                    return dt
+                    return (dt, root)
             except Exception:
                 pass
-            return datetime.datetime.max  # unparseable → sort to end
+            return (datetime.datetime.max, root)  # unparseable → sort to end
 
         dir_file_pairs.sort(key=_dir_sort_key)
 
