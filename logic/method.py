@@ -52,7 +52,6 @@ class BaselineParams(BaseModel):
     lambda_: float = Field(default=1e4, alias="lambda")
     asymmetry: float = 0.01
     baseline_offset: float = Field(default=0.0)
-    align_tic: bool = Field(default=False, description="Align MS TIC to FID time axis")
     break_points: Optional[List[BreakPoint]] = Field(default=None)
     fastchrom: Optional[FastchromParams] = Field(default=None)
 

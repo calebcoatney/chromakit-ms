@@ -100,14 +100,6 @@ class ExportRequest(BaseModel):
     options: Optional[Dict[str, Any]] = None
 
 
-class AlignTICRequest(BaseModel):
-    """Request to align TIC to FID."""
-    fid_time: List[float]
-    fid_signal: List[float]
-    tic_time: List[float]
-    tic_signal: List[float]
-
-
 class AssignmentRequest(BaseModel):
     """Request to save a manual assignment."""
     retention_time: float
@@ -185,13 +177,6 @@ class SpectrumResponse(BaseModel):
     rt: float
     mz: List[float]
     intensities: List[float]
-
-
-class AlignTICResponse(BaseModel):
-    """Response from TIC alignment."""
-    aligned_time: List[float]
-    aligned_signal: List[float]
-    lag_seconds: float
 
 
 class NavigationResponse(BaseModel):

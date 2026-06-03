@@ -68,8 +68,6 @@ class PlotFrame(QWidget):
         # Initialize data for storage
         self.chromatogram_data = None
         self.tic_data = None
-        self.aligned_tic_data = None  # New attribute for aligned TIC data
-        self.tic_alignment_info = None  # Store alignment metadata
         self.ms_time_offset: float = 0.0
         
         # Replace existing mouse click connection with new connections
@@ -984,12 +982,6 @@ class PlotFrame(QWidget):
         self.ms_time_offset = float(offset_min)
         if self.tic_data is not None and len(self.tic_data.get('x', [])) > 0:
             self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
-
-    def set_aligned_tic_data(self, aligned_time, aligned_signal, lag_seconds):
-        """Store the aligned TIC data."""
-        self.aligned_tic_data = {'x': aligned_time, 'y': aligned_signal}
-        self.tic_alignment_info = {'lag_seconds': lag_seconds}
-        print(f"Stored aligned TIC data with lag of {lag_seconds:.4f} seconds")
 
     def set_tic_visible(self, visible: bool):
         """Set the visibility of the TIC plot.

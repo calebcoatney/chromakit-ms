@@ -30,7 +30,7 @@ def test_apply_offset_from_sidecar_when_missing_resets_to_zero(tmp_path, monkeyp
     assert dh.ms_time_offset == 0.0
 
 
-def test_extract_spectrum_at_rt_signature_drops_aligned_tic_data():
-    """The old vestigial `aligned_tic_data` kwarg must be removed."""
+def test_extract_spectrum_at_rt_signature_drops_legacy_alignment_kwarg():
+    """The old vestigial TIC alignment kwarg must be removed."""
     sig = inspect.signature(DataHandler.extract_spectrum_at_rt)
-    assert "aligned_tic_data" not in sig.parameters
+    assert len(sig.parameters) == 2

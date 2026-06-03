@@ -44,7 +44,6 @@ class ParametersFrame(QWidget):
                 'lambda': 1e4,      # Changed from 1e6 to 1e4
                 'asymmetry': 0.01,
                 'baseline_offset': 0.0,
-                'align_tic': False,  # Add alignment option
                 'break_points': [],  # List of {'time': float, 'tolerance': float}
                 'fastchrom': {
                     'half_window': None,
@@ -436,17 +435,6 @@ class ParametersFrame(QWidget):
         ms_baseline_layout.addWidget(self.ms_baseline_button)
         
         advanced_layout.addWidget(ms_baseline_frame)
-        
-        # Add TIC alignment checkbox
-        self.align_tic = QCheckBox("Align TIC with FID")
-        self.align_tic.setChecked(self.current_params['baseline'].get('align_tic', False))
-        self.align_tic.stateChanged.connect(self._on_align_tic_toggled)
-        advanced_layout.addWidget(self.align_tic)
-        
-        # Add explanation label
-        align_info = QLabel("Corrects for small time delays between FID and MS detectors")
-        align_info.setStyleSheet("color: #666666; font-size: 10px;")
-        advanced_layout.addWidget(align_info)
         
         # Break point controls for segmented baseline fitting
         bp_frame = QFrame()
@@ -1567,24 +1555,6 @@ class ParametersFrame(QWidget):
             if key in self.section_groups:
                 self.section_groups[key].setVisible(visible)
 
-    def _on_align_tic_toggled(self, state):
-        """Handle TIC alignment toggle."""
-        align_tic = bool(state)
-        
-        # Ensure the baseline dictionary has the align_tic key
-        if 'align_tic' not in self.current_params['baseline']:
-            self.current_params['baseline']['align_tic'] = align_tic
-        else:
-            self.current_params['baseline']['align_tic'] = align_tic
-        
-        # Provide visual feedback
-        if align_tic:
-            print("TIC alignment enabled - will align MS data to FID")
-        else:
-            print("TIC alignment disabled")
-        
-        self.parameters_changed.emit(self.current_params)
-    
     def _on_shoulders_toggled(self, state):
         """Handle shoulder detection enable/disable toggle"""
         enabled = bool(state)

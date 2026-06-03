@@ -25,7 +25,7 @@ _GUI_PARAMS = {
     },
     "baseline": {
         "show_corrected": False, "method": "arpls", "lambda": 1e4,
-        "asymmetry": 0.01, "baseline_offset": 0.0, "align_tic": False,
+        "asymmetry": 0.01, "baseline_offset": 0.0,
         "break_points": [], "fastchrom": {"half_window": None, "smooth_half_window": None},
     },
     "peaks": {

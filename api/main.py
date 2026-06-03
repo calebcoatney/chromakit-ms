@@ -13,7 +13,6 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-import numpy as np
 
 # Add parent directory to path to import logic modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -27,7 +26,6 @@ from api.models import (
     ProcessRequest, ProcessResponse,
     IntegrateRequest, IntegrateResponse,
     SpectrumRequest, SpectrumResponse,
-    AlignTICRequest, AlignTICResponse,
     AssignmentRequest, ScalingFactorsRequest,
     NavigationResponse,
     ExportRequest,
@@ -239,29 +237,6 @@ async def extract_spectrum(request: SpectrumRequest):
         )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── TIC Alignment ───────────────────────────────────────────────────
-
-@app.post("/api/align-tic", response_model=AlignTICResponse)
-async def align_tic(request: AlignTICRequest):
-    """Align TIC signal to FID using cross-correlation."""
-    try:
-        fid_time = np.array(request.fid_time)
-        fid_signal = np.array(request.fid_signal)
-        tic_time = np.array(request.tic_time)
-        tic_signal = np.array(request.tic_signal)
-
-        aligned_time, aligned_signal, lag = processor.align_tic_to_fid(
-            fid_time, fid_signal, tic_time, tic_signal,
-        )
-        return AlignTICResponse(
-            aligned_time=aligned_time.tolist(),
-            aligned_signal=aligned_signal.tolist(),
-            lag_seconds=float(lag),
-        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
