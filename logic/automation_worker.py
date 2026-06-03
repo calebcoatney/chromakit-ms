@@ -817,6 +817,7 @@ class AutomationWorker(QRunnable):
                     data_dir_path,
                     detector,
                     processing_params=proc_params,
+                    ms_time_offset=float(getattr(getattr(self.app, 'data_handler', None), 'ms_time_offset', 0.0)),
                 )
             
             if success:

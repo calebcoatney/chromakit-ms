@@ -453,6 +453,7 @@ async def run_pipeline(request: RunRequest):
             d_path=request.data_path,
             detector=data_handler.current_detector,
             processing_params=raw_params,
+            ms_time_offset=float(getattr(data_handler, 'ms_time_offset', 0.0)),
         )
 
         # 6. Determine output file path

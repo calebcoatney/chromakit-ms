@@ -131,7 +131,6 @@ def _build_processing_metadata(processing_params: Optional[Dict],
     break_points = bl.get('break_points', [])
     if break_points:
         bl_info['break_points'] = break_points
-    bl_info['align_tic'] = bl.get('align_tic', False)
     meta['baseline'] = bl_info
 
     # --- Peak detection ---
@@ -225,7 +224,9 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
                                       detector: str = "FID1A",
                                       quantitation_settings: Optional[Dict] = None,
                                       processing_params: Optional[Dict] = None,
-                                      scaling_factors: Optional[Dict] = None) -> bool:
+                                      scaling_factors: Optional[Dict] = None,
+                                      ms_time_offset: float = 0.0,
+                                      ms_time_offset_source: Optional[str] = None) -> bool:
     """
     Export integration results to JSON file with metadata.
 
@@ -250,6 +251,8 @@ def export_integration_results_to_json(peaks: List[Any], d_path: str,
             'detector': metadata['detector'],
             'signal': metadata['signal'],
             'notebook': metadata['notebook'],
+            'ms_time_offset': float(ms_time_offset),
+            'ms_time_offset_source': ms_time_offset_source,
             'peaks': []
         }
 
@@ -282,7 +285,9 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
                                      detector: str = "FID1A",
                                      quantitation_settings: Optional[Dict] = None,
                                      processing_params: Optional[Dict] = None,
-                                     scaling_factors: Optional[Dict] = None) -> bool:
+                                     scaling_factors: Optional[Dict] = None,
+                                     ms_time_offset: float = 0.0,
+                                     ms_time_offset_source: Optional[str] = None) -> bool:
     """
     Update existing JSON file with MS search results.
 
@@ -312,8 +317,12 @@ def update_json_with_ms_search_results(peaks: List[Any], d_path: str,
                 'detector': metadata['detector'],
                 'signal': metadata['signal'],
                 'notebook': metadata['notebook'],
+                'ms_time_offset': float(ms_time_offset),
+                'ms_time_offset_source': ms_time_offset_source,
                 'peaks': []
             }
+        result_data['ms_time_offset'] = float(ms_time_offset)
+        result_data['ms_time_offset_source'] = ms_time_offset_source
         
         # Update peaks with MS search results
         updated_peaks = [_serialize_peak(peak) for peak in peaks]

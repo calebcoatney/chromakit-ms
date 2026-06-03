@@ -60,7 +60,11 @@ def test_json_export_integration(tmp_path):
     peak.Qual = 90
     
     d_path = str(tmp_path)
-    export_integration_results_to_json([peak], d_path, detector="FID1")
+    export_integration_results_to_json(
+        [peak], d_path, detector="FID1",
+        ms_time_offset=-0.048,
+        ms_time_offset_source="manual",
+    )
     
     # Find the JSON file - name depends on d_path basename
     json_files = list(tmp_path.glob("*.json"))
@@ -76,6 +80,8 @@ def test_json_export_integration(tmp_path):
     # Let's see what as_dict() actually returns for P1.
     assert data["peaks"][0]["compound_id"] == "P1"
     assert data["peaks"][0]["Qual"] == 90.0
+    assert data["ms_time_offset"] == pytest.approx(-0.048)
+    assert data["ms_time_offset_source"] == "manual"
 
 def test_csv_export_integration(tmp_path):
     peak = ChromatographicPeak(

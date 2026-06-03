@@ -113,15 +113,34 @@ class ExportManager:
         elif detector is None:
             detector = 'Unknown'
 
+        ms_time_offset = 0.0
+        ms_time_offset_source = None
+        if self.app and hasattr(self.app, 'data_handler'):
+            ms_time_offset = float(getattr(self.app.data_handler, 'ms_time_offset', 0.0))
+            try:
+                from logic.sidecar_offsets import DEFAULT_SIDECAR_PATH, load_offset
+                data_path = getattr(self.app.data_handler, 'current_directory_path', None)
+                if data_path:
+                    entry = load_offset(str(data_path), sidecar_path=DEFAULT_SIDECAR_PATH)
+                    ms_time_offset_source = entry.source if entry else None
+            except Exception:
+                ms_time_offset_source = None
+
         # Export JSON if enabled for this trigger
         if self.should_export_json(trigger_type):
             try:
                 if is_update:
                     from logic.json_exporter import update_json_with_ms_search_results
-                    success = update_json_with_ms_search_results(peaks, d_path, detector, quantitation_settings, processing_params, scaling_factors)
+                    success = update_json_with_ms_search_results(
+                        peaks, d_path, detector, quantitation_settings, processing_params,
+                        scaling_factors, ms_time_offset, ms_time_offset_source
+                    )
                 else:
                     from logic.json_exporter import export_integration_results_to_json
-                    success = export_integration_results_to_json(peaks, d_path, detector, quantitation_settings, processing_params, scaling_factors)
+                    success = export_integration_results_to_json(
+                        peaks, d_path, detector, quantitation_settings, processing_params,
+                        scaling_factors, ms_time_offset, ms_time_offset_source
+                    )
                 
                 result['json'] = success
                 if success:
