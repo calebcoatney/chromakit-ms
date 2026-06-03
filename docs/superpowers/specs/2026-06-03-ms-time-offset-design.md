@@ -46,7 +46,7 @@ The following currently read `ms.xlabels` directly and must be migrated to `shif
 - `logic/spectrum_extractor.py` (lines 46, 49, 180–419) — per-peak MS spectrum extraction.
 - `logic/eic_extractor.py` (lines 39–47) — EIC time axis for deconvolution input.
 - `logic/spectral_deconv_runner.py` (lines 188–189) — window-bound resolution and downstream component RTs.
-- `ui/dialogs/spectral_deconv_inspector.py` (lines 375–380) — the inspector independently re-opens MS; reuse the same helper, parameterized by the inspector's current preview offset (see §4).
+- `ui/dialogs/spectral_deconv_inspector.py` (lines 375–380) — the inspector independently re-opens MS; reuse the same helper, parameterized by the inspector's current **preview** offset (the live slider value), which is distinct from the applied `DataHandler.ms_time_offset`. The slider is initialized from `DataHandler.ms_time_offset` when the inspector opens; changes are only persisted on "Apply globally".
 
 `ChromatogramProcessor.align_tic_to_fid` (`logic/processor.py:657`) is **kept** as the backend for the inspector's "Auto" button. It is no longer applied as a transformation; it only suggests an offset value.
 
@@ -64,7 +64,8 @@ A new "MS Time Offset" group is added at the top of the existing parameters pane
 - **Slider:** integer steps over the range ±500, mapped to ±0.500 min in 0.001 min increments (1 ms resolution, ample for GC). Live readout in both minutes (4 decimal places) and seconds (2 decimal places).
 - **Auto button:** runs `ChromatogramProcessor.align_tic_to_fid` on the current file's FID and TIC, sets the slider to the returned lag. Records the source as `"auto"`.
 - **Reset button:** sets slider to 0.
-- **Live preview:** moving the slider re-renders the inspector's scatter and EIC subplots with shifted MS data while keeping the FID dashed lines fixed. Cheap because the deconvolution result is cached on the dialog; only the x-axis vector for plotted MS-side items needs to be recomputed.
+- **Live preview:** moving the slider re-renders the inspector's scatter and EIC subplots with shifted MS data while keeping the FID dashed lines fixed. The deconvolution result is cached on the dialog from the last "Preview" or "Apply & Rerun", so live scrubbing only recomputes the x-axis vector for plotted MS-side items — no re-extraction or re-deconvolution.
+- **Source tracking:** clicking **Auto** sets `source = "auto"`. Any subsequent manual slider movement before "Apply globally" promotes `source = "manual"`.
 - **Apply globally:** writes the current slider value to `DataHandler.ms_time_offset`, writes the sidecar (§5.1), triggers a `SpectralDeconvWorker` rerun via the existing `_on_inspector_rerun_requested` path (`ui/app.py:3147`) so `peak.deconvolved_spectrum` and `peak.deconvolution_component_count` reflect the new matches, then closes the inspector. A status bar message reports the applied value and warns that downstream library search results may be stale.
 
 ## 5. Persistence
