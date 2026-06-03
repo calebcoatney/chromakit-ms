@@ -638,6 +638,8 @@ class ChromaKitApp(QMainWindow):
             self.data_handler.has_ms_data = has_ms_data
             if hasattr(self, 'ms_frame'):
                 self.ms_frame.set_data_path(self._get_ms_data_path())
+            if hasattr(self.plot_frame, 'set_ms_time_offset'):
+                self.plot_frame.set_ms_time_offset(getattr(self.data_handler, 'ms_time_offset', 0.0))
             
             # Build navigation list for prev/next sample buttons.
             # For .D paths this is already done inside load_data_directory().
@@ -729,7 +731,13 @@ class ChromaKitApp(QMainWindow):
             # Update status bar with success message
             sample_name = os.path.basename(folder_path)
             ms_status = "with" if has_ms_data else "without"
-            self.status_bar.showMessage(f"Loaded: {sample_name} - {ms_status} MS data")
+            offset_min = getattr(self.data_handler, 'ms_time_offset', 0.0)
+            if offset_min != 0.0:
+                self.status_bar.showMessage(
+                    f"Loaded: {sample_name} - {ms_status} MS data; MS offset active: {offset_min:+.4f} min"
+                )
+            else:
+                self.status_bar.showMessage(f"Loaded: {sample_name} - {ms_status} MS data")
             
             # Enable export button
             self.button_frame.enable_export(True)
@@ -3023,6 +3031,7 @@ class ChromaKitApp(QMainWindow):
             ms_data_path=self._get_ms_data_path(),
             deconv_params=deconv_params,
             grouping_params=grouping_params,
+            ms_time_offset=self.data_handler.ms_time_offset,
         )
 
         progress_dialog = QProgressDialog(
@@ -3138,10 +3147,18 @@ class ChromaKitApp(QMainWindow):
             deconv_params=deconv_params,
             grouping_params=grouping_params,
             initial_peak_index=peak_index,
+            initial_offset_min=self.data_handler.ms_time_offset,
+            fid_time=getattr(self, 'current_x', None),
+            fid_signal=getattr(self, 'current_y', None),
+            tic_time=(self.plot_frame.tic_data or {}).get('x') if getattr(self.plot_frame, 'tic_data', None) else None,
+            tic_signal=(self.plot_frame.tic_data or {}).get('y') if getattr(self.plot_frame, 'tic_data', None) else None,
             parent=self,
         )
         self._deconv_inspector.rerun_requested.connect(self._on_inspector_rerun_requested)
         self._deconv_inspector.cluster_search_requested.connect(self._on_cluster_search_requested)
+        self._deconv_inspector.apply_offset_requested.connect(
+            self._on_inspector_apply_offset_requested
+        )
         self._deconv_inspector.show()
 
     def _on_inspector_rerun_requested(self, deconv_params, grouping_params):
@@ -3161,6 +3178,7 @@ class ChromaKitApp(QMainWindow):
             ms_data_path=self._get_ms_data_path(),
             deconv_params=deconv_params,
             grouping_params=grouping_params,
+            ms_time_offset=self.data_handler.ms_time_offset,
         )
 
         progress_dialog = QProgressDialog(
@@ -3183,6 +3201,33 @@ class ChromaKitApp(QMainWindow):
         )
 
         QThreadPool.globalInstance().start(worker)
+
+    def _on_inspector_apply_offset_requested(self, offset_min: float, source: str):
+        """Persist a previewed MS time offset and rerun spectral deconvolution."""
+        if not getattr(self.data_handler, 'current_directory_path', None):
+            self.status_bar.showMessage("No file loaded; offset not applied.")
+            return
+
+        from logic.sidecar_offsets import DEFAULT_SIDECAR_PATH, save_offset
+
+        data_path = str(self.data_handler.current_directory_path)
+        save_offset(data_path, offset_min, source=source, sidecar_path=DEFAULT_SIDECAR_PATH)
+        self.data_handler.ms_time_offset = offset_min
+
+        if hasattr(self.plot_frame, 'set_ms_time_offset'):
+            self.plot_frame.set_ms_time_offset(offset_min)
+
+        if self._deconv_inspector is not None:
+            deconv_params, grouping_params = self._deconv_inspector.read_current_params()
+            self._deconv_inspector.close()
+        else:
+            deconv_params, grouping_params = self._get_spectral_deconv_params()
+
+        self.status_bar.showMessage(
+            f"MS offset applied: {offset_min:+.4f} min ({source}). "
+            "Library search results may be stale — rerun if needed."
+        )
+        self._on_inspector_rerun_requested(deconv_params, grouping_params)
 
     def _on_cluster_search_requested(self, spectrum_dict: dict, rt: float):
         """Run MS library search for a deconvolved cluster spectrum.

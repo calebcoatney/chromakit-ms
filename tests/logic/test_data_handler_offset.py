@@ -21,9 +21,10 @@ def test_load_ms_time_offset_from_sidecar(tmp_path, monkeypatch):
     assert dh.ms_time_offset == pytest.approx(-0.048)
 
 
-def test_apply_offset_from_sidecar_when_missing_keeps_zero(tmp_path, monkeypatch):
+def test_apply_offset_from_sidecar_when_missing_resets_to_zero(tmp_path, monkeypatch):
     sidecar = tmp_path / "ms_time_offsets.json"
     dh = DataHandler()
+    dh.ms_time_offset = -0.048
     monkeypatch.setattr("logic.data_handler.DEFAULT_OFFSET_SIDECAR", sidecar)
     dh.apply_offset_from_sidecar("/abs/nonexistent.D")
     assert dh.ms_time_offset == 0.0

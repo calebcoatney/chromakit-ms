@@ -141,6 +141,7 @@ class DataHandler:
 
     def apply_offset_from_sidecar(self, data_path: str) -> None:
         """Set the MS time offset from the per-file sidecar when present."""
+        self.ms_time_offset = 0.0
         entry = load_offset(data_path, sidecar_path=DEFAULT_OFFSET_SIDECAR)
         if entry is not None:
             self.ms_time_offset = entry.offset_min

@@ -70,6 +70,7 @@ class PlotFrame(QWidget):
         self.tic_data = None
         self.aligned_tic_data = None  # New attribute for aligned TIC data
         self.tic_alignment_info = None  # Store alignment metadata
+        self.ms_time_offset: float = 0.0
         
         # Replace existing mouse click connection with new connections
         self.canvas.mpl_connect('button_press_event', self._on_plot_click)
@@ -481,7 +482,10 @@ class PlotFrame(QWidget):
         self.tic_ax.clear()
         
         # Plot the TIC
-        self.tic_ax.plot(x, y, 'g-', linewidth=1)
+        tic_label = 'TIC'
+        if self.ms_time_offset != 0.0:
+            tic_label = f"TIC (offset {self.ms_time_offset:+.4f} min)"
+        self.tic_ax.plot(x, y, 'g-', linewidth=1, label=tic_label)
         
         # Plot baseline if available
         if show_baseline and baseline_x is not None and baseline_y is not None:
@@ -526,8 +530,8 @@ class PlotFrame(QWidget):
             self.tic_ax.set_xlim(previous_xlim)
             self.tic_ax.set_ylim(previous_ylim)
         
-        # Add legend if baseline is shown
-        if show_baseline and baseline_x is not None:
+        # Add legend if baseline is shown or an offset annotation is active
+        if (show_baseline and baseline_x is not None) or self.ms_time_offset != 0.0:
             self.tic_ax.legend()
         
         # Adjust layout and draw
@@ -974,6 +978,12 @@ class PlotFrame(QWidget):
     def set_tic_data(self, x, y):
         """Store the TIC data without plotting it."""
         self.tic_data = {'x': x, 'y': y}
+
+    def set_ms_time_offset(self, offset_min: float) -> None:
+        """Store the active MS time offset and refresh the TIC legend."""
+        self.ms_time_offset = float(offset_min)
+        if self.tic_data is not None and len(self.tic_data.get('x', [])) > 0:
+            self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
 
     def set_aligned_tic_data(self, aligned_time, aligned_signal, lag_seconds):
         """Store the aligned TIC data."""

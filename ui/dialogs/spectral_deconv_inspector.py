@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QVBoxLayout, QSplitter, QWidget,
     QGroupBox, QFormLayout, QLabel, QDoubleSpinBox, QSpinBox,
     QComboBox, QCheckBox, QLineEdit, QPushButton, QProgressBar,
-    QTreeWidget, QTreeWidgetItem, QHeaderView,
+    QTreeWidget, QTreeWidgetItem, QHeaderView, QSlider,
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -21,6 +21,7 @@ from scipy.spatial import cKDTree
 from logic.spectral_deconvolution import DeconvolutionParams, deconvolve
 from logic.spectral_deconv_runner import WindowGroupingParams, _group_peaks_into_windows
 from logic.eic_extractor import extract_eic_peaks
+from logic.ms_time import shifted_xlabels
 
 
 class _PreviewWorkerSignals(QObject):
@@ -33,7 +34,7 @@ class _PreviewWorker(QRunnable):
 
     def __init__(self, ms, w_start: float, w_end: float,
                  win_peaks: list, deconv_params: DeconvolutionParams,
-                 top_n: int):
+                 top_n: int, ms_time_offset: float = 0.0):
         super().__init__()
         self._ms = ms
         self._w_start = w_start
@@ -41,6 +42,7 @@ class _PreviewWorker(QRunnable):
         self._win_peaks = win_peaks
         self._deconv_params = deconv_params
         self._top_n = top_n
+        self._ms_time_offset = ms_time_offset
         self.signals = _PreviewWorkerSignals()
 
     @Slot()
@@ -52,6 +54,7 @@ class _PreviewWorker(QRunnable):
                 t_end=self._w_end,
                 min_intensity=self._deconv_params.min_cluster_intensity,
                 min_prominence=self._deconv_params.min_eic_prominence,
+                ms_time_offset=self._ms_time_offset,
             )
 
             if not eic_peaks:
@@ -63,6 +66,7 @@ class _PreviewWorker(QRunnable):
                     'top_n': self._top_n,
                     'w_start': self._w_start,
                     'w_end': self._w_end,
+                    'ms_time_offset': self._ms_time_offset,
                     'empty': True,
                 })
                 return
@@ -85,6 +89,7 @@ class _PreviewWorker(QRunnable):
                 'top_n': self._top_n,
                 'w_start': self._w_start,
                 'w_end': self._w_end,
+                'ms_time_offset': self._ms_time_offset,
                 'empty': False,
             })
         except Exception:
@@ -97,6 +102,7 @@ class SpectralDeconvInspectorDialog(QDialog):
 
     rerun_requested = Signal(object, object)  # (DeconvolutionParams, WindowGroupingParams)
     cluster_search_requested = Signal(object, float)  # (spectrum_dict: dict, rt: float)
+    apply_offset_requested = Signal(float, str)  # (offset_min, source)
 
     def __init__(
         self,
@@ -105,6 +111,11 @@ class SpectralDeconvInspectorDialog(QDialog):
         deconv_params: DeconvolutionParams,
         grouping_params: WindowGroupingParams,
         initial_peak_index: int = 0,
+        initial_offset_min: float = 0.0,
+        fid_time=None,
+        fid_signal=None,
+        tic_time=None,
+        tic_signal=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -118,6 +129,13 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._windows: list = []      # [(w_start, w_end, [peaks_in_window]), ...]
         self._current_window_idx: int = 0
         self._preview_worker = None
+        self._current_preview_offset_min: float = float(initial_offset_min)
+        self._offset_source: str = "manual"
+        self._last_render_payload: dict | None = None
+        self._fid_time = fid_time
+        self._fid_signal = fid_signal
+        self._tic_time = tic_time
+        self._tic_signal = tic_signal
 
         # Click-to-search spatial index state
         self._last_result: dict | None = None
@@ -128,6 +146,7 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         # Build UI first, then populate params from arguments
         self._build_ui()
+        self._set_offset_slider_value(self._current_preview_offset_min, source="manual")
         self._load_params(deconv_params, grouping_params)
         self._rebuild_windows()
 
@@ -150,6 +169,41 @@ class SpectralDeconvInspectorDialog(QDialog):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setAlignment(Qt.AlignTop)
+
+        # MS time offset group
+        offset_group = QGroupBox("MS Time Offset")
+        offset_layout = QVBoxLayout(offset_group)
+        slider_row = QHBoxLayout()
+        self._offset_slider = QSlider(Qt.Horizontal)
+        self._offset_slider.setMinimum(-500)
+        self._offset_slider.setMaximum(500)
+        self._offset_slider.setSingleStep(1)
+        self._offset_slider.setPageStep(10)
+        self._offset_readout = QLabel("+0.0000 min (+0.00 s)")
+        self._offset_readout.setMinimumWidth(160)
+        slider_row.addWidget(self._offset_slider, 1)
+        slider_row.addWidget(self._offset_readout)
+        offset_layout.addLayout(slider_row)
+
+        button_row = QHBoxLayout()
+        self._offset_auto_btn = QPushButton("Auto")
+        self._offset_reset_btn = QPushButton("Reset")
+        self._offset_apply_btn = QPushButton("Apply globally")
+        button_row.addWidget(self._offset_auto_btn)
+        button_row.addWidget(self._offset_reset_btn)
+        button_row.addStretch(1)
+        button_row.addWidget(self._offset_apply_btn)
+        offset_layout.addLayout(button_row)
+        layout.addWidget(offset_group)
+
+        self._offset_auto_btn.setEnabled(
+            self._fid_time is not None and self._fid_signal is not None
+            and self._tic_time is not None and self._tic_signal is not None
+        )
+        self._offset_slider.valueChanged.connect(self._on_offset_slider_changed)
+        self._offset_auto_btn.clicked.connect(self._on_offset_auto_clicked)
+        self._offset_reset_btn.clicked.connect(self._on_offset_reset_clicked)
+        self._offset_apply_btn.clicked.connect(self._on_offset_apply_clicked)
 
         # Window Grouping group
         wg_group = QGroupBox("Peak Window Grouping")
@@ -366,6 +420,57 @@ class SpectralDeconvInspectorDialog(QDialog):
         )
         return dp, gp
 
+    def read_current_params(self) -> tuple[DeconvolutionParams, WindowGroupingParams]:
+        """Return current deconvolution/grouping params for external rerun requests."""
+        return self._read_params()
+
+    def _set_offset_slider_value(self, offset_min: float, source: str) -> None:
+        clamped = max(-0.5, min(0.5, float(offset_min)))
+        self._offset_source = source
+        self._offset_slider.blockSignals(True)
+        self._offset_slider.setValue(int(round(clamped * 1000)))
+        self._offset_slider.blockSignals(False)
+        self._current_preview_offset_min = clamped
+        self._offset_readout.setText(f"{clamped:+.4f} min ({clamped * 60:+.2f} s)")
+
+    def _on_offset_slider_changed(self, value: int) -> None:
+        offset_min = value / 1000.0
+        self._current_preview_offset_min = offset_min
+        self._offset_source = "manual"
+        self._offset_readout.setText(f"{offset_min:+.4f} min ({offset_min * 60:+.2f} s)")
+        self._rebuild_windows()
+        if self._last_render_payload is not None:
+            self._render_plots(self._last_render_payload)
+
+    def _on_offset_auto_clicked(self) -> None:
+        if (self._fid_time is None or self._fid_signal is None
+                or self._tic_time is None or self._tic_signal is None):
+            self._status_label.setText("Auto offset unavailable: FID/TIC data not loaded.")
+            return
+        from logic.processor import ChromatogramProcessor
+        proc = ChromatogramProcessor()
+        _, _, lag_seconds = proc.align_tic_to_fid(
+            self._fid_time,
+            self._fid_signal,
+            self._tic_time,
+            self._tic_signal,
+            verbose=False,
+        )
+        offset_min = -lag_seconds / 60.0
+        self._set_offset_slider_value(offset_min, source="auto")
+        self._rebuild_windows()
+        if self._last_render_payload is not None:
+            self._render_plots(self._last_render_payload)
+
+    def _on_offset_reset_clicked(self) -> None:
+        self._set_offset_slider_value(0.0, source="manual")
+        self._rebuild_windows()
+        if self._last_render_payload is not None:
+            self._render_plots(self._last_render_payload)
+
+    def _on_offset_apply_clicked(self) -> None:
+        self.apply_offset_requested.emit(self._current_preview_offset_min, self._offset_source)
+
     # ── Window management ──────────────────────────────────────────────────────
 
     def _rebuild_windows(self):
@@ -376,8 +481,9 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._ms = data_dir.get_file('data.ms')
 
         _, gp = self._read_params()
-        rt_min = float(self._ms.xlabels[0])
-        rt_max = float(self._ms.xlabels[-1])
+        _xlabels = shifted_xlabels(self._ms, self._current_preview_offset_min)
+        rt_min = float(_xlabels[0])
+        rt_max = float(_xlabels[-1])
         self._windows = _group_peaks_into_windows(self._peaks, gp, rt_min, rt_max)
 
         # Clamp current index to new window count, then resync combo + nav buttons.
@@ -445,7 +551,9 @@ class SpectralDeconvInspectorDialog(QDialog):
                   self._min_dist_spin, self._min_size_spin, self._min_intensity_spin, self._prominence_spin,
                   self._shape_sim_spin, self._model_peak_combo,
                   self._excluded_mz_edit, self._top_n_spin,
-                  self._normalize_eic_check):
+            self._normalize_eic_check):
+            w.setEnabled(enabled)
+        for w in (self._offset_slider, self._offset_auto_btn, self._offset_reset_btn, self._offset_apply_btn):
             w.setEnabled(enabled)
 
     # ── Navigation slots ───────────────────────────────────────────────────────
@@ -508,6 +616,7 @@ class SpectralDeconvInspectorDialog(QDialog):
             win_peaks=win_peaks,
             deconv_params=dp,
             top_n=self._top_n_spin.value(),
+            ms_time_offset=self._current_preview_offset_min,
         )
         self._preview_worker.signals.finished.connect(self._on_preview_finished)
         self._preview_worker.signals.error.connect(self._on_preview_error)
@@ -516,6 +625,7 @@ class SpectralDeconvInspectorDialog(QDialog):
     def _on_preview_finished(self, result: dict):
         self._preview_worker = None
         self._last_result = result
+        self._last_render_payload = result
         self._selected_cluster_idx = None
         self._results_tree.clear()
         self._results_label.setText("Click a cluster to search")
@@ -572,13 +682,14 @@ class SpectralDeconvInspectorDialog(QDialog):
         rt_clusters = self._last_result['intermediates']['rt_clusters']
 
         cluster_peaks = rt_clusters[cluster_id]
-        cluster_median_rt = float(np.median([p.rt_apex for p in cluster_peaks]))
+        offset = self._current_preview_offset_min - float(self._last_result.get('ms_time_offset', 0.0))
+        cluster_median_rt = float(np.median([p.rt_apex + offset for p in cluster_peaks]))
 
         # Match to the component with the closest RT
         target_component = None
         best_dist = float('inf')
         for comp in components:
-            d = abs(comp.rt - cluster_median_rt)
+            d = abs((comp.rt + offset) - cluster_median_rt)
             if d < best_dist:
                 best_dist = d
                 target_component = comp
@@ -591,10 +702,10 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         n_ions = len(target_component.spectrum)
         self._status_label.setText(
-            f"Cluster {cluster_id} selected — RT {target_component.rt:.3f} min, "
+            f"Cluster {cluster_id} selected — RT {target_component.rt + offset:.3f} min, "
             f"{n_ions} m/z ions — searching…"
         )
-        self.cluster_search_requested.emit(target_component.spectrum, target_component.rt)
+        self.cluster_search_requested.emit(target_component.spectrum, target_component.rt + offset)
 
     def _highlight_cluster(self, cluster_idx: int):
         """Re-render scatter with the selected cluster highlighted."""
@@ -608,6 +719,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         model_peak_ids = {id(mp) for mp in model_peaks}
         win_peaks = self._last_result['win_peaks']
         fid_rts = [p.retention_time for p in win_peaks]
+        offset = self._current_preview_offset_min - float(self._last_result.get('ms_time_offset', 0.0))
 
         import matplotlib.pyplot as plt
         cmap = plt.get_cmap('tab10')
@@ -626,7 +738,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         # Noise points — always dimmed
         if noise_peaks:
             self._ax_scatter.scatter(
-                [p.rt_apex for p in noise_peaks],
+                [p.rt_apex + offset for p in noise_peaks],
                 [p.mz for p in noise_peaks],
                 color='gray', s=10, alpha=0.15, zorder=2,
             )
@@ -634,7 +746,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         # Clustered points — selected vs dimmed
         for ci, cluster in enumerate(rt_clusters):
             color = cmap(ci % 10)
-            rts = [p.rt_apex for p in cluster]
+            rts = [p.rt_apex + offset for p in cluster]
             mzs = [p.mz for p in cluster]
             is_selected = (ci == cluster_idx)
 
@@ -652,7 +764,7 @@ class SpectralDeconvInspectorDialog(QDialog):
                 for peak in cluster:
                     if id(peak) in model_peak_ids:
                         self._ax_scatter.scatter(
-                            [peak.rt_apex], [peak.mz],
+                            [peak.rt_apex + offset], [peak.mz],
                             color=color, marker='*', s=120,
                             edgecolors='black', linewidths=0.8, zorder=6,
                         )
@@ -660,7 +772,7 @@ class SpectralDeconvInspectorDialog(QDialog):
                 for peak in cluster:
                     if id(peak) in model_peak_ids:
                         self._ax_scatter.scatter(
-                            [peak.rt_apex], [peak.mz],
+                            [peak.rt_apex + offset], [peak.mz],
                             color=color, marker='*', s=50, alpha=0.25, zorder=4,
                         )
 
@@ -720,6 +832,8 @@ class SpectralDeconvInspectorDialog(QDialog):
 
     def _render_plots(self, result: dict):
         """Render DBSCAN scatter (top) and EIC traces (bottom) from preview result."""
+        self._last_render_payload = result
+        offset = self._current_preview_offset_min - float(result.get('ms_time_offset', 0.0))
         self._ax_scatter.clear()
         self._ax_eic.clear()
 
@@ -795,7 +909,7 @@ class SpectralDeconvInspectorDialog(QDialog):
 
             # Noise points
             if noise_peaks:
-                noise_rts = [p.rt_apex for p in noise_peaks]
+                noise_rts = [p.rt_apex + offset for p in noise_peaks]
                 noise_mzs = [p.mz for p in noise_peaks]
                 self._ax_scatter.scatter(
                     noise_rts, noise_mzs, color='gray', s=10, alpha=0.5,
@@ -805,13 +919,13 @@ class SpectralDeconvInspectorDialog(QDialog):
             # Clustered points
             for ci, cluster in enumerate(rt_clusters):
                 color = cluster_colors[ci]
-                rts = [p.rt_apex for p in cluster]
+                rts = [p.rt_apex + offset for p in cluster]
                 mzs = [p.mz for p in cluster]
                 self._ax_scatter.scatter(rts, mzs, color=color, s=18, zorder=3)
                 for peak in cluster:
                     if id(peak) in model_peak_ids:
                         self._ax_scatter.scatter(
-                            [peak.rt_apex], [peak.mz],
+                            [peak.rt_apex + offset], [peak.mz],
                             color=color, marker='*', s=80, zorder=4
                         )
 
@@ -832,11 +946,11 @@ class SpectralDeconvInspectorDialog(QDialog):
             all_coords = []
             all_cluster_ids = []
             for peak in noise_peaks:
-                all_coords.append([peak.rt_apex, peak.mz])
+                all_coords.append([peak.rt_apex + offset, peak.mz])
                 all_cluster_ids.append(-1)
             for ci, cluster in enumerate(rt_clusters):
                 for peak in cluster:
-                    all_coords.append([peak.rt_apex, peak.mz])
+                    all_coords.append([peak.rt_apex + offset, peak.mz])
                     all_cluster_ids.append(ci)
             if all_coords:
                 self._scatter_coords = np.array(all_coords)
@@ -859,7 +973,7 @@ class SpectralDeconvInspectorDialog(QDialog):
                 peak_max = y.max()
                 if peak_max > 0:
                     y = y / peak_max
-            self._ax_eic.plot(peak.rt_array, y, color=color, linewidth=lw, alpha=0.8)
+            self._ax_eic.plot(peak.rt_array + offset, y, color=color, linewidth=lw, alpha=0.8)
 
         for rt in fid_rts:
             self._ax_eic.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)

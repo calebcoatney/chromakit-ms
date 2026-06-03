@@ -7,6 +7,7 @@ import pytest
 from logic.eic_extractor import extract_eic_peaks
 from logic.ms_time import shifted_xlabels
 from logic.spectral_deconv_runner import run_spectral_deconvolution
+from logic.spectral_deconv_worker import SpectralDeconvWorker
 from logic.spectrum_extractor import SpectrumExtractor
 
 
@@ -68,5 +69,11 @@ def test_extract_eic_peaks_accepts_ms_time_offset():
 
 def test_run_spectral_deconvolution_accepts_ms_time_offset():
     sig = inspect.signature(run_spectral_deconvolution)
+    assert "ms_time_offset" in sig.parameters
+    assert sig.parameters["ms_time_offset"].default == 0.0
+
+
+def test_spectral_deconv_worker_accepts_ms_time_offset():
+    sig = inspect.signature(SpectralDeconvWorker)
     assert "ms_time_offset" in sig.parameters
     assert sig.parameters["ms_time_offset"].default == 0.0

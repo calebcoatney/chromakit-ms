@@ -24,12 +24,14 @@ class SpectralDeconvWorker(QRunnable):
         ms_data_path: str,
         deconv_params: DeconvolutionParams | None = None,
         grouping_params: WindowGroupingParams | None = None,
+        ms_time_offset: float = 0.0,
     ):
         super().__init__()
         self.peaks = peaks
         self.ms_data_path = ms_data_path
         self.deconv_params = deconv_params or DeconvolutionParams()
         self.grouping_params = grouping_params or WindowGroupingParams()
+        self.ms_time_offset = ms_time_offset
         self.signals = SpectralDeconvWorkerSignals()
         self.cancelled = False
 
@@ -43,6 +45,7 @@ class SpectralDeconvWorker(QRunnable):
                 grouping_params=self.grouping_params,
                 progress_callback=self.signals.progress.emit,
                 should_cancel=lambda: self.cancelled,
+                ms_time_offset=self.ms_time_offset,
             )
             self.signals.finished.emit()
 
