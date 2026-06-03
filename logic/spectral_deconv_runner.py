@@ -11,6 +11,7 @@ import rainbow as rb
 
 from logic.spectral_deconvolution import DeconvolutionParams, deconvolve
 from logic.eic_extractor import extract_eic_peaks
+from logic.ms_time import shifted_xlabels
 
 
 @dataclass
@@ -161,6 +162,7 @@ def run_spectral_deconvolution(
     grouping_params: WindowGroupingParams | None = None,
     progress_callback=None,
     should_cancel=None,
+    ms_time_offset: float = 0.0,
 ) -> list:
     """Run ADAP-GC spectral deconvolution on all FID peaks.
 
@@ -185,8 +187,9 @@ def run_spectral_deconvolution(
     data_dir = rb.read(ms_data_path)
     ms = data_dir.get_file('data.ms')
 
-    rt_min = float(ms.xlabels[0])
-    rt_max = float(ms.xlabels[-1])
+    _xlabels = shifted_xlabels(ms, ms_time_offset)
+    rt_min = float(_xlabels[0])
+    rt_max = float(_xlabels[-1])
 
     windows = _group_peaks_into_windows(peaks, grouping_params, rt_min, rt_max)
     total = max(len(windows), 1)
@@ -201,6 +204,7 @@ def run_spectral_deconvolution(
             t_end=window_end,
             min_intensity=deconv_params.min_cluster_intensity,
             min_prominence=deconv_params.min_eic_prominence,
+            ms_time_offset=ms_time_offset,
         )
 
         if not eic_peaks:

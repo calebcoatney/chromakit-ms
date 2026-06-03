@@ -8,6 +8,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import find_peaks, peak_widths
 
+from logic.ms_time import shifted_xlabels
 from logic.spectral_deconvolution import EICPeak
 
 
@@ -17,6 +18,7 @@ def extract_eic_peaks(
     t_end: float,
     min_intensity: float = 200.0,
     min_prominence: float = 0.0,
+    ms_time_offset: float = 0.0,
 ) -> list[EICPeak]:
     """Extract EIC peaks from a rainbow data.ms DataFile within [t_start, t_end].
 
@@ -36,7 +38,7 @@ def extract_eic_peaks(
         window so ADAP-GC has full chromatographic context. m/z values are
         1-based integers stored as float (column j -> mz = float(j+1)).
     """
-    xlabels = np.asarray(ms.xlabels, dtype=float)
+    xlabels = shifted_xlabels(ms, ms_time_offset)
     data = np.asarray(ms.data, dtype=float)
 
     # Slice to window

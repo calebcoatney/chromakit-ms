@@ -2,6 +2,8 @@ import numpy as np
 import rainbow as rb
 from typing import Dict, Any, Optional, Union, List, Tuple
 
+from logic.ms_time import shifted_xlabels
+
 class SpectrumExtractor:
     """Handles all spectrum extraction logic for ChromaKit.
     
@@ -19,8 +21,9 @@ class SpectrumExtractor:
         self.debug = debug
         self.saturation_threshold = 8.0e6  # Default saturation threshold
     
-    def extract_at_rt(self, data_directory: str, retention_time: float, 
-                     intensity_threshold: float = 0.01) -> Dict[str, Any]:
+    def extract_at_rt(self, data_directory: str, retention_time: float,
+                     intensity_threshold: float = 0.01,
+                     ms_time_offset: float = 0.0) -> Dict[str, Any]:
         """Extract a mass spectrum at a specific retention time.
         
         Args:
@@ -38,15 +41,16 @@ class SpectrumExtractor:
             # Load the MS data
             datadir = rb.read(data_directory)
             ms = datadir.get_file('data.ms')
+            xlabels = shifted_xlabels(ms, ms_time_offset)
             
             # Get TIC data for reference
             tic = np.sum(ms.data, axis=1)
             
             # Find closest RT index
-            rt_index = np.argmin(np.abs(np.array(ms.xlabels) - retention_time))
+            rt_index = np.argmin(np.abs(xlabels - retention_time))
             
             if self.debug:
-                print(f"Found closest scan at index {rt_index}, RT={ms.xlabels[rt_index]:.4f}")
+                print(f"Found closest scan at index {rt_index}, RT={xlabels[rt_index]:.4f}")
             
             # Extract spectrum at that index
             spectrum = ms.data[rt_index, :].astype(float)
@@ -65,13 +69,13 @@ class SpectrumExtractor:
                     print(f"Keeping {np.sum(mask)}/{len(spectrum)} m/z values")
                 
                 return {
-                    'rt': ms.xlabels[rt_index],
+                    'rt': xlabels[rt_index],
                     'mz': mz_values[mask],
                     'intensities': spectrum[mask]
                 }
             else:
                 return {
-                    'rt': ms.xlabels[rt_index],
+                    'rt': xlabels[rt_index],
                     'mz': mz_values,
                     'intensities': spectrum
                 }
@@ -81,7 +85,8 @@ class SpectrumExtractor:
                 print(f"Error extracting spectrum at RT={retention_time}: {str(e)}")
             return None
 
-    def extract_for_peak(self, data_directory: str, peak: Any, options: Dict[str, Any] = None) -> Dict[str, Any]:
+    def extract_for_peak(self, data_directory: str, peak: Any, options: Dict[str, Any] = None,
+                         ms_time_offset: float = 0.0) -> Dict[str, Any]:
         """Extract a mass spectrum for a peak using the specified options.
         
         This is the main extraction method that handles all extraction strategies.
@@ -128,7 +133,8 @@ class SpectrumExtractor:
             midpoint_width_percent=opts['midpoint_width_percent'],
             intensity_threshold=opts['intensity_threshold'],
             saturation_threshold=opts['saturation_threshold'],
-            debug=opts['debug']
+            debug=opts['debug'],
+            ms_time_offset=ms_time_offset
         )
     
     def _extract_peak_spectrum(self, data_directory, peak, 
@@ -141,7 +147,8 @@ class SpectrumExtractor:
                               midpoint_width_percent=20,
                               intensity_threshold=0.01,
                               saturation_threshold=8.0e6,
-                              debug=False):
+                              debug=False,
+                              ms_time_offset: float = 0.0):
         """Internal implementation of peak spectrum extraction.
         
         This contains the core extraction logic previously in batch_search.py.
@@ -169,6 +176,7 @@ class SpectrumExtractor:
             # Load the MS data
             datadir = rb.read(data_directory)
             ms = datadir.get_file('data.ms')
+            xlabels = shifted_xlabels(ms, ms_time_offset)
             tic = np.sum(ms.data, axis=1)
             
             start_time = float(peak.start_time)
@@ -177,20 +185,20 @@ class SpectrumExtractor:
             if debug:
                 print(f"Extracting spectrum for peak from {start_time:.3f} to {end_time:.3f}")
                 print(f"Extraction method: {extraction_method}")
-                print(f"MS data time range: {ms.xlabels[0]:.3f} to {ms.xlabels[-1]:.3f} min ({len(ms.xlabels)} points)")
+                print(f"MS data time range: {xlabels[0]:.3f} to {xlabels[-1]:.3f} min ({len(xlabels)} points)")
             
             # Find indices corresponding to peak bounds
-            left_idx = np.argmin(np.abs(np.array(ms.xlabels) - start_time))
-            right_idx = np.argmin(np.abs(np.array(ms.xlabels) - end_time))
+            left_idx = np.argmin(np.abs(xlabels - start_time))
+            right_idx = np.argmin(np.abs(xlabels - end_time))
             
             # Ensure right_idx > left_idx
             if right_idx <= left_idx:
                 if debug:
-                    print(f"Invalid indices: left={left_idx} ({ms.xlabels[left_idx]:.3f}), right={right_idx} ({ms.xlabels[right_idx]:.3f}). Adjusting...")
+                    print(f"Invalid indices: left={left_idx} ({xlabels[left_idx]:.3f}), right={right_idx} ({xlabels[right_idx]:.3f}). Adjusting...")
                 right_idx = min(left_idx + 3, len(tic) - 1)
                 
             if debug:
-                print(f"Peak bounds in MS data: index {left_idx} ({ms.xlabels[left_idx]:.3f}) to {right_idx} ({ms.xlabels[right_idx]:.3f}) - {right_idx-left_idx+1} points")
+                print(f"Peak bounds in MS data: index {left_idx} ({xlabels[left_idx]:.3f}) to {right_idx} ({xlabels[right_idx]:.3f}) - {right_idx-left_idx+1} points")
             
             # Find peak apex (maximum TIC within bounds)
             if right_idx > left_idx:
@@ -201,7 +209,7 @@ class SpectrumExtractor:
                 tic_peak = left_idx
                 
             if debug:
-                print(f"Peak apex at index {tic_peak}, RT={ms.xlabels[tic_peak]:.3f}, TIC={tic[tic_peak]}")
+                print(f"Peak apex at index {tic_peak}, RT={xlabels[tic_peak]:.3f}, TIC={tic[tic_peak]}")
             
             # SATURATION CHECK: Check for detector saturation within the peak bounds
             peak_ms_data = ms.data[left_idx:right_idx+1, :]
@@ -232,7 +240,7 @@ class SpectrumExtractor:
                         saturation_adjustment = first_saturated_idx - 1
                         
                         if debug:
-                            print(f"Using scan at index {saturation_adjustment} (RT={ms.xlabels[saturation_adjustment]:.3f}) to avoid saturation")
+                            print(f"Using scan at index {saturation_adjustment} (RT={xlabels[saturation_adjustment]:.3f}) to avoid saturation")
                             print(f"This is {first_saturated_idx - saturation_adjustment} scans before first saturation")
             
             # Extract spectrum based on selected method (with saturation adjustment if needed)
@@ -244,13 +252,13 @@ class SpectrumExtractor:
                     spectrum_right = saturation_adjustment + 1
                     
                     if debug:
-                        print(f"SATURATION ADJUSTMENT: Using pre-saturation point at RT={ms.xlabels[saturation_adjustment]:.3f} instead of apex")
+                        print(f"SATURATION ADJUSTMENT: Using pre-saturation point at RT={xlabels[saturation_adjustment]:.3f} instead of apex")
                 else:
                     spectrum_left = tic_peak
                     spectrum_right = tic_peak + 1  # +1 because of how slicing works
                     
                     if debug:
-                        print(f"Using single point apex at RT={ms.xlabels[tic_peak]:.3f}")
+                        print(f"Using single point apex at RT={xlabels[tic_peak]:.3f}")
                     
             elif extraction_method == 'average':
                 # 2. PEAK AVERAGE: All points between peak bounds
@@ -260,7 +268,7 @@ class SpectrumExtractor:
                     spectrum_right = saturation_adjustment + 1
                     
                     if debug:
-                        print(f"SATURATION ADJUSTMENT: Using average of points from {ms.xlabels[left_idx]:.3f} to {ms.xlabels[saturation_adjustment]:.3f}")
+                        print(f"SATURATION ADJUSTMENT: Using average of points from {xlabels[left_idx]:.3f} to {xlabels[saturation_adjustment]:.3f}")
                 else:
                     spectrum_left = left_idx
                     spectrum_right = right_idx + 1
@@ -276,7 +284,7 @@ class SpectrumExtractor:
                     spectrum_right = min(len(ms.data), saturation_adjustment + range_points + 1)
                     
                     if debug:
-                        print(f"SATURATION ADJUSTMENT: Using range around pre-saturation point at RT={ms.xlabels[saturation_adjustment]:.3f}")
+                        print(f"SATURATION ADJUSTMENT: Using range around pre-saturation point at RT={xlabels[saturation_adjustment]:.3f}")
                 else:
                     spectrum_left = max(0, tic_peak - range_points)
                     spectrum_right = min(len(ms.data), tic_peak + range_points + 1)
@@ -297,7 +305,7 @@ class SpectrumExtractor:
                         if debug:
                             print(f"SATURATION ADJUSTMENT: Using pre-saturation point as midpoint")
                 
-                midpoint_rt = ms.xlabels[midpoint_idx]
+                midpoint_rt = xlabels[midpoint_idx]
                 
                 # Calculate window width based on peak width percentage
                 peak_width_indices = right_idx - left_idx
@@ -352,7 +360,7 @@ class SpectrumExtractor:
                         subtract_val = np.argmin(tic[left_idx:right_idx+1]) + left_idx
                         
                     if debug and subtract_val != 'precomputed':
-                        print(f"Background subtraction point: RT={ms.xlabels[subtract_val]:.3f}")
+                        print(f"Background subtraction point: RT={xlabels[subtract_val]:.3f}")
                     elif debug:
                         print("Using average boundary spectrum for background")
                 except Exception as e:
@@ -416,7 +424,7 @@ class SpectrumExtractor:
             
             # Return the filtered spectrum with saturation info
             return {
-                'rt': ms.xlabels[tic_peak],  # Always return apex RT for reference
+                'rt': xlabels[tic_peak],  # Always return apex RT for reference
                 'mz': mz_values[mask],
                 'intensities': spectrum[mask],
                 'is_saturated': is_saturated,  # Add saturation flag
