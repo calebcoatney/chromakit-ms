@@ -1,6 +1,8 @@
 import os
 import numpy as np
 import rainbow as rb
+from logic.ms_time import shifted_xlabels
+from logic.sidecar_offsets import DEFAULT_SIDECAR_PATH as DEFAULT_OFFSET_SIDECAR, load_offset
 from logic.spectrum_extractor import SpectrumExtractor
 
 class DataHandler:
@@ -14,6 +16,7 @@ class DataHandler:
         self.current_detector = 'Unknown'  # Will be auto-detected when data is loaded
         self.spectrum_extractor = SpectrumExtractor()
         self.signal_factor = 1.0  # Configurable via Settings > Scaling Factors
+        self.ms_time_offset: float = 0.0
     
     def load_data_directory(self, file_path, detector=None):
         """Load an Agilent .D directory.
@@ -39,6 +42,7 @@ class DataHandler:
             data_dir = rb.read(file_path)
             self.current_data_dir = data_dir
             self.current_directory_path = file_path
+            self.apply_offset_from_sidecar(file_path)
 
             # Use specified detector, keep current selection, or auto-detect
             if detector is not None:
@@ -128,12 +132,18 @@ class DataHandler:
         """Extract TIC data from the data directory."""
         try:
             ms_data = data_dir.get_file('data.ms')
-            x_tic = ms_data.xlabels
+            x_tic = shifted_xlabels(ms_data, self.ms_time_offset)
             y_tic = np.sum(ms_data.data, axis=1)
             return {'x': x_tic, 'y': y_tic}
         except:
             # If no MS data, return empty arrays
             return {'x': np.array([]), 'y': np.array([])}
+
+    def apply_offset_from_sidecar(self, data_path: str) -> None:
+        """Set the MS time offset from the per-file sidecar when present."""
+        entry = load_offset(data_path, sidecar_path=DEFAULT_OFFSET_SIDECAR)
+        if entry is not None:
+            self.ms_time_offset = entry.offset_min
     
     def _update_directory_list(self, file_path):
         """Update the list of available .D directories in the parent folder."""
@@ -262,7 +272,7 @@ class DataHandler:
         except Exception as e:
             raise ValueError(f"Could not get {detector} metadata: {str(e)}")
 
-    def extract_spectrum_at_rt(self, retention_time, aligned_tic_data=None):
+    def extract_spectrum_at_rt(self, retention_time):
         """Extract mass spectrum at given retention time from current data."""
         if not self.current_directory_path:
             return None
@@ -270,7 +280,8 @@ class DataHandler:
         return self.spectrum_extractor.extract_at_rt(
             self.current_directory_path, 
             retention_time, 
-            intensity_threshold=0.01
+            intensity_threshold=0.01,
+            ms_time_offset=self.ms_time_offset
         )
     
     def extract_spectrum_for_peak(self, peak, options=None):
@@ -281,7 +292,8 @@ class DataHandler:
         return self.spectrum_extractor.extract_for_peak(
             self.current_directory_path,
             peak,
-            options
+            options,
+            ms_time_offset=self.ms_time_offset
         )
     
     def _auto_detect_detector(self, data_dir):
