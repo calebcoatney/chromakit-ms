@@ -201,6 +201,7 @@ class RunResponse(BaseModel):
     status: str = Field(..., description="'complete' or 'error'")
     data_path: str
     method: str = Field(..., description="Method name from the .chromethod file")
+    version: str = Field(..., description="Method version string from the .chromethod file (e.g. '1')")
     signal_type: str
     peak_count: int
     peaks: List[Dict[str, Any]]
