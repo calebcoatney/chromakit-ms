@@ -446,6 +446,7 @@ async def run_pipeline(request: RunRequest):
             status="complete",
             data_path=request.data_path,
             method=method.name,
+            version=method.version,
             signal_type=method.signal_type,
             peak_count=len(peaks_dicts),
             peaks=peaks_dicts,
