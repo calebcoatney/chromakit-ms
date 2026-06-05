@@ -1,0 +1,3 @@
+anchor,cas,C,MW,known_wt_pct,area,run_date,instrument_id,notes
+nonane,000111-84-2,9,128.259,0.044043310013,28848616.5,2026-03-25,ChemStation-FPO-11,"PLACEHOLDER: point 6 avg of U2:U3 from FPO-11 cal (ChemStation-scaled). Replace with chromakit-scaled values after recalibration."
+levoglucosan,498-07-7,6,162.14,0.011723000000,11904908.0,2026-03-25,ChemStation-FPO-11,"PLACEHOLDER: stubbed from Kelly Calibration!H40 = 0.0117. Replace with actual avg from chromakit standard run."
