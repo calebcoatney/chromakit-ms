@@ -53,7 +53,12 @@ class SampleInputs:
 
 @dataclass(frozen=True)
 class PeakResult:
-    """Quantitation result for a single peak. Frozen to prevent mutation."""
+    """Quantitation result for a single peak. Frozen to prevent mutation.
+
+    Note: `extra` is a regular dict; its contents are mutable through
+    aliasing even though the field itself cannot be reassigned. Treat
+    `result.extra` as read-only to preserve PeakResult value semantics.
+    """
     # Pass-through fields from input peak
     compound_id: str
     casno: str
@@ -73,7 +78,7 @@ class PeakResult:
     mass_mg: float | None
 
     # Arbitrary additional input fields preserved verbatim
-    extra: dict = field(default_factory=dict)
+    extra: dict[str, object] = field(default_factory=dict)
 
 
 # Input peak fields that we promote to first-class fields on PeakResult.
