@@ -23,6 +23,11 @@ _ATOMIC_WEIGHT_O = 15.9994
 _ATOMIC_WEIGHT_S = 32.065
 _ATOMIC_WEIGHT_N = 14.0067
 
+# Sentinel CAS used in Kelly's library for compounds with unknown CAS.
+# Indexing these would silently misroute any peak whose ms-toolkit search
+# returns "0" / "0-00-0" to a single arbitrary compound.
+_SENTINEL_CAS = '000000-00-0'
+
 
 @dataclass(frozen=True)
 class CompoundRecord:
@@ -45,13 +50,26 @@ class PolyarcLibrary:
     """Read-only indexed view of compounds.csv."""
 
     def __init__(self, records: list[CompoundRecord]):
-        self._records = records
+        self.records = records
         self._by_cas: dict[str, CompoundRecord] = {}
         self._by_name: dict[str, CompoundRecord] = {}
         self._by_name_ci: dict[str, CompoundRecord] = {}
         for r in records:
             if r.cas:
-                self._by_cas[self._pad_cas(r.cas)] = r
+                padded = self._pad_cas(r.cas)
+                if padded == _SENTINEL_CAS:
+                    # Skip CAS indexing — these rows are findable by name only.
+                    pass
+                else:
+                    if padded in self._by_cas:
+                        existing = self._by_cas[padded]
+                        if existing.compound != r.compound:
+                            logger.warning(
+                                'Duplicate CAS %s in library: %r (kept) and %r (dropped). '
+                                'Last-write-wins; both rows remain in records.',
+                                padded, existing.compound, r.compound,
+                            )
+                    self._by_cas[padded] = r
             self._by_name[r.compound] = r
             self._by_name_ci[r.compound.lower()] = r
 
@@ -88,13 +106,13 @@ class PolyarcLibrary:
                 ))
         return cls(records)
 
-    def lookup(self, cas: str | None, name: str | None) -> CompoundRecord | None:
+    def lookup(self, casno: str | None, name: str | None) -> CompoundRecord | None:
         """CAS first (zero-padded), then exact name, then case-insensitive name.
 
         Returns None for unknown lookups; empty/None inputs are treated as misses.
         """
-        if cas:
-            padded = self._pad_cas(cas)
+        if casno:
+            padded = self._pad_cas(casno)
             if padded in self._by_cas:
                 return self._by_cas[padded]
         if name:
@@ -124,7 +142,12 @@ class PolyarcLibrary:
 
     @staticmethod
     def _parse_int(value: object) -> int:
-        """Parse a CSV cell to int; empty/None → 0."""
+        """Parse a CSV cell to int; empty/None → 0.
+
+        Raises ValueError on non-empty values that don't parse as int
+        (e.g. '1.5', 'abc'). Atom counts must be integers — silent
+        truncation would corrupt RF calculations.
+        """
         if value is None or value == '':
             return 0
         return int(value)
