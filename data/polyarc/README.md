@@ -16,7 +16,7 @@ Schema:
 | column   | type   | notes                                          |
 |----------|--------|------------------------------------------------|
 | compound | string | NIST library name; may include trailing dashes |
-| cas      | string | zero-padded form (e.g. `000064-19-7`); empty if unknown |
+| cas      | string | passed through verbatim from source workbook; mixed zero-padded and unpadded forms appear (e.g. `000064-19-7` and `1636-39-1`). Downstream code is responsible for canonicalization via `PolyarcLibrary._pad_cas`. Empty if unknown. |
 | group1   | string | e.g. `Oxygenate`, `Aromatic`, `Alkane`         |
 | group2   | string | e.g. `Acid`, `Phenols`, `Cycloalkane`          |
 | group3   | string | finest classification, e.g. `Acetic Acid`      |
