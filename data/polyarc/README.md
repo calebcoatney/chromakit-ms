@@ -63,3 +63,38 @@ python data/polyarc/extract_from_xlsx.py <path-to-xlsx> data/polyarc/compounds.c
 # calibration.csv (manually maintained until §11.7 of the design spec)
 $EDITOR data/polyarc/calibration.csv
 ```
+
+## Usage
+
+```python
+import json
+from pathlib import Path
+
+from logic.polyarc_calibration import Calibration
+from logic.polyarc_library import PolyarcLibrary
+from logic.polyarc_quantitation import SampleInputs, quantitate
+
+# Load library and calibration once per session
+library = PolyarcLibrary.from_csv('data/polyarc/compounds.csv')
+calibration = Calibration.from_csv('data/polyarc/calibration.csv')
+
+# Per sample
+sample = SampleInputs(sample_mass_g=0.0631, solvent_mass_g=0.727)
+with open('results/7616-103-22-org - FID1A.json') as f:
+    peaks = json.load(f)['peaks']
+
+results = quantitate(peaks, sample, library, calibration)
+
+# Group rollup (caller's concern)
+from collections import defaultdict
+by_group = defaultdict(float)
+for r in results:
+    if r.matched and r.wt_pct is not None:
+        by_group[r.record.group1] += r.wt_pct
+
+for group, total in sorted(by_group.items(), key=lambda kv: -kv[1]):
+    print(f'{group:20s}  {total:6.2f}%')
+
+total_accounted = sum(by_group.values())
+print(f'\nTotal mass % accounted: {total_accounted:.2f}%')
+```
