@@ -1,0 +1,9 @@
+compound,cas,group1,group2,group3,C,H,O,S,N,MW,anchor
+Acetic acid,000064-19-7,Oxygenate,Acid,Acetic Acid,2,4,2,,,60.052,nonane
+Nonane,000111-84-2,Alkane,n-Alkane,,9,20,,,,128.255,nonane
+Toluene,000108-88-3,Aromatic,BTX,,7,8,,,,92.139,nonane
+Phenol,000108-95-2,Oxygenate,Phenols,Phenol,6,6,1,,,94.111,nonane
+Levoglucosan,000498-07-7,Oxygenate,Sugars,Anhydro,6,10,5,,,162.140,levoglucosan
+"Phenol, 2-methyl-",000095-48-7,Oxygenate,Phenols,Methylphenol,7,8,1,,,108.138,nonane
+"Furan, 2,5-dimethyl-",000625-86-5,Oxygenate,Furans,,6,8,1,,,96.127,nonane
+Decane,000124-18-5,Alkane,n-Alkane,,10,22,,,,142.282,nonane
