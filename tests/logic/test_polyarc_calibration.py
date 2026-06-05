@@ -73,3 +73,43 @@ def test_negative_known_wt_pct_raises():
 def test_load_from_nonexistent_path_raises():
     with pytest.raises(FileNotFoundError):
         Calibration.from_csv(Path('/nonexistent/calibration.csv'))
+
+
+def test_invalid_C_raises_with_helpful_message(tmp_path):
+    bad = tmp_path / 'cal_bad_C.csv'
+    bad.write_text(
+        'anchor,cas,C,MW,known_wt_pct,area,run_date,instrument_id,notes\n'
+        'nonane,000111-84-2,not-an-int,128.259,0.04,1000,2026-03-25,test,bad\n'
+    )
+    with pytest.raises(ValueError, match=r"anchor 'nonane'.*C='not-an-int'"):
+        Calibration.from_csv(bad)
+
+
+def test_missing_anchor_column_raises_with_context(tmp_path):
+    """If the 'anchor' column is missing or blank, the error names what's wrong."""
+    bad = tmp_path / 'cal_no_anchor.csv'
+    bad.write_text(
+        'anchor,cas,C,MW,known_wt_pct,area,run_date,instrument_id,notes\n'
+        ',000111-84-2,9,128.259,0.04,1000,2026-03-25,test,blank-anchor\n'
+    )
+    with pytest.raises(ValueError, match='anchor'):
+        Calibration.from_csv(bad)
+
+
+def test_duplicate_anchor_warns_and_overwrites(tmp_path, caplog):
+    """Two rows with the same anchor name: warn and last-write-wins."""
+    import logging
+    csv_path = tmp_path / 'cal_dup.csv'
+    csv_path.write_text(
+        'anchor,cas,C,MW,known_wt_pct,area,run_date,instrument_id,notes\n'
+        'nonane,000111-84-2,9,128.259,0.04,1000,2026-03-25,old,run-1\n'
+        'nonane,000111-84-2,9,128.259,0.05,2000,2026-04-01,new,run-2\n'
+    )
+    with caplog.at_level(logging.WARNING, logger='logic.polyarc_calibration'):
+        cal = Calibration.from_csv(csv_path)
+    # Last write wins
+    nonane = cal['nonane']
+    assert nonane.known_wt_pct == pytest.approx(0.05)
+    assert nonane.area == pytest.approx(2000)
+    # Warning fired
+    assert any('Duplicate anchor' in m for m in caplog.messages), caplog.messages

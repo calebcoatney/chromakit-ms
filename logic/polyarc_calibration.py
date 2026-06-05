@@ -10,8 +10,11 @@ See docs/superpowers/specs/2026-06-05-polyarc-quantitator-design.md.
 from __future__ import annotations
 
 import csv
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -41,23 +44,64 @@ class Calibration:
         with open(path, newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                area = float(row['area'])
+                anchor_name = row.get('anchor', '').strip()
+                if not anchor_name:
+                    raise ValueError(
+                        f'Calibration row missing required "anchor" column. Row: {dict(row)!r}'
+                    )
+
+                try:
+                    C = int(row['C'])
+                except (ValueError, KeyError) as e:
+                    raise ValueError(
+                        f'Calibration row for anchor {anchor_name!r}: invalid or missing C={row.get("C")!r}'
+                    ) from e
+
+                try:
+                    MW = float(row['MW'])
+                except (ValueError, KeyError) as e:
+                    raise ValueError(
+                        f'Calibration row for anchor {anchor_name!r}: invalid or missing MW={row.get("MW")!r}'
+                    ) from e
+
+                try:
+                    area = float(row['area'])
+                except (ValueError, KeyError) as e:
+                    raise ValueError(
+                        f'Calibration row for anchor {anchor_name!r}: invalid or missing area={row.get("area")!r}'
+                    ) from e
                 if area <= 0:
                     raise ValueError(
-                        f'Calibration row for anchor {row["anchor"]!r} has '
-                        f'non-positive area {area!r}; calibration is invalid.'
+                        f'Calibration row for anchor {anchor_name!r} has non-positive area {area!r}; '
+                        f'calibration is invalid.'
                     )
-                wt_pct = float(row['known_wt_pct'])
+
+                try:
+                    wt_pct = float(row['known_wt_pct'])
+                except (ValueError, KeyError) as e:
+                    raise ValueError(
+                        f'Calibration row for anchor {anchor_name!r}: invalid or missing '
+                        f'known_wt_pct={row.get("known_wt_pct")!r}'
+                    ) from e
                 if wt_pct < 0:
                     raise ValueError(
-                        f'Calibration row for anchor {row["anchor"]!r} has '
-                        f'negative known_wt_pct {wt_pct!r}.'
+                        f'Calibration row for anchor {anchor_name!r} has negative known_wt_pct {wt_pct!r}.'
                     )
-                anchors[row['anchor']] = AnchorPoint(
-                    name=row['anchor'],
+
+                if anchor_name in anchors:
+                    existing = anchors[anchor_name]
+                    logger.warning(
+                        'Duplicate anchor %r in calibration: previous values '
+                        '(area=%g, known_wt_pct=%g) overwritten by new values '
+                        '(area=%g, known_wt_pct=%g). Last-write-wins.',
+                        anchor_name, existing.area, existing.known_wt_pct, area, wt_pct,
+                    )
+
+                anchors[anchor_name] = AnchorPoint(
+                    name=anchor_name,
                     cas=row.get('cas', ''),
-                    C=int(row['C']),
-                    MW=float(row['MW']),
+                    C=C,
+                    MW=MW,
                     known_wt_pct=wt_pct,
                     area=area,
                     run_date=row.get('run_date', ''),
