@@ -154,7 +154,10 @@ def quantitate(
         RF = ((anchor.known_wt_pct / anchor.area)
               * (anchor.C / record.C)
               * (record.MW / anchor.MW))
-        wt_pct = area * RF * df
+        # Clamp negative areas to 0 (chromakit emits these for below-baseline
+        # peaks via the is_negative flag). Per design spec §5: a peak with
+        # zero or negative area is matched but contributes nothing.
+        wt_pct = max(area, 0.0) * RF * df
         mass_g = wt_pct / 100.0 * sample.sample_mass_g
         mass_mg = mass_g * 1000.0
         mol = mass_g / record.MW

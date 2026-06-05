@@ -111,6 +111,27 @@ def test_zero_area_peak_returns_zero_wt_pct_not_none():
     assert r.mass_mg == 0.0
 
 
+def test_negative_area_peak_clamps_to_zero_wt_pct():
+    """Per spec §5: a peak with zero or negative area is matched but
+    contributes nothing. Chromakit's below-baseline peaks (is_negative=True)
+    can emit area < 0; clamping prevents them from silently reducing
+    group-rollup totals."""
+    lib = PolyarcLibrary.from_csv(COMPOUNDS_MIN)
+    cal = Calibration.from_csv(CAL_MIN)
+    sample = SampleInputs(sample_mass_g=0.1, solvent_mass_g=0.9)
+    peaks = [{'compound_id': 'Acetic acid', 'casno': '000064-19-7',
+              'area': -500.0, 'retention_time': 13.5, 'Qual': 0.95}]
+    results = quantitate(peaks, sample, lib, cal)
+    r = results[0]
+    assert r.matched is True
+    assert r.wt_pct == 0.0
+    assert r.mass_mg == 0.0
+    assert r.mol == 0.0
+    assert r.mol_C == 0.0
+    # The raw input area is preserved for diagnostics
+    assert r.area == -500.0
+
+
 def test_input_peak_extra_fields_preserved_in_extra_dict():
     lib = PolyarcLibrary.from_csv(COMPOUNDS_MIN)
     cal = Calibration.from_csv(CAL_MIN)
