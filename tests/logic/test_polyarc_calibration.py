@@ -32,9 +32,9 @@ def test_getitem_unknown_anchor_raises_keyerror():
         _ = cal['no_such_anchor']
 
 
-def test_fpo11_fixture_loads_nonane_only():
+def test_fpo11_fixture_loads_both_anchors():
     cal = Calibration.from_csv(FPO11)
-    assert cal.available_anchors() == {'nonane'}
+    assert cal.available_anchors() == {'nonane', 'levoglucosan'}
 
 
 def test_anchor_point_is_frozen():
