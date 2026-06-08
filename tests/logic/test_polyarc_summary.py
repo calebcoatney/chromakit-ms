@@ -94,17 +94,38 @@ def test_summarize_batch_group_rollup_sums_wt_pct():
     totals = summary.per_sample_group_totals['S2']
     # Sample 2 has Nonane (Alkane/n-Alkane), Toluene (Aromatic/BTX),
     # Phenol, 2-methyl- (Oxygenate/Phenols/Methylphenol)
-    assert 'Alkane' in totals
-    assert 'n-Alkane' in totals
-    assert 'Aromatic' in totals
-    assert 'BTX' in totals
-    assert 'Oxygenate' in totals
-    assert 'Phenols' in totals
-    assert 'Methylphenol' in totals
-    assert 'Total Mass % Accounted' in totals
-    # Total should equal sum of the three matched peaks' wt_pct.
-    matched_wt = sum(p.wt_pct for p in summary.per_sample_peaks['S2'] if p.matched)
-    assert totals['Total Mass % Accounted'] == pytest.approx(matched_wt, rel=1e-9)
+    expected_groups = {'Alkane', 'n-Alkane', 'Aromatic', 'BTX',
+                       'Oxygenate', 'Phenols', 'Methylphenol',
+                       'Total Mass % Accounted'}
+    assert expected_groups <= set(totals.keys()), \
+        f'Missing groups: {expected_groups - set(totals.keys())}'
+
+    # Pin specific per-peak wt_pct values that a maintainer can hand-verify
+    # from the fixture data + library + calibration:
+    #
+    # For Nonane (sample 2 peak 1): area=15000000, C=9, MW=128.255 (from
+    # compounds_minimal.csv), anchor=nonane (known_wt_pct=0.0440433,
+    # area=28848616.5, C=9, MW=128.259). DF = (0.1+0.9)/0.1 = 10.
+    #   RF = (0.0440433/28848616.5) * (9/9) * (128.255/128.259)
+    #   wt_pct = 15000000 * RF * 10  ≈ 0.22900
+    assert totals['Alkane'] == pytest.approx(0.22899721751372437, rel=1e-9)
+    assert totals['n-Alkane'] == pytest.approx(0.22899721751372437, rel=1e-9)
+
+    # Toluene (peak 2): area=8000000, C=7, MW=92.139, anchor=nonane.
+    #   wt_pct = 8000000 * (0.0440433/28848616.5) * (9/7) * (92.139/128.259) * 10
+    #          ≈ 0.11281
+    assert totals['Aromatic'] == pytest.approx(0.11280821320232672, rel=1e-9)
+    assert totals['BTX'] == pytest.approx(0.11280821320232672, rel=1e-9)
+
+    # Phenol, 2-methyl- (peak 3): area=4000000, C=7, MW=108.138, anchor=nonane.
+    #   wt_pct = 4000000 * (0.0440433/28848616.5) * (9/7) * (108.138/128.259) * 10
+    #          ≈ 0.06620
+    assert totals['Methylphenol'] == pytest.approx(0.06619844643620068, rel=1e-9)
+    assert totals['Phenols'] == pytest.approx(0.06619844643620068, rel=1e-9)
+    assert totals['Oxygenate'] == pytest.approx(0.06619844643620068, rel=1e-9)
+
+    # Total = sum of three peaks' wt_pct ≈ 0.40800
+    assert totals['Total Mass % Accounted'] == pytest.approx(0.4080038771522518, rel=1e-9)
 
 
 def test_summarize_batch_match_stats():
