@@ -60,21 +60,35 @@ def _normalize_cas(cas: str) -> tuple[str, bool]:
 
 
 def _classify_unmatched(peak: dict, library: PolyarcLibrary) -> str:
-    """Determine why a peak is unmatched. Caller has already confirmed the
-    library lookup returned None (or a record with C=0)."""
+    """Bucket an unmatched peak by why the library lookup failed.
+
+    Caller must have already confirmed `quantitate()` returned an unmatched
+    PeakResult for this peak (i.e., both CAS and compound_id lookups failed,
+    OR the matching record had C=0).
+
+    Buckets, in priority order:
+      - 'malformed_cas': CAS does not parse as 'NNNNNN-NN-N' (3 hyphenated
+        integer segments). The library cannot be queried.
+      - 'sentinel_cas': CAS is the sentinel '000000-00-0' that the library
+        deliberately excludes from CAS indexing.
+      - 'no_record': CAS field is empty/missing AND the compound_id did not
+        resolve by name either.
+      - 'no_cas_match': CAS is well-formed but absent from the library, and
+        the compound_id also did not resolve by name.
+    """
     casno = peak.get('casno', '')
     normalized, is_malformed = _normalize_cas(casno)
     if is_malformed:
         return 'malformed_cas'
     if normalized == _SENTINEL_CAS_NORMALIZED:
         return 'sentinel_cas'
-    # Name lookup may also have failed; could be 'no_cas_match' or 'no_record'.
-    # We use 'no_cas_match' when the CAS was well-formed but missing,
-    # which covers the common case. 'no_record' is reserved for future use
-    # (e.g., when CAS is empty but name is also unknown).
-    if normalized:
-        return 'no_cas_match'
-    return 'no_record'
+    # CAS was empty or missing — peak reached this point because lookup also
+    # failed by name. Treated as 'no_record' (no library entry of any kind).
+    if not normalized:
+        return 'no_record'
+    # CAS was well-formed and not the sentinel, but neither it nor the
+    # compound_id resolved to a library record.
+    return 'no_cas_match'
 
 
 def summarize_batch(
