@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from logic.polyarc_calibration import Calibration
 from logic.polyarc_library import PolyarcLibrary
 from logic.polyarc_quantitation import SampleInputs
@@ -86,3 +88,53 @@ def test_summarize_batch_returns_peakresults_for_matched():
     matched = [p for p in peaks if p.matched]
     assert len(matched) == 3
     assert {p.casno for p in matched} == {'000064-19-7', '000108-95-2', '000498-07-7'}
+
+
+def test_summarize_batch_group_rollup_sums_wt_pct():
+    library = _load_minimal_library()
+    calibration = _load_minimal_calibration()
+    json_paths = {'S2': FIXTURE_DIR / 'summary_minimal_sample2.json'}
+    weights = {'S2': SampleInputs(sample_mass_g=0.1, solvent_mass_g=0.9)}
+
+    summary = summarize_batch(json_paths, weights, library, calibration)
+
+    totals = summary.per_sample_group_totals['S2']
+    # Sample 2 has Nonane (Alkane/n-Alkane), Toluene (Aromatic/BTX),
+    # Phenol, 2-methyl- (Oxygenate/Phenols/Methylphenol)
+    assert 'Alkane' in totals
+    assert 'n-Alkane' in totals
+    assert 'Aromatic' in totals
+    assert 'BTX' in totals
+    assert 'Oxygenate' in totals
+    assert 'Phenols' in totals
+    assert 'Methylphenol' in totals
+    assert 'Total Mass % Accounted' in totals
+    # Total should equal sum of the three matched peaks' wt_pct.
+    matched_wt = sum(p.wt_pct for p in summary.per_sample_peaks['S2'] if p.matched)
+    assert totals['Total Mass % Accounted'] == pytest.approx(matched_wt, rel=1e-9)
+
+
+def test_summarize_batch_match_stats():
+    library = _load_minimal_library()
+    calibration = _load_minimal_calibration()
+    json_paths = {'S1': FIXTURE_DIR / 'summary_minimal_sample1.json'}
+    weights = {'S1': SampleInputs(sample_mass_g=0.1, solvent_mass_g=0.9)}
+
+    summary = summarize_batch(json_paths, weights, library, calibration)
+
+    stats = summary.match_stats['S1']
+    assert stats['count_total'] == 6.0
+    assert stats['count_matched'] == 3.0
+    # Matched peaks: 20M + 10M + 5M = 35M out of 35M + 1M + 0.8M + 0.5M = 37.3M
+    expected_area_pct = (20000000 + 10000000 + 5000000) / (20000000 + 10000000 + 5000000 + 1000000 + 800000 + 500000) * 100
+    assert stats['area_matched_pct'] == pytest.approx(expected_area_pct, rel=1e-6)
+
+
+def test_summarize_batch_raises_on_id_mismatch():
+    library = _load_minimal_library()
+    calibration = _load_minimal_calibration()
+    json_paths = {'S1': FIXTURE_DIR / 'summary_minimal_sample1.json'}
+    weights = {'S2': SampleInputs(sample_mass_g=0.1, solvent_mass_g=0.9)}
+
+    with pytest.raises(KeyError, match=r"S1.*S2|S2.*S1"):
+        summarize_batch(json_paths, weights, library, calibration)
