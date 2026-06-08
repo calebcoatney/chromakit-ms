@@ -255,25 +255,25 @@ def write_summary_xlsx(
         # Headers explicitly on row 2 so row 1 holds only the sample ID
         for col_idx, header in enumerate(_SAMPLE_PEAK_HEADERS, start=1):
             ws.cell(row=2, column=col_idx, value=header)
-        row_idx = 3
         for r in summary.per_sample_peaks[sid]:
             if not r.matched or r.record is None:
                 continue
-            ws.cell(row=row_idx, column=1, value=r.compound_id)
-            ws.cell(row=row_idx, column=2, value=str(r.casno))  # text to preserve leading zeros
-            ws.cell(row=row_idx, column=3, value=r.retention_time)
-            ws.cell(row=row_idx, column=4, value=r.area)
-            ws.cell(row=row_idx, column=5, value=r.record.MW)
-            ws.cell(row=row_idx, column=6, value=r.record.C)
-            ws.cell(row=row_idx, column=7, value=r.RF)
-            ws.cell(row=row_idx, column=8, value=r.wt_pct)
-            ws.cell(row=row_idx, column=9, value=r.mass_mg)
-            ws.cell(row=row_idx, column=10, value=r.mol)
-            ws.cell(row=row_idx, column=11, value=r.mol_C)
-            ws.cell(row=row_idx, column=12, value=r.record.group1)
-            ws.cell(row=row_idx, column=13, value=r.record.group2)
-            ws.cell(row=row_idx, column=14, value=r.record.group3)
-            row_idx += 1
+            ws.append([
+                r.compound_id,
+                str(r.casno),  # text to preserve leading zeros
+                r.retention_time,
+                r.area,
+                r.record.MW,
+                r.record.C,
+                r.RF,
+                r.wt_pct,
+                r.mass_mg,
+                r.mol,
+                r.mol_C,
+                r.record.group1,
+                r.record.group2,
+                r.record.group3,
+            ])
 
     # Unmatched sheet
     ws = wb.create_sheet('Unmatched')

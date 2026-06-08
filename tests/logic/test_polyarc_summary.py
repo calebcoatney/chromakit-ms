@@ -4,12 +4,18 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
+import openpyxl
 import pytest
 
 from logic.polyarc_calibration import Calibration
 from logic.polyarc_library import PolyarcLibrary
 from logic.polyarc_quantitation import SampleInputs
-from logic.polyarc_summary import BatchSummary, UnmatchedPeak, summarize_batch
+from logic.polyarc_summary import (
+    BatchSummary,
+    UnmatchedPeak,
+    summarize_batch,
+    write_summary_xlsx,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent.parent / 'data'
@@ -152,11 +158,6 @@ def test_summarize_batch_raises_on_id_mismatch():
 
     with pytest.raises(KeyError, match=r"S1.*S2|S2.*S1"):
         summarize_batch(json_paths, weights, library, calibration)
-
-
-import openpyxl
-
-from logic.polyarc_summary import write_summary_xlsx
 
 
 def test_write_summary_xlsx_creates_expected_sheets(tmp_path):
