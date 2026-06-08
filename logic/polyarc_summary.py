@@ -11,12 +11,20 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from openpyxl import Workbook
+
 from logic.polyarc_calibration import Calibration
 from logic.polyarc_library import PolyarcLibrary
 from logic.polyarc_quantitation import PeakResult, SampleInputs, quantitate
 
 
 _SENTINEL_CAS_NORMALIZED = '000000-00-0'
+
+_SAMPLE_PEAK_HEADERS = [
+    'compound_id', 'casno', 'retention_time', 'FID_area',
+    'MW', 'C', 'RF', 'wt_pct', 'mass_mg', 'mol', 'mol_C',
+    'group1', 'group2', 'group3',
+]
 
 
 @dataclass(frozen=True)
@@ -187,3 +195,92 @@ def summarize_batch(
         unmatched=unmatched,
         match_stats=match_stats,
     )
+
+
+def write_summary_xlsx(
+    summary: BatchSummary,
+    out_path: Path,
+    *,
+    group_row_order: list[str] | None = None,
+) -> None:
+    """Write a Kelly-style summary workbook from a BatchSummary.
+
+    Sheets:
+        Weights  — sample ID, weight, acetone, DF
+        Summary  — group totals: columns = samples, rows = groups
+        Sample N — per-peak detail (one sheet per sample, in iteration order)
+        Unmatched — all UnmatchedPeak rows
+
+    Args:
+        summary: BatchSummary produced by summarize_batch()
+        out_path: file path to write
+        group_row_order: optional list of group names to use as the Summary
+            sheet row order. If None, uses sorted union of all observed groups
+            with 'Total Mass % Accounted' first.
+    """
+    wb = Workbook()
+    # Workbook() creates a default sheet; remove it.
+    default = wb.active
+    wb.remove(default)
+
+    sample_ids = list(summary.per_sample_inputs.keys())
+
+    # Weights sheet
+    ws = wb.create_sheet('Weights')
+    ws.append(['Sample ID', 'Weight', 'Acetone wt', 'DF'])
+    for sid in sample_ids:
+        s = summary.per_sample_inputs[sid]
+        ws.append([sid, s.sample_mass_g, s.solvent_mass_g, s.dilution_factor])
+
+    # Summary sheet
+    ws = wb.create_sheet('Summary')
+    ws.append([None, *sample_ids])
+    if group_row_order is None:
+        all_groups: set[str] = set()
+        for totals in summary.per_sample_group_totals.values():
+            all_groups.update(totals.keys())
+        # 'Total Mass % Accounted' first, then sorted rest
+        rest = sorted(all_groups - {'Total Mass % Accounted'})
+        group_row_order = (['Total Mass % Accounted'] if 'Total Mass % Accounted' in all_groups else []) + rest
+    for group in group_row_order:
+        row = [group]
+        for sid in sample_ids:
+            row.append(summary.per_sample_group_totals.get(sid, {}).get(group, 0.0))
+        ws.append(row)
+
+    # Sample N sheets (one per sample, in iteration order)
+    for n, sid in enumerate(sample_ids, start=1):
+        ws = wb.create_sheet(f'Sample {n}')
+        ws['A1'] = sid
+        # Headers explicitly on row 2 so row 1 holds only the sample ID
+        for col_idx, header in enumerate(_SAMPLE_PEAK_HEADERS, start=1):
+            ws.cell(row=2, column=col_idx, value=header)
+        row_idx = 3
+        for r in summary.per_sample_peaks[sid]:
+            if not r.matched or r.record is None:
+                continue
+            ws.cell(row=row_idx, column=1, value=r.compound_id)
+            ws.cell(row=row_idx, column=2, value=str(r.casno))  # text to preserve leading zeros
+            ws.cell(row=row_idx, column=3, value=r.retention_time)
+            ws.cell(row=row_idx, column=4, value=r.area)
+            ws.cell(row=row_idx, column=5, value=r.record.MW)
+            ws.cell(row=row_idx, column=6, value=r.record.C)
+            ws.cell(row=row_idx, column=7, value=r.RF)
+            ws.cell(row=row_idx, column=8, value=r.wt_pct)
+            ws.cell(row=row_idx, column=9, value=r.mass_mg)
+            ws.cell(row=row_idx, column=10, value=r.mol)
+            ws.cell(row=row_idx, column=11, value=r.mol_C)
+            ws.cell(row=row_idx, column=12, value=r.record.group1)
+            ws.cell(row=row_idx, column=13, value=r.record.group2)
+            ws.cell(row=row_idx, column=14, value=r.record.group3)
+            row_idx += 1
+
+    # Unmatched sheet
+    ws = wb.create_sheet('Unmatched')
+    ws.append(['sample_id', 'peak_number', 'retention_time',
+               'compound_id', 'casno', 'area', 'reason'])
+    for u in summary.unmatched:
+        ws.append([u.sample_id, u.peak_number, u.retention_time,
+                   u.compound_id, str(u.casno), u.area, u.reason])
+
+    wb.save(out_path)

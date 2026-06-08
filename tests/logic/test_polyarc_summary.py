@@ -152,3 +152,94 @@ def test_summarize_batch_raises_on_id_mismatch():
 
     with pytest.raises(KeyError, match=r"S1.*S2|S2.*S1"):
         summarize_batch(json_paths, weights, library, calibration)
+
+
+import openpyxl
+
+from logic.polyarc_summary import write_summary_xlsx
+
+
+def test_write_summary_xlsx_creates_expected_sheets(tmp_path):
+    library = _load_minimal_library()
+    calibration = _load_minimal_calibration()
+    json_paths = {
+        'S1': FIXTURE_DIR / 'summary_minimal_sample1.json',
+        'S2': FIXTURE_DIR / 'summary_minimal_sample2.json',
+    }
+    weights = {
+        'S1': SampleInputs(sample_mass_g=0.1, solvent_mass_g=0.9),
+        'S2': SampleInputs(sample_mass_g=0.05, solvent_mass_g=0.95),
+    }
+    summary = summarize_batch(json_paths, weights, library, calibration)
+
+    out_path = tmp_path / 'test_summary.xlsx'
+    write_summary_xlsx(summary, out_path)
+
+    assert out_path.exists()
+    wb = openpyxl.load_workbook(out_path)
+    assert 'Weights' in wb.sheetnames
+    assert 'Summary' in wb.sheetnames
+    assert 'Sample 1' in wb.sheetnames
+    assert 'Sample 2' in wb.sheetnames
+    assert 'Unmatched' in wb.sheetnames
+
+
+def test_write_summary_xlsx_weights_sheet(tmp_path):
+    library = _load_minimal_library()
+    calibration = _load_minimal_calibration()
+    json_paths = {'S1': FIXTURE_DIR / 'summary_minimal_sample1.json'}
+    weights = {'S1': SampleInputs(sample_mass_g=0.1, solvent_mass_g=0.9)}
+    summary = summarize_batch(json_paths, weights, library, calibration)
+
+    out_path = tmp_path / 'test_summary.xlsx'
+    write_summary_xlsx(summary, out_path)
+
+    wb = openpyxl.load_workbook(out_path)
+    ws = wb['Weights']
+    assert ws['A1'].value == 'Sample ID'
+    assert ws['B1'].value == 'Weight'
+    assert ws['C1'].value == 'Acetone wt'
+    assert ws['D1'].value == 'DF'
+    assert ws['A2'].value == 'S1'
+    assert ws['B2'].value == pytest.approx(0.1)
+    assert ws['C2'].value == pytest.approx(0.9)
+    assert ws['D2'].value == pytest.approx(10.0)  # (0.1 + 0.9) / 0.1
+
+
+def test_write_summary_xlsx_summary_sheet_row_order(tmp_path):
+    library = _load_minimal_library()
+    calibration = _load_minimal_calibration()
+    json_paths = {'S1': FIXTURE_DIR / 'summary_minimal_sample1.json'}
+    weights = {'S1': SampleInputs(sample_mass_g=0.1, solvent_mass_g=0.9)}
+    summary = summarize_batch(json_paths, weights, library, calibration)
+
+    custom_order = ['Oxygenate', 'Phenols', 'Total Mass % Accounted']
+    out_path = tmp_path / 'test_summary.xlsx'
+    write_summary_xlsx(summary, out_path, group_row_order=custom_order)
+
+    wb = openpyxl.load_workbook(out_path)
+    ws = wb['Summary']
+    assert ws['A1'].value is None
+    assert ws['B1'].value == 'S1'
+    assert ws['A2'].value == 'Oxygenate'
+    assert ws['A3'].value == 'Phenols'
+    assert ws['A4'].value == 'Total Mass % Accounted'
+
+
+def test_write_summary_xlsx_unmatched_sheet(tmp_path):
+    library = _load_minimal_library()
+    calibration = _load_minimal_calibration()
+    json_paths = {'S1': FIXTURE_DIR / 'summary_minimal_sample1.json'}
+    weights = {'S1': SampleInputs(sample_mass_g=0.1, solvent_mass_g=0.9)}
+    summary = summarize_batch(json_paths, weights, library, calibration)
+
+    out_path = tmp_path / 'test_summary.xlsx'
+    write_summary_xlsx(summary, out_path)
+
+    wb = openpyxl.load_workbook(out_path)
+    ws = wb['Unmatched']
+    assert ws['A1'].value == 'sample_id'
+    assert ws['G1'].value == 'reason'
+    # 3 unmatched peaks from S1 fixture: rows 2, 3, 4
+    reasons = {ws.cell(row=r, column=7).value for r in range(2, 5)}
+    assert reasons == {'no_cas_match', 'sentinel_cas', 'malformed_cas'}
