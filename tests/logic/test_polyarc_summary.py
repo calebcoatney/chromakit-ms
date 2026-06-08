@@ -1,6 +1,7 @@
 """Unit tests for logic/polyarc_summary.py."""
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -28,12 +29,8 @@ def test_unmatched_peak_is_frozen():
         compound_id='Foo', casno='000123-45-6', area=1000.0,
         reason='no_cas_match',
     )
-    try:
+    with pytest.raises(FrozenInstanceError):
         peak.sample_id = 'S2'  # type: ignore[misc]
-    except Exception as e:
-        assert 'frozen' in str(e).lower() or 'attribute' in str(e).lower() or 'cannot assign' in str(e).lower()
-    else:
-        assert False, 'UnmatchedPeak must be frozen'
 
 
 def test_batch_summary_is_frozen():
@@ -41,12 +38,8 @@ def test_batch_summary_is_frozen():
         per_sample_peaks={}, per_sample_group_totals={},
         per_sample_inputs={}, unmatched=[], match_stats={},
     )
-    try:
+    with pytest.raises(FrozenInstanceError):
         summary.unmatched = []  # type: ignore[misc]
-    except Exception as e:
-        assert 'frozen' in str(e).lower() or 'attribute' in str(e).lower() or 'cannot assign' in str(e).lower()
-    else:
-        assert False, 'BatchSummary must be frozen'
 
 
 def test_unmatched_peak_valid_reasons():
