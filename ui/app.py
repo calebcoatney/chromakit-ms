@@ -636,6 +636,11 @@ class ChromaKitApp(QMainWindow):
             has_ms_data = data.get('metadata', {}).get('has_ms_data', False)
             self.data_handler.current_directory_path = folder_path
             self.data_handler.has_ms_data = has_ms_data
+            # Load any previously-saved MS time offset from the per-file sidecar.
+            # (For .D paths this was already done inside load_data_directory; for
+            # .C paths this is the only place it happens. Call is idempotent.)
+            if hasattr(self.data_handler, 'apply_offset_from_sidecar'):
+                self.data_handler.apply_offset_from_sidecar(folder_path)
             if hasattr(self, 'ms_frame'):
                 self.ms_frame.set_data_path(self._get_ms_data_path())
             if hasattr(self.plot_frame, 'set_ms_time_offset'):
