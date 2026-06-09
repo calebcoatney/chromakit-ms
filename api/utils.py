@@ -5,34 +5,54 @@ from typing import Any
 
 
 class NumpyEncoder(json.JSONEncoder):
-    """Custom JSON encoder for numpy types."""
+    """Custom JSON encoder for numpy types.
+    
+    Converts NaN/Inf to None for strict JSON compatibility. NaN values may
+    appear in baseline_y/corrected_y arrays from MS-gated baseline masking.
+    """
 
     def default(self, obj):
         if isinstance(obj, np.ndarray):
-            return obj.tolist()
+            # Convert any NaN/Inf values to None for strict JSON compliance
+            return [
+                None if (isinstance(v, float) and not np.isfinite(v)) else v
+                for v in obj.tolist()
+            ]
         if isinstance(obj, np.integer):
             return int(obj)
         if isinstance(obj, np.floating):
-            return float(obj)
+            f = float(obj)
+            return None if not np.isfinite(f) else f
         if isinstance(obj, np.bool_):
             return bool(obj)
         return super().default(obj)
 
 
 def serialize_numpy(data: Any) -> Any:
-    """Convert numpy types to native Python types for JSON serialization."""
+    """Convert numpy types to native Python types for JSON serialization.
+    
+    NaN and Inf float values are converted to None for strict JSON compliance.
+    This is needed because baseline_y/corrected_y arrays from MS-gated baseline
+    masking may contain NaN in the pre-MS region.
+    """
     if isinstance(data, dict):
         return {k: serialize_numpy(v) for k, v in data.items()}
     elif isinstance(data, (list, tuple)):
         return [serialize_numpy(item) for item in data]
     elif isinstance(data, np.ndarray):
-        return data.tolist()
+        return [
+            None if (isinstance(v, float) and not np.isfinite(v)) else v
+            for v in data.tolist()
+        ]
     elif isinstance(data, np.integer):
         return int(data)
     elif isinstance(data, np.floating):
-        return float(data)
+        f = float(data)
+        return None if not np.isfinite(f) else f
     elif isinstance(data, np.bool_):
         return bool(data)
+    elif isinstance(data, float):
+        return None if not np.isfinite(data) else data
     else:
         return data
 
