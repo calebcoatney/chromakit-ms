@@ -65,6 +65,16 @@ class BatchJobDialog(QDialog):
         self.ms_search_check.setChecked(True)
         options_layout.addWidget(self.ms_search_check)
 
+        # Spectral deconvolution (ADAP-GC)
+        self.spectral_deconv_check = QCheckBox("Run spectral deconvolution before MS search (GC-MS only)")
+        self.spectral_deconv_check.setToolTip(
+            "Run ADAP-GC spectral deconvolution to separate coeluting analytes' mass spectra "
+            "before MS library search. Uses parameters from MS Options → Spectral Deconvolution tab. "
+            "Ignored for non-GC-MS data."
+        )
+        self.spectral_deconv_check.setChecked(True)
+        options_layout.addWidget(self.spectral_deconv_check)
+
         # Timing option
         self.time_steps_check = QCheckBox("Time processing steps")
         self.time_steps_check.setChecked(False)
@@ -210,6 +220,7 @@ class BatchJobDialog(QDialog):
         options = {
             'integration': self.integration_check.isChecked(),
             'ms_search': self.ms_search_check.isChecked(),
+            'spectral_deconv': self.spectral_deconv_check.isChecked(),
             'save_results': self.save_results_check.isChecked(),
             'export_csv': self.export_csv_check.isChecked(),
             'overwrite_existing': self.overwrite_check.isChecked(),

@@ -152,8 +152,31 @@ class AutomationWorker(QRunnable):
 
                     ms_search_applicable = PipelineStage.MS_SEARCH in profile_stages
                     t_ms = None
+                    t_deconv = None
 
                     if ms_search_enabled and ms_search_applicable:
+                        # Step 3a: Spectral deconvolution (optional, GC-MS only).
+                        # Must run BEFORE MS search so BatchSearchWorker picks up
+                        # peak.deconvolved_spectrum instead of raw extraction.
+                        deconv_enabled = getattr(self.app, 'batch_options', {}).get('spectral_deconv', True)
+                        deconv_applicable = (signal_type == 'gcms')
+
+                        if deconv_enabled and deconv_applicable:
+                            self._update_directory_progress(filename, "Spectral deconvolution", 55)
+                            t_dc = time.perf_counter()
+                            dc_ok = self._run_spectral_deconvolution()
+                            t_deconv = time.perf_counter() - t_dc
+
+                            if not dc_ok or self.cancelled:
+                                self.signals.file_completed.emit(filename, False, "Cancelled during deconvolution")
+                                continue
+                        elif deconv_enabled:
+                            self.signals.log_message.emit(
+                                f"Skipping spectral deconvolution: not applicable for signal type '{signal_type}'"
+                            )
+                        else:
+                            self.signals.log_message.emit("Spectral deconvolution disabled in options - skipping")
+
                         self._update_directory_progress(filename, "MS Library Search", 70)
                         t3 = time.perf_counter()
                         success = self._run_ms_search()
@@ -177,6 +200,7 @@ class AutomationWorker(QRunnable):
                             'load': t_load,
                             'process': t_process,
                             'save': t_save_integration,
+                            'deconv': t_deconv,
                             'ms_search': t_ms,
                         })
 
@@ -212,6 +236,7 @@ class AutomationWorker(QRunnable):
             'file': str,
             'load': float,        # seconds
             'process': float,     # seconds
+            'deconv': float | None,     # None if not applicable / disabled
             'ms_search': float | None,  # None if not applicable
             'save': float,
         }
@@ -220,19 +245,23 @@ class AutomationWorker(QRunnable):
             return "=== Batch Timing Report: no data ==="
 
         lines = ["", "=== Batch Timing Report ==="]
-        header = f"{'File':<35} {'Load':>7} {'Process':>9} {'MS Search':>10} {'Save':>7} {'Total':>8}"
+        header = f"{'File':<35} {'Load':>7} {'Process':>9} {'Deconv':>9} {'MS Search':>10} {'Save':>7} {'Total':>8}"
         lines.append(header)
         lines.append("-" * len(header))
 
         ms_times = []
+        deconv_times = []
         for t in timings:
             ms_val = t.get('ms_search')
+            dc_val = t.get('deconv')
             ms_str = f"{ms_val:>9.2f}s" if ms_val is not None else f"{'—':>9}"
-            total = t['load'] + t['process'] + (ms_val or 0.0) + t['save']
+            dc_str = f"{dc_val:>8.2f}s" if dc_val is not None else f"{'—':>8}"
+            total = t['load'] + t['process'] + (dc_val or 0.0) + (ms_val or 0.0) + t['save']
             line = (
                 f"{t['file']:<35}"
                 f" {t['load']:>6.2f}s"
                 f" {t['process']:>8.2f}s"
+                f" {dc_str}"
                 f" {ms_str}"
                 f" {t['save']:>6.2f}s"
                 f" {total:>7.2f}s"
@@ -240,6 +269,8 @@ class AutomationWorker(QRunnable):
             lines.append(line)
             if ms_val is not None:
                 ms_times.append(ms_val)
+            if dc_val is not None:
+                deconv_times.append(dc_val)
 
         # Averages
         lines.append("-" * len(header))
@@ -247,12 +278,16 @@ class AutomationWorker(QRunnable):
         avg_load = sum(t['load'] for t in timings) / n
         avg_proc = sum(t['process'] for t in timings) / n
         avg_save = sum(t['save'] for t in timings) / n
-        avg_ms_str = f"{sum(ms_times)/len(ms_times):>9.2f}s" if ms_times else f"{'—':>9}"
-        avg_total = avg_load + avg_proc + (sum(ms_times)/len(ms_times) if ms_times else 0.0) + avg_save
+        avg_ms = sum(ms_times) / len(ms_times) if ms_times else 0.0
+        avg_dc = sum(deconv_times) / len(deconv_times) if deconv_times else 0.0
+        avg_ms_str = f"{avg_ms:>9.2f}s" if ms_times else f"{'—':>9}"
+        avg_dc_str = f"{avg_dc:>8.2f}s" if deconv_times else f"{'—':>8}"
+        avg_total = avg_load + avg_proc + avg_dc + avg_ms + avg_save
         lines.append(
             f"{'Average':<35}"
             f" {avg_load:>6.2f}s"
             f" {avg_proc:>8.2f}s"
+            f" {avg_dc_str}"
             f" {avg_ms_str}"
             f" {avg_save:>6.2f}s"
             f" {avg_total:>7.2f}s"
@@ -527,6 +562,105 @@ class AutomationWorker(QRunnable):
             self.signals.log_message.emit(f"Error in processing/integration: {str(e)}")
             return False
     
+    def _run_spectral_deconvolution(self):
+        """Run ADAP-GC spectral deconvolution on integrated peaks.
+
+        Populates peak.deconvolved_spectrum in-place so the subsequent
+        BatchSearchWorker uses deconvolved spectra instead of raw point-in-time
+        extraction. Runs in-thread on this worker (not via SpectralDeconvWorker)
+        to avoid an extra polling loop.
+
+        Returns True on success or graceful skip; False only on cancellation.
+        Exceptions are caught and logged so a single bad file doesn't abort the
+        whole batch — the file will simply fall back to raw spectra during search.
+        """
+        try:
+            if self.cancelled:
+                return False
+
+            if not hasattr(self.app, 'integrated_peaks') or not self.app.integrated_peaks:
+                self.signals.log_message.emit("No integrated peaks for deconvolution — skipping")
+                return True
+
+            # Resolve MS data path on main thread (the helper touches data_handler).
+            self._deconv_ms_path = None
+            self._deconv_offset = 0.0
+            self._deconv_params_ready = False
+
+            def fetch_params():
+                try:
+                    self._deconv_ms_path = self.app._get_ms_data_path()
+                    self._deconv_offset = getattr(self.app.data_handler, 'ms_time_offset', 0.0)
+                    self._deconv_params_tuple = self.app._get_spectral_deconv_params()
+                except Exception as e:
+                    self.signals.log_message.emit(f"Error fetching deconv params: {str(e)}")
+                    self._deconv_params_tuple = None
+                finally:
+                    self._deconv_params_ready = True
+
+            main_thread_dispatcher.run_on_main_thread(fetch_params)
+
+            timeout = 10
+            t_start = time.time()
+            while not self._deconv_params_ready:
+                if self.cancelled or time.time() - t_start > timeout:
+                    self.signals.log_message.emit("Timeout fetching deconv params — skipping")
+                    return True
+                time.sleep(0.05)
+
+            if not self._deconv_ms_path or self._deconv_params_tuple is None:
+                self.signals.log_message.emit("MS data path or params unavailable — skipping deconvolution")
+                return True
+
+            deconv_params, grouping_params = self._deconv_params_tuple
+
+            # Lazy import to avoid loading rainbow/sklearn at module import time
+            from logic.spectral_deconv_runner import run_spectral_deconvolution
+
+            self.signals.log_message.emit(
+                f"Running spectral deconvolution on {len(self.app.integrated_peaks)} peaks..."
+            )
+
+            filename = os.path.basename(self.app.data_handler.current_directory_path)
+
+            def progress_cb(pct: int):
+                # Deconvolution occupies 55%–65% of the per-file progress bar
+                # (sits between integration save at 50% and MS search start at 70%).
+                file_pct = 55 + int(pct * 0.10)
+                self._update_directory_progress(filename, f"Spectral deconvolution: {pct}%", file_pct)
+
+            def should_cancel():
+                return self.cancelled
+
+            run_spectral_deconvolution(
+                peaks=self.app.integrated_peaks,
+                ms_data_path=self._deconv_ms_path,
+                deconv_params=deconv_params,
+                grouping_params=grouping_params,
+                progress_callback=progress_cb,
+                should_cancel=should_cancel,
+                ms_time_offset=self._deconv_offset,
+            )
+
+            if self.cancelled:
+                return False
+
+            n_deconv = sum(
+                1 for p in self.app.integrated_peaks
+                if getattr(p, 'deconvolved_spectrum', None) is not None
+            )
+            self.signals.log_message.emit(
+                f"Spectral deconvolution complete — {n_deconv} of {len(self.app.integrated_peaks)} peaks deconvolved"
+            )
+            return True
+
+        except Exception as e:
+            # Don't fail the file — log and let MS search fall back to raw extraction.
+            self.signals.log_message.emit(
+                f"Spectral deconvolution failed (continuing with raw spectra): {str(e)}"
+            )
+            return True
+
     def _run_ms_search(self):
         """Run MS library search on integrated peaks."""
         try:
