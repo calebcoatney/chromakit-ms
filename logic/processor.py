@@ -57,6 +57,10 @@ def _build_baseline_segments(x, ms_range, break_points):
 
     if ms_range is not None:
         t_lo, t_hi = float(ms_range[0]), float(ms_range[1])
+        if t_lo > t_hi:
+            raise ValueError(
+                f"ms_range must be (t_lo, t_hi) with t_lo <= t_hi; got ({t_lo}, {t_hi})"
+            )
         # Determine the carve-out boundaries
         i_lo = 0
         i_hi = n

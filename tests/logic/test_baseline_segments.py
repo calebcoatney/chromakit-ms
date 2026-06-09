@@ -93,7 +93,7 @@ def test_break_point_inside_ms_window_subdivides_fit_segment(x_axis):
     assert segs[1].end == segs[2].start
 
 
-def test_break_point_inside_masked_region_is_dropped(x_axis, caplog):
+def test_break_point_inside_masked_region_is_dropped(x_axis):
     """Break points before ms_range[0] should be silently dropped with a warning."""
     segs = _build_baseline_segments(
         x_axis, ms_range=(6.3, 9.99), break_points=[{'time': 2.0}]
@@ -143,3 +143,15 @@ def test_baseline_segment_dataclass_fields():
     assert seg.start == 0
     assert seg.end == 10
     assert seg.fit is True
+
+
+def test_swapped_ms_range_raises_value_error(x_axis):
+    """A swapped (t_hi, t_lo) ms_range should raise ValueError, not silently produce overlapping segments."""
+    with pytest.raises(ValueError, match="t_lo <= t_hi"):
+        _build_baseline_segments(x_axis, ms_range=(8.0, 2.0), break_points=None)
+
+
+def test_empty_x_returns_empty_list():
+    """Empty input should return an empty segment list, not raise."""
+    result = _build_baseline_segments(np.array([]), ms_range=None, break_points=None)
+    assert result == []
