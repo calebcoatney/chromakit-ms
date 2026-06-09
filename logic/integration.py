@@ -577,7 +577,17 @@ class Integrator:
                     else:
                         min_left = 0
                 else:
-                    min_left = 0
+                    # First peak: slice may include NaN from the MS-gated masked region.
+                    # Use nanargmin and fall back to 0 if the entire slice is NaN or empty.
+                    try:
+                        slice_ = integration_signal[0:peak_idx]
+                        if len(slice_) > 0 and np.any(np.isfinite(slice_)):
+                            min_left = int(np.nanargmin(slice_))
+                        else:
+                            min_left = 0
+                    except (ValueError, TypeError):
+                        # nanargmin raises ValueError on all-NaN slice
+                        min_left = 0
 
                 if i < len(peaks_x) - 1:  # If not the last peak
                     # Find the index of the next peak's x value in the x array
