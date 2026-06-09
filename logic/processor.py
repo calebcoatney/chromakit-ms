@@ -1,8 +1,133 @@
+from dataclasses import dataclass
+
 import numpy as np
 from scipy import signal, interpolate
 from scipy.signal import medfilt, savgol_filter, find_peaks
 from scipy.optimize import curve_fit
 from pybaselines import Baseline
+
+
+# Minimum length a segment must have for pybaselines to be worth running on it.
+# Most pybaselines methods need at least ~10 points to fit a meaningful baseline.
+MIN_SEGMENT_LEN = 10
+
+
+@dataclass
+class _BaselineSegment:
+    """A contiguous range of indices into the chromatogram x-axis.
+
+    fit=True: feed y[start:end] to pybaselines.
+    fit=False: fill baseline_y[start:end] with NaN (masked region).
+    """
+    start: int   # inclusive
+    end: int     # exclusive
+    fit: bool
+
+
+def _build_baseline_segments(x, ms_range, break_points):
+    """Decide which slices of the FID get a pybaselines fit and which are masked.
+
+    Args:
+        x: 1-D array of retention times (full FID time axis).
+        ms_range: Optional (t_lo, t_hi) tuple indicating when MS detector is on.
+                  If None, no carve-out is performed.
+        break_points: Optional list of break-point times for manual baseline
+                      splitting. Each entry is either a float or a dict with
+                      a 'time' key. Break points falling outside any fit=True
+                      segment are silently dropped (warning logged).
+
+    Returns:
+        Ordered list of _BaselineSegment objects that tile [0, len(x))
+        contiguously with no gaps or overlaps.
+
+    Algorithm:
+        1. Start with one segment [0, len(x), fit=True].
+        2. Carve out the pre-MS region (if ms_range[0] > x[0]) as fit=False.
+        3. Carve out the post-MS region (if ms_range[1] < x[-1]) as fit=False.
+        4. Subdivide each remaining fit=True segment by any break_points
+           that fall inside it.
+        5. Demote any fit=True segment shorter than MIN_SEGMENT_LEN to fit=False.
+    """
+    n = len(x)
+    if n == 0:
+        return []
+
+    # Step 1-3: build initial segments based on ms_range
+    segments = []
+
+    if ms_range is not None:
+        t_lo, t_hi = float(ms_range[0]), float(ms_range[1])
+        # Determine the carve-out boundaries
+        i_lo = 0
+        i_hi = n
+        if t_lo > x[0]:
+            i_lo = int(np.argmin(np.abs(x - t_lo)))
+        if t_hi < x[-1]:
+            i_hi = int(np.argmin(np.abs(x - t_hi))) + 1
+
+        # Build initial segments (preserving the masked regions)
+        if i_lo > 0:
+            segments.append(_BaselineSegment(start=0, end=i_lo, fit=False))
+        if i_hi > i_lo:
+            segments.append(_BaselineSegment(start=i_lo, end=i_hi, fit=True))
+        if i_hi < n:
+            segments.append(_BaselineSegment(start=i_hi, end=n, fit=False))
+    else:
+        segments.append(_BaselineSegment(start=0, end=n, fit=True))
+
+    # Step 4: subdivide fit=True segments by break_points
+    if break_points:
+        # Convert break_points to indices
+        bp_indices = []
+        for bp in break_points:
+            bp_time = bp.get('time', bp) if isinstance(bp, dict) else float(bp)
+            bp_idx = int(np.argmin(np.abs(x - bp_time)))
+            bp_indices.append(bp_idx)
+        bp_indices = sorted(set(bp_indices))
+
+        new_segments = []
+        for seg in segments:
+            if not seg.fit:
+                new_segments.append(seg)
+                continue
+            # Find break points that fall strictly inside this segment
+            inner_bps = [b for b in bp_indices if seg.start < b < seg.end]
+            if not inner_bps:
+                new_segments.append(seg)
+                continue
+            # Subdivide
+            boundaries = [seg.start] + inner_bps + [seg.end]
+            for i in range(len(boundaries) - 1):
+                new_segments.append(_BaselineSegment(
+                    start=boundaries[i],
+                    end=boundaries[i + 1],
+                    fit=True,
+                ))
+
+        # Identify dropped break points (those that didn't fall inside any fit=True segment)
+        used_bps = set()
+        for seg in segments:
+            if seg.fit:
+                for b in bp_indices:
+                    if seg.start < b < seg.end:
+                        used_bps.add(b)
+        dropped_bps = [b for b in bp_indices if b not in used_bps]
+        if dropped_bps:
+            print(f"Warning: {len(dropped_bps)} break point(s) dropped because they fall outside the MS-on region")
+
+        segments = new_segments
+
+    # Step 5: demote short fit=True segments
+    final_segments = []
+    for seg in segments:
+        if seg.fit and (seg.end - seg.start) < MIN_SEGMENT_LEN:
+            print(f"Warning: segment [{seg.start}:{seg.end}] is too short ({seg.end - seg.start} < {MIN_SEGMENT_LEN}); demoting to fit=False")
+            final_segments.append(_BaselineSegment(start=seg.start, end=seg.end, fit=False))
+        else:
+            final_segments.append(seg)
+
+    return final_segments
+
 
 class ChromatogramProcessor:
     """Processes chromatogram data with smoothing, baseline subtraction, and peak finding."""
