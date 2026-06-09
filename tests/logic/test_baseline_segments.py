@@ -229,3 +229,76 @@ def test_apply_baseline_correction_ms_range_plus_break_points():
     
     # MS-on region should be entirely finite (both halves of the break-point split)
     assert np.all(np.isfinite(bl[pre_ms_idx:post_ms_idx])), "MS-on region should be finite"
+
+
+def test_extend_nan_with_nearest_finite_basic():
+    """Helper should replace NaN with nearest finite value."""
+    from logic.processor import _extend_nan_with_nearest_finite
+
+    # NaN at the start
+    signal = np.array([np.nan, np.nan, 5.0, 4.0, 3.0])
+    out = _extend_nan_with_nearest_finite(signal)
+    expected = np.array([5.0, 5.0, 5.0, 4.0, 3.0])
+    np.testing.assert_array_equal(out, expected)
+
+
+def test_extend_nan_with_nearest_finite_both_ends():
+    """NaN at both ends should be filled with respective nearest finite values."""
+    from logic.processor import _extend_nan_with_nearest_finite
+
+    signal = np.array([np.nan, np.nan, 1.0, 2.0, 3.0, np.nan])
+    out = _extend_nan_with_nearest_finite(signal)
+    expected = np.array([1.0, 1.0, 1.0, 2.0, 3.0, 3.0])
+    np.testing.assert_array_equal(out, expected)
+
+
+def test_extend_nan_with_nearest_finite_all_nan():
+    """All-NaN input should return zeros."""
+    from logic.processor import _extend_nan_with_nearest_finite
+
+    signal = np.array([np.nan, np.nan, np.nan])
+    out = _extend_nan_with_nearest_finite(signal)
+    np.testing.assert_array_equal(out, np.zeros(3))
+
+
+def test_extend_nan_with_nearest_finite_all_finite():
+    """All-finite input should be returned unchanged (copy)."""
+    from logic.processor import _extend_nan_with_nearest_finite
+
+    signal = np.array([1.0, 2.0, 3.0])
+    out = _extend_nan_with_nearest_finite(signal)
+    np.testing.assert_array_equal(out, signal)
+    # Verify it's not the same object (defensive copy)
+    assert out is not signal
+
+
+def test_extend_nan_with_nearest_finite_empty():
+    """Empty input should return an empty array."""
+    from logic.processor import _extend_nan_with_nearest_finite
+
+    out = _extend_nan_with_nearest_finite(np.array([]))
+    assert len(out) == 0
+
+
+def test_extend_nan_with_nearest_finite_eliminates_boundary_step():
+    """The whole point of this helper: no peak at the masked/unmasked boundary."""
+    from logic.processor import _extend_nan_with_nearest_finite
+    from scipy.signal import find_peaks
+
+    # Simulate a descending solvent tail starting at the MS-on boundary
+    n = 1000
+    signal = np.full(n, np.nan)
+    # MS-on region starts at index 500, with a descending tail from 150 down to 10
+    tail_values = np.linspace(150.0, 10.0, n - 500)
+    signal[500:] = tail_values
+
+    # Replace NaN with flat shelf
+    extended = _extend_nan_with_nearest_finite(signal)
+
+    # The flat shelf [0:500] should all equal signal[500] = 150
+    np.testing.assert_array_almost_equal(extended[:500], 150.0)
+    # And no peak should be detected at the boundary (index 500)
+    peaks, _ = find_peaks(extended, prominence=1.0)
+    assert 500 not in peaks, f"Spurious peak at boundary; found peaks at {peaks}"
+    # In fact, no peaks at all because the signal is monotonically non-increasing
+    assert len(peaks) == 0

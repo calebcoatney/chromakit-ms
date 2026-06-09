@@ -133,6 +133,49 @@ def _build_baseline_segments(x, ms_range, break_points):
     return final_segments
 
 
+def _extend_nan_with_nearest_finite(signal):
+    """Replace NaN values with the nearest finite value (flat extension).
+
+    Creates a flat 'shelf' that extends the boundary value into the masked region.
+    This eliminates the discontinuity that a constant sentinel like -inf or 0
+    would introduce, preventing scipy.signal.find_peaks and savgol-based
+    shoulder detection from spuriously firing at the masked/unmasked boundary.
+
+    If the entire signal is NaN, returns a zero array.
+    If all NaN values are at one end, that end gets the nearest finite value.
+    If NaN values appear in a middle gap, both sides get their nearest finite
+    value (the gap may end up with a step in the middle, but that's the user's
+    responsibility — middle gaps are not a normal case for MS-gated chromatograms).
+
+    Args:
+        signal: 1-D array, possibly containing NaN values.
+
+    Returns:
+        1-D array of same length with NaN replaced by nearest finite value.
+        The input is not modified.
+    """
+    signal = np.asarray(signal, dtype=float)
+    n = len(signal)
+    if n == 0:
+        return signal.copy()
+
+    finite_mask = np.isfinite(signal)
+    if not np.any(finite_mask):
+        return np.zeros_like(signal)
+    if np.all(finite_mask):
+        return signal.copy()
+
+    # np.interp linearly interpolates across NaN gaps and extrapolates flat at the ends.
+    # Indices of finite samples
+    finite_indices = np.flatnonzero(finite_mask)
+    all_indices = np.arange(n)
+
+    # np.interp clamps outside the range of finite_indices to the endpoint values,
+    # which gives us the "flat shelf" behavior at both ends.
+    out = np.interp(all_indices, finite_indices, signal[finite_indices])
+    return out
+
+
 class ChromatogramProcessor:
     """Processes chromatogram data with smoothing, baseline subtraction, and peak finding."""
 
@@ -158,18 +201,13 @@ class ChromatogramProcessor:
 
         signal_for_detection = smoothed_y if smoothed_y is not None else y
 
-        # Replace NaN (from MS-gated baseline-masked regions) with -inf so masked
-        # positions never qualify as peaks. scipy.signal.find_peaks raises on NaN.
-        signal_for_detection = np.nan_to_num(
-            signal_for_detection, nan=-np.inf, posinf=np.inf, neginf=-np.inf
-        )
+        # Extend NaN regions (from MS-gated baseline masking) with the nearest finite
+        # value. This creates a flat 'shelf' that prevents find_peaks from treating
+        # the masked/unmasked boundary as a peak (a -inf sentinel would create a
+        # spurious step that find_peaks interprets as a local maximum).
+        signal_for_detection = _extend_nan_with_nearest_finite(signal_for_detection)
 
-        # Range calc: use only finite values to avoid -inf contaminating the result.
-        finite_mask = np.isfinite(signal_for_detection)
-        if np.any(finite_mask):
-            signal_range = np.max(signal_for_detection[finite_mask]) - np.min(signal_for_detection[finite_mask])
-        else:
-            signal_range = 1.0  # Defensive fallback; no finite data anyway
+        signal_range = np.max(signal_for_detection) - np.min(signal_for_detection)
         min_prominence = peak_prominence if peak_prominence > 1 else peak_prominence * signal_range
 
         peak_indices, peak_props = find_peaks(signal_for_detection, prominence=min_prominence, width=peak_width)
@@ -208,10 +246,9 @@ class ChromatogramProcessor:
             # This is mathematically superior to gradient(gradient(smooth(y))) because
             # the polynomial fit provides optimal least-squares derivative estimates.
             dx = np.median(np.diff(x))
-            # Sanitize NaN (from MS-gated baseline-masked regions) before savgol_filter,
-            # which would otherwise propagate NaN through the smoothed signal and
-            # derivatives, ultimately raising in find_peaks below.
-            y_for_savgol = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            # Extend NaN regions with nearest finite value (flat shelf) to keep the
+            # savgol-derived derivatives smooth across the masked/unmasked boundary.
+            y_for_savgol = _extend_nan_with_nearest_finite(y)
             y_shoulder_smooth = savgol_filter(y_for_savgol, shoulder_window, shoulder_polyorder)
             dy = savgol_filter(y_for_savgol, shoulder_window, shoulder_polyorder, deriv=1, delta=dx)
             d2y = savgol_filter(y_for_savgol, shoulder_window, shoulder_polyorder, deriv=2, delta=dx)
@@ -1621,21 +1658,17 @@ class ChromatogramProcessor:
         # Use the smoothed signal for detection if available
         signal_for_detection = smoothed_y if smoothed_y is not None else y
 
-        # Replace NaN (from MS-gated baseline-masked regions) with -inf so masked
-        # positions never qualify as peaks. scipy.signal.find_peaks raises on NaN.
-        signal_for_detection = np.nan_to_num(
-            signal_for_detection, nan=-np.inf, posinf=np.inf, neginf=-np.inf
-        )
+        # Extend NaN regions (from MS-gated baseline masking) with the nearest finite
+        # value. This creates a flat 'shelf' that prevents find_peaks from treating
+        # the masked/unmasked boundary as a peak (a -inf sentinel would create a
+        # spurious step that find_peaks interprets as a local maximum).
+        signal_for_detection = _extend_nan_with_nearest_finite(signal_for_detection)
 
         # Negate the signal so that negative peaks become positive peaks
         negated = -signal_for_detection
 
-        # Calculate effective prominence (use only finite values to avoid inf contamination)
-        finite_mask = np.isfinite(negated)
-        if np.any(finite_mask):
-            signal_range = np.max(negated[finite_mask]) - np.min(negated[finite_mask])
-        else:
-            signal_range = 1.0  # Defensive fallback; no finite data anyway
+        # Calculate effective prominence
+        signal_range = np.max(negated) - np.min(negated)
         effective_prominence = neg_prominence if neg_prominence > 1 else neg_prominence * signal_range
 
         # Find peaks on the negated signal
