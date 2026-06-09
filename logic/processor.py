@@ -575,62 +575,79 @@ class ChromatogramProcessor:
             print(f"Smoothing failed: {str(e)}")
             return y
     
-    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0):
+    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0, ms_range=None):
         """Apply baseline correction using the specified method.
         
-        If break_points are provided, the signal is split at each break point
-        and baselines are fitted independently to each segment.
-        """
-        # Handle break points: split signal, fit each segment, stitch back
-        if break_points and len(break_points) > 0 and x is not None and len(x) > 0:
-            # Compute split indices from break point times
-            split_indices = []
-            for bp in break_points:
-                bp_time = bp.get('time', bp) if isinstance(bp, dict) else float(bp)
-                bp_tol = bp.get('tolerance', 0.0) if isinstance(bp, dict) else 0.0
-                # Find the index closest to the break point time
-                idx = int(np.argmin(np.abs(x - bp_time)))
-                # Apply tolerance: use the midpoint of the tolerance window
-                # The tolerance just gives the user some slack in specifying the exact time
-                split_indices.append(idx)
-            
-            # Sort and deduplicate
-            split_indices = sorted(set(split_indices))
-            # Filter out boundary indices
-            split_indices = [i for i in split_indices if 0 < i < len(x)]
-            
-            if len(split_indices) > 0:
-                print(f"Break point baseline: splitting signal at {len(split_indices)} point(s)")
-                # Build segment boundaries: [0, idx1, idx2, ..., len(x)]
-                boundaries = [0] + split_indices + [len(x)]
-                
-                baseline_segments = []
-                corrected_segments = []
-                
-                for seg_i in range(len(boundaries) - 1):
-                    seg_start = boundaries[seg_i]
-                    seg_end = boundaries[seg_i + 1]
-                    seg_y = y[seg_start:seg_end]
-                    
-                    if len(seg_y) == 0:
-                        continue
-                    
-                    print(f"  Segment {seg_i + 1}: indices [{seg_start}:{seg_end}], length={len(seg_y)}")
-                    # Fit baseline to this segment using the same method/params
-                    seg_baseline, seg_corrected = self._apply_baseline_correction_single(
-                        seg_y, method=method, lam=lam, fastchrom_params=fastchrom_params,
-                        baseline_offset=baseline_offset
-                    )
-                    baseline_segments.append(seg_baseline)
-                    corrected_segments.append(seg_corrected)
-                
-                if len(baseline_segments) > 0:
-                    full_baseline = np.concatenate(baseline_segments)
-                    full_corrected = np.concatenate(corrected_segments)
-                    return full_baseline, full_corrected
-                # Fall through to single-segment if something went wrong
+        Signal is split into segments based on:
+          1. The MS-on time window (ms_range). Regions outside this window are
+             not fit — they receive NaN baseline values.
+          2. User-defined break_points within the MS-on region.
         
-        return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params, baseline_offset=baseline_offset)
+        Each fit=True segment is fitted independently with pybaselines; fit=False
+        segments are filled with NaN. Results are concatenated to produce a
+        full-length baseline (with NaN holes) and corrected signal.
+        
+        Args:
+            x: Retention time array.
+            y: Signal intensity array (already smoothed if smoothing is enabled).
+            method: pybaselines method name.
+            lam: Lambda regularization parameter (for methods that use it).
+            fastchrom_params: Optional fastchrom-specific params.
+            break_points: Optional list of break-point times (or dicts with 'time' key).
+            baseline_offset: Constant offset applied to the fitted baseline.
+            ms_range: Optional (t_lo, t_hi) tuple of MS-detector-on time window.
+                      Regions outside this window are not fitted.
+        
+        Returns:
+            (baseline_y, corrected_y) — both full-length arrays matching len(y).
+            Masked regions contain NaN.
+        """
+        if x is None or len(x) == 0 or len(y) == 0:
+            return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params, baseline_offset=baseline_offset)
+        
+        segments = _build_baseline_segments(x, ms_range, break_points)
+        
+        if not segments:
+            return np.zeros_like(y), np.copy(y)
+        
+        baseline_pieces = []
+        corrected_pieces = []
+        
+        any_fit_succeeded = False
+        for seg in segments:
+            seg_y = y[seg.start:seg.end]
+            if len(seg_y) == 0:
+                continue
+            
+            if seg.fit:
+                print(f"  Baseline segment [{seg.start}:{seg.end}] (fit, length={len(seg_y)})")
+                seg_baseline, seg_corrected = self._apply_baseline_correction_single(
+                    seg_y, method=method, lam=lam,
+                    fastchrom_params=fastchrom_params,
+                    baseline_offset=baseline_offset,
+                )
+                any_fit_succeeded = True
+            else:
+                print(f"  Baseline segment [{seg.start}:{seg.end}] (masked, NaN, length={len(seg_y)})")
+                seg_baseline = np.full(len(seg_y), np.nan)
+                seg_corrected = np.full(len(seg_y), np.nan)
+            
+            baseline_pieces.append(seg_baseline)
+            corrected_pieces.append(seg_corrected)
+        
+        if not any_fit_succeeded:
+            print("Error: no segments were fit. Returning zero baseline.")
+            return np.zeros_like(y), np.copy(y)
+        
+        full_baseline = np.concatenate(baseline_pieces)
+        full_corrected = np.concatenate(corrected_pieces)
+        
+        # Defensive: ensure length matches y exactly
+        if len(full_baseline) != len(y):
+            print(f"Warning: baseline length {len(full_baseline)} != signal length {len(y)}; falling back to single-segment fit")
+            return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params, baseline_offset=baseline_offset)
+        
+        return full_baseline, full_corrected
     
     def _apply_baseline_correction_single(self, y, method="asls", lam=1e6, fastchrom_params=None, baseline_offset=0.0):
         """Apply baseline correction to a single signal segment."""
