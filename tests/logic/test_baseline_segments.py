@@ -199,3 +199,33 @@ def test_apply_baseline_correction_no_ms_range_no_nan():
     assert len(bl) == len(y)
     assert np.all(np.isfinite(bl)), "no NaN should appear when ms_range is not provided"
     assert np.all(np.isfinite(corr))
+
+
+def test_apply_baseline_correction_ms_range_plus_break_points():
+    """ms_range carves out the masked region; break_points then subdivide the fit region."""
+    from logic.processor import ChromatogramProcessor
+    
+    processor = ChromatogramProcessor()
+    x = np.linspace(0.0, 9.99, 1000)
+    rng = np.random.default_rng(seed=42)
+    y = rng.normal(loc=1.0, scale=0.05, size=1000)
+    
+    bl, corr = processor._apply_baseline_correction(
+        x, y, method="arpls", lam=1e4,
+        ms_range=(2.0, 8.0),
+        break_points=[{'time': 5.0}],
+    )
+    
+    # Output must be full-length
+    assert len(bl) == len(y)
+    
+    # Pre-MS region (t < 2.0) should be NaN
+    pre_ms_idx = int(np.argmin(np.abs(x - 2.0)))
+    assert np.all(np.isnan(bl[:pre_ms_idx])), "pre-MS baseline should be NaN"
+    
+    # Post-MS region (t > 8.0) should be NaN
+    post_ms_idx = int(np.argmin(np.abs(x - 8.0))) + 1
+    assert np.all(np.isnan(bl[post_ms_idx:])), "post-MS baseline should be NaN"
+    
+    # MS-on region should be entirely finite (both halves of the break-point split)
+    assert np.all(np.isfinite(bl[pre_ms_idx:post_ms_idx])), "MS-on region should be finite"
