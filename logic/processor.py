@@ -601,6 +601,10 @@ class ChromatogramProcessor:
         Returns:
             (baseline_y, corrected_y) — both full-length arrays matching len(y).
             Masked regions contain NaN.
+        
+        Raises:
+            ValueError: If ms_range is provided with t_lo > t_hi (propagated
+                from _build_baseline_segments).
         """
         if x is None or len(x) == 0 or len(y) == 0:
             return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params, baseline_offset=baseline_offset)
@@ -610,10 +614,15 @@ class ChromatogramProcessor:
         if not segments:
             return np.zeros_like(y), np.copy(y)
         
+        # Guard: if every segment is masked/demoted, there's nothing for pybaselines
+        # to fit. Fall back to zero baseline (caller sees y unmodified).
+        if not any(s.fit for s in segments):
+            print("Error: no fit-eligible segments (all masked or demoted). Returning zero baseline.")
+            return np.zeros_like(y), np.copy(y)
+        
         baseline_pieces = []
         corrected_pieces = []
         
-        any_fit_succeeded = False
         for seg in segments:
             seg_y = y[seg.start:seg.end]
             if len(seg_y) == 0:
@@ -626,7 +635,6 @@ class ChromatogramProcessor:
                     fastchrom_params=fastchrom_params,
                     baseline_offset=baseline_offset,
                 )
-                any_fit_succeeded = True
             else:
                 print(f"  Baseline segment [{seg.start}:{seg.end}] (masked, NaN, length={len(seg_y)})")
                 seg_baseline = np.full(len(seg_y), np.nan)
@@ -635,17 +643,18 @@ class ChromatogramProcessor:
             baseline_pieces.append(seg_baseline)
             corrected_pieces.append(seg_corrected)
         
-        if not any_fit_succeeded:
-            print("Error: no segments were fit. Returning zero baseline.")
-            return np.zeros_like(y), np.copy(y)
-        
         full_baseline = np.concatenate(baseline_pieces)
         full_corrected = np.concatenate(corrected_pieces)
         
-        # Defensive: ensure length matches y exactly
-        if len(full_baseline) != len(y):
-            print(f"Warning: baseline length {len(full_baseline)} != signal length {len(y)}; falling back to single-segment fit")
-            return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params, baseline_offset=baseline_offset)
+        # Invariant: _build_baseline_segments guarantees segments tile [0, len(y)) exactly,
+        # and _apply_baseline_correction_single returns same-length output. A mismatch
+        # here means the helper's contract has been violated — fail loudly rather than
+        # silently returning a wrong baseline that includes the solvent peak.
+        assert len(full_baseline) == len(y), (
+            f"baseline segment tiling invariant violated: "
+            f"got len(baseline)={len(full_baseline)}, expected len(y)={len(y)}. "
+            f"This is a bug in _build_baseline_segments."
+        )
         
         return full_baseline, full_corrected
     

@@ -155,3 +155,47 @@ def test_empty_x_returns_empty_list():
     """Empty input should return an empty segment list, not raise."""
     result = _build_baseline_segments(np.array([]), ms_range=None, break_points=None)
     assert result == []
+
+
+def test_apply_baseline_correction_with_ms_range_produces_nan_in_masked_region():
+    """When ms_range is provided, the baseline outside it should be NaN."""
+    from logic.processor import ChromatogramProcessor
+    
+    processor = ChromatogramProcessor()
+    x = np.linspace(0.0, 9.99, 1000)
+    # Signal with a noisy baseline around 1.0 — pybaselines should be able to fit something.
+    rng = np.random.default_rng(seed=42)
+    y = rng.normal(loc=1.0, scale=0.05, size=1000)
+    
+    bl, corr = processor._apply_baseline_correction(
+        x, y, method="arpls", lam=1e4, ms_range=(5.0, 9.99)
+    )
+    
+    # Output must be full-length
+    assert len(bl) == len(y)
+    assert len(corr) == len(y)
+    
+    # Pre-MS region (t < 5.0) should be entirely NaN
+    pre_ms_idx = int(np.argmin(np.abs(x - 5.0)))
+    assert np.all(np.isnan(bl[:pre_ms_idx])), "pre-MS baseline should be NaN"
+    assert np.all(np.isnan(corr[:pre_ms_idx])), "pre-MS corrected should be NaN"
+    
+    # MS-on region should be entirely finite
+    assert np.all(np.isfinite(bl[pre_ms_idx:])), "MS-on baseline should be finite"
+    assert np.all(np.isfinite(corr[pre_ms_idx:])), "MS-on corrected should be finite"
+
+
+def test_apply_baseline_correction_no_ms_range_no_nan():
+    """When ms_range is None (current default), no NaN should appear (backward compat)."""
+    from logic.processor import ChromatogramProcessor
+    
+    processor = ChromatogramProcessor()
+    x = np.linspace(0.0, 9.99, 1000)
+    rng = np.random.default_rng(seed=42)
+    y = rng.normal(loc=1.0, scale=0.05, size=1000)
+    
+    bl, corr = processor._apply_baseline_correction(x, y, method="arpls", lam=1e4)
+    
+    assert len(bl) == len(y)
+    assert np.all(np.isfinite(bl)), "no NaN should appear when ms_range is not provided"
+    assert np.all(np.isfinite(corr))
