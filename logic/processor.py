@@ -157,10 +157,21 @@ class ChromatogramProcessor:
         peak_width = peak_params.get('min_width', 0) or None  # None disables width filter in find_peaks
 
         signal_for_detection = smoothed_y if smoothed_y is not None else y
-        
-        signal_range = np.max(signal_for_detection) - np.min(signal_for_detection)
+
+        # Replace NaN (from MS-gated baseline-masked regions) with -inf so masked
+        # positions never qualify as peaks. scipy.signal.find_peaks raises on NaN.
+        signal_for_detection = np.nan_to_num(
+            signal_for_detection, nan=-np.inf, posinf=np.inf, neginf=-np.inf
+        )
+
+        # Range calc: use only finite values to avoid -inf contaminating the result.
+        finite_mask = np.isfinite(signal_for_detection)
+        if np.any(finite_mask):
+            signal_range = np.max(signal_for_detection[finite_mask]) - np.min(signal_for_detection[finite_mask])
+        else:
+            signal_range = 1.0  # Defensive fallback; no finite data anyway
         min_prominence = peak_prominence if peak_prominence > 1 else peak_prominence * signal_range
-        
+
         peak_indices, peak_props = find_peaks(signal_for_detection, prominence=min_prominence, width=peak_width)
 
         # --- Shoulder detection (noise-adaptive, locally-normalized) ---
@@ -197,9 +208,13 @@ class ChromatogramProcessor:
             # This is mathematically superior to gradient(gradient(smooth(y))) because
             # the polynomial fit provides optimal least-squares derivative estimates.
             dx = np.median(np.diff(x))
-            y_shoulder_smooth = savgol_filter(y, shoulder_window, shoulder_polyorder)
-            dy = savgol_filter(y, shoulder_window, shoulder_polyorder, deriv=1, delta=dx)
-            d2y = savgol_filter(y, shoulder_window, shoulder_polyorder, deriv=2, delta=dx)
+            # Sanitize NaN (from MS-gated baseline-masked regions) before savgol_filter,
+            # which would otherwise propagate NaN through the smoothed signal and
+            # derivatives, ultimately raising in find_peaks below.
+            y_for_savgol = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            y_shoulder_smooth = savgol_filter(y_for_savgol, shoulder_window, shoulder_polyorder)
+            dy = savgol_filter(y_for_savgol, shoulder_window, shoulder_polyorder, deriv=1, delta=dx)
+            d2y = savgol_filter(y_for_savgol, shoulder_window, shoulder_polyorder, deriv=2, delta=dx)
 
             # Noise-adaptive threshold: estimate noise from baseline regions only
             # (peak regions inflate MAD when peaks occupy a large fraction of the signal)
@@ -1606,11 +1621,21 @@ class ChromatogramProcessor:
         # Use the smoothed signal for detection if available
         signal_for_detection = smoothed_y if smoothed_y is not None else y
 
+        # Replace NaN (from MS-gated baseline-masked regions) with -inf so masked
+        # positions never qualify as peaks. scipy.signal.find_peaks raises on NaN.
+        signal_for_detection = np.nan_to_num(
+            signal_for_detection, nan=-np.inf, posinf=np.inf, neginf=-np.inf
+        )
+
         # Negate the signal so that negative peaks become positive peaks
         negated = -signal_for_detection
 
-        # Calculate effective prominence
-        signal_range = np.max(negated) - np.min(negated)
+        # Calculate effective prominence (use only finite values to avoid inf contamination)
+        finite_mask = np.isfinite(negated)
+        if np.any(finite_mask):
+            signal_range = np.max(negated[finite_mask]) - np.min(negated[finite_mask])
+        else:
+            signal_range = 1.0  # Defensive fallback; no finite data anyway
         effective_prominence = neg_prominence if neg_prominence > 1 else neg_prominence * signal_range
 
         # Find peaks on the negated signal
