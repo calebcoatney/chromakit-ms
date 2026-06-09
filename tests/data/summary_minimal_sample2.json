@@ -1,0 +1,34 @@
+{
+  "sample_id": "S2",
+  "timestamp": "2026-06-08T12:30:00",
+  "method": "test",
+  "detector": "FID1A",
+  "signal": "test",
+  "notebook": "test",
+  "peaks": [
+    {
+      "peak_number": 1,
+      "compound_id": "Nonane",
+      "casno": "000111-84-2",
+      "retention_time": 18.0,
+      "area": 15000000.0,
+      "Qual": 95
+    },
+    {
+      "peak_number": 2,
+      "compound_id": "Toluene",
+      "casno": "000108-88-3",
+      "retention_time": 14.0,
+      "area": 8000000.0,
+      "Qual": 92
+    },
+    {
+      "peak_number": 3,
+      "compound_id": "Phenol, 2-methyl-",
+      "casno": "000095-48-7",
+      "retention_time": 28.0,
+      "area": 4000000.0,
+      "Qual": 85
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "sample_id": "S1",
+  "timestamp": "2026-06-08T12:00:00",
+  "method": "test",
+  "detector": "FID1A",
+  "signal": "test",
+  "notebook": "test",
+  "peaks": [
+    {
+      "peak_number": 1,
+      "compound_id": "Acetic acid",
+      "casno": "000064-19-7",
+      "retention_time": 13.5,
+      "area": 20000000.0,
+      "Qual": 91
+    },
+    {
+      "peak_number": 2,
+      "compound_id": "Phenol",
+      "casno": "000108-95-2",
+      "retention_time": 25.0,
+      "area": 10000000.0,
+      "Qual": 88
+    },
+    {
+      "peak_number": 3,
+      "compound_id": "Levoglucosan",
+      "casno": "000498-07-7",
+      "retention_time": 45.0,
+      "area": 5000000.0,
+      "Qual": 80
+    },
+    {
+      "peak_number": 4,
+      "compound_id": "Unknown compound A",
+      "casno": "999999-99-9",
+      "retention_time": 30.0,
+      "area": 1000000.0,
+      "Qual": 50
+    },
+    {
+      "peak_number": 5,
+      "compound_id": "Unknown compound B",
+      "casno": "000000-00-0",
+      "retention_time": 31.0,
+      "area": 800000.0,
+      "Qual": 60
+    },
+    {
+      "peak_number": 6,
+      "compound_id": "Malformed CAS compound",
+      "casno": "175-13-7-61-8",
+      "retention_time": 35.0,
+      "area": 500000.0,
+      "Qual": 40
+    }
+  ]
+}
