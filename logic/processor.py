@@ -1,8 +1,180 @@
+from dataclasses import dataclass
+
 import numpy as np
 from scipy import signal, interpolate
 from scipy.signal import medfilt, savgol_filter, find_peaks
 from scipy.optimize import curve_fit
 from pybaselines import Baseline
+
+
+# Minimum length a segment must have for pybaselines to be worth running on it.
+# Most pybaselines methods need at least ~10 points to fit a meaningful baseline.
+MIN_SEGMENT_LEN = 10
+
+
+@dataclass
+class _BaselineSegment:
+    """A contiguous range of indices into the chromatogram x-axis.
+
+    fit=True: feed y[start:end] to pybaselines.
+    fit=False: fill baseline_y[start:end] with NaN (masked region).
+    """
+    start: int   # inclusive
+    end: int     # exclusive
+    fit: bool
+
+
+def _build_baseline_segments(x, ms_range, break_points):
+    """Decide which slices of the FID get a pybaselines fit and which are masked.
+
+    Args:
+        x: 1-D array of retention times (full FID time axis).
+        ms_range: Optional (t_lo, t_hi) tuple indicating when MS detector is on.
+                  If None, no carve-out is performed.
+        break_points: Optional list of break-point times for manual baseline
+                      splitting. Each entry is either a float or a dict with
+                      a 'time' key. Break points falling outside any fit=True
+                      segment are silently dropped (warning logged).
+
+    Returns:
+        Ordered list of _BaselineSegment objects that tile [0, len(x))
+        contiguously with no gaps or overlaps.
+
+    Algorithm:
+        1. Start with one segment [0, len(x), fit=True].
+        2. Carve out the pre-MS region (if ms_range[0] > x[0]) as fit=False.
+        3. Carve out the post-MS region (if ms_range[1] < x[-1]) as fit=False.
+        4. Subdivide each remaining fit=True segment by any break_points
+           that fall inside it.
+        5. Demote any fit=True segment shorter than MIN_SEGMENT_LEN to fit=False.
+    """
+    n = len(x)
+    if n == 0:
+        return []
+
+    # Step 1-3: build initial segments based on ms_range
+    segments = []
+
+    if ms_range is not None:
+        t_lo, t_hi = float(ms_range[0]), float(ms_range[1])
+        if t_lo > t_hi:
+            raise ValueError(
+                f"ms_range must be (t_lo, t_hi) with t_lo <= t_hi; got ({t_lo}, {t_hi})"
+            )
+        # Determine the carve-out boundaries
+        i_lo = 0
+        i_hi = n
+        if t_lo > x[0]:
+            i_lo = int(np.argmin(np.abs(x - t_lo)))
+        if t_hi < x[-1]:
+            i_hi = int(np.argmin(np.abs(x - t_hi))) + 1
+
+        # Build initial segments (preserving the masked regions)
+        if i_lo > 0:
+            segments.append(_BaselineSegment(start=0, end=i_lo, fit=False))
+        if i_hi > i_lo:
+            segments.append(_BaselineSegment(start=i_lo, end=i_hi, fit=True))
+        if i_hi < n:
+            segments.append(_BaselineSegment(start=i_hi, end=n, fit=False))
+    else:
+        segments.append(_BaselineSegment(start=0, end=n, fit=True))
+
+    # Step 4: subdivide fit=True segments by break_points
+    if break_points:
+        # Convert break_points to indices
+        bp_indices = []
+        for bp in break_points:
+            bp_time = bp.get('time', bp) if isinstance(bp, dict) else float(bp)
+            bp_idx = int(np.argmin(np.abs(x - bp_time)))
+            bp_indices.append(bp_idx)
+        bp_indices = sorted(set(bp_indices))
+
+        new_segments = []
+        for seg in segments:
+            if not seg.fit:
+                new_segments.append(seg)
+                continue
+            # Find break points that fall strictly inside this segment
+            inner_bps = [b for b in bp_indices if seg.start < b < seg.end]
+            if not inner_bps:
+                new_segments.append(seg)
+                continue
+            # Subdivide
+            boundaries = [seg.start] + inner_bps + [seg.end]
+            for i in range(len(boundaries) - 1):
+                new_segments.append(_BaselineSegment(
+                    start=boundaries[i],
+                    end=boundaries[i + 1],
+                    fit=True,
+                ))
+
+        # Identify dropped break points (those that didn't fall inside any fit=True segment)
+        used_bps = set()
+        for seg in segments:
+            if seg.fit:
+                for b in bp_indices:
+                    if seg.start < b < seg.end:
+                        used_bps.add(b)
+        dropped_bps = [b for b in bp_indices if b not in used_bps]
+        if dropped_bps:
+            print(f"Warning: {len(dropped_bps)} break point(s) dropped because they fall outside the MS-on region")
+
+        segments = new_segments
+
+    # Step 5: demote short fit=True segments
+    final_segments = []
+    for seg in segments:
+        if seg.fit and (seg.end - seg.start) < MIN_SEGMENT_LEN:
+            print(f"Warning: segment [{seg.start}:{seg.end}] is too short ({seg.end - seg.start} < {MIN_SEGMENT_LEN}); demoting to fit=False")
+            final_segments.append(_BaselineSegment(start=seg.start, end=seg.end, fit=False))
+        else:
+            final_segments.append(seg)
+
+    return final_segments
+
+
+def _extend_nan_with_nearest_finite(signal):
+    """Replace NaN values with the nearest finite value (flat extension).
+
+    Creates a flat 'shelf' that extends the boundary value into the masked region.
+    This eliminates the discontinuity that a constant sentinel like -inf or 0
+    would introduce, preventing scipy.signal.find_peaks and savgol-based
+    shoulder detection from spuriously firing at the masked/unmasked boundary.
+
+    If the entire signal is NaN, returns a zero array.
+    If all NaN values are at one end, that end gets the nearest finite value.
+    If NaN values appear in a middle gap, both sides get their nearest finite
+    value (the gap may end up with a step in the middle, but that's the user's
+    responsibility — middle gaps are not a normal case for MS-gated chromatograms).
+
+    Args:
+        signal: 1-D array, possibly containing NaN values.
+
+    Returns:
+        1-D array of same length with NaN replaced by nearest finite value.
+        The input is not modified.
+    """
+    signal = np.asarray(signal, dtype=float)
+    n = len(signal)
+    if n == 0:
+        return signal.copy()
+
+    finite_mask = np.isfinite(signal)
+    if not np.any(finite_mask):
+        return np.zeros_like(signal)
+    if np.all(finite_mask):
+        return signal.copy()
+
+    # np.interp linearly interpolates across NaN gaps and extrapolates flat at the ends.
+    # Indices of finite samples
+    finite_indices = np.flatnonzero(finite_mask)
+    all_indices = np.arange(n)
+
+    # np.interp clamps outside the range of finite_indices to the endpoint values,
+    # which gives us the "flat shelf" behavior at both ends.
+    out = np.interp(all_indices, finite_indices, signal[finite_indices])
+    return out
+
 
 class ChromatogramProcessor:
     """Processes chromatogram data with smoothing, baseline subtraction, and peak finding."""
@@ -28,10 +200,16 @@ class ChromatogramProcessor:
         peak_width = peak_params.get('min_width', 0) or None  # None disables width filter in find_peaks
 
         signal_for_detection = smoothed_y if smoothed_y is not None else y
-        
+
+        # Extend NaN regions (from MS-gated baseline masking) with the nearest finite
+        # value. This creates a flat 'shelf' that prevents find_peaks from treating
+        # the masked/unmasked boundary as a peak (a -inf sentinel would create a
+        # spurious step that find_peaks interprets as a local maximum).
+        signal_for_detection = _extend_nan_with_nearest_finite(signal_for_detection)
+
         signal_range = np.max(signal_for_detection) - np.min(signal_for_detection)
         min_prominence = peak_prominence if peak_prominence > 1 else peak_prominence * signal_range
-        
+
         peak_indices, peak_props = find_peaks(signal_for_detection, prominence=min_prominence, width=peak_width)
 
         # --- Shoulder detection (noise-adaptive, locally-normalized) ---
@@ -68,9 +246,12 @@ class ChromatogramProcessor:
             # This is mathematically superior to gradient(gradient(smooth(y))) because
             # the polynomial fit provides optimal least-squares derivative estimates.
             dx = np.median(np.diff(x))
-            y_shoulder_smooth = savgol_filter(y, shoulder_window, shoulder_polyorder)
-            dy = savgol_filter(y, shoulder_window, shoulder_polyorder, deriv=1, delta=dx)
-            d2y = savgol_filter(y, shoulder_window, shoulder_polyorder, deriv=2, delta=dx)
+            # Extend NaN regions with nearest finite value (flat shelf) to keep the
+            # savgol-derived derivatives smooth across the masked/unmasked boundary.
+            y_for_savgol = _extend_nan_with_nearest_finite(y)
+            y_shoulder_smooth = savgol_filter(y_for_savgol, shoulder_window, shoulder_polyorder)
+            dy = savgol_filter(y_for_savgol, shoulder_window, shoulder_polyorder, deriv=1, delta=dx)
+            d2y = savgol_filter(y_for_savgol, shoulder_window, shoulder_polyorder, deriv=2, delta=dx)
 
             # Noise-adaptive threshold: estimate noise from baseline regions only
             # (peak regions inflate MAD when peaks occupy a large fraction of the signal)
@@ -277,13 +458,16 @@ class ChromatogramProcessor:
             smoothed_y = np.copy(y_values)
         
         # STEP 2: Always calculate baseline
+        # Pass ms_range so the baseline is not fit through the solvent peak
+        # (the pre-MS region of the FID is masked with NaN).
         baseline_y, baseline_corrected_y = self._apply_baseline_correction(
             x_values, smoothed_y,
             method=params['baseline']['method'],
             lam=params['baseline']['lambda'],
             fastchrom_params=params['baseline'].get('fastchrom'),
             break_points=params['baseline'].get('break_points', []),
-            baseline_offset=params['baseline'].get('baseline_offset', 0.0)
+            baseline_offset=params['baseline'].get('baseline_offset', 0.0),
+            ms_range=ms_range,
         )
         
         # STEP 3: Find peaks and shoulders using derivative method
@@ -446,62 +630,88 @@ class ChromatogramProcessor:
             print(f"Smoothing failed: {str(e)}")
             return y
     
-    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0):
+    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0, ms_range=None):
         """Apply baseline correction using the specified method.
         
-        If break_points are provided, the signal is split at each break point
-        and baselines are fitted independently to each segment.
-        """
-        # Handle break points: split signal, fit each segment, stitch back
-        if break_points and len(break_points) > 0 and x is not None and len(x) > 0:
-            # Compute split indices from break point times
-            split_indices = []
-            for bp in break_points:
-                bp_time = bp.get('time', bp) if isinstance(bp, dict) else float(bp)
-                bp_tol = bp.get('tolerance', 0.0) if isinstance(bp, dict) else 0.0
-                # Find the index closest to the break point time
-                idx = int(np.argmin(np.abs(x - bp_time)))
-                # Apply tolerance: use the midpoint of the tolerance window
-                # The tolerance just gives the user some slack in specifying the exact time
-                split_indices.append(idx)
-            
-            # Sort and deduplicate
-            split_indices = sorted(set(split_indices))
-            # Filter out boundary indices
-            split_indices = [i for i in split_indices if 0 < i < len(x)]
-            
-            if len(split_indices) > 0:
-                print(f"Break point baseline: splitting signal at {len(split_indices)} point(s)")
-                # Build segment boundaries: [0, idx1, idx2, ..., len(x)]
-                boundaries = [0] + split_indices + [len(x)]
-                
-                baseline_segments = []
-                corrected_segments = []
-                
-                for seg_i in range(len(boundaries) - 1):
-                    seg_start = boundaries[seg_i]
-                    seg_end = boundaries[seg_i + 1]
-                    seg_y = y[seg_start:seg_end]
-                    
-                    if len(seg_y) == 0:
-                        continue
-                    
-                    print(f"  Segment {seg_i + 1}: indices [{seg_start}:{seg_end}], length={len(seg_y)}")
-                    # Fit baseline to this segment using the same method/params
-                    seg_baseline, seg_corrected = self._apply_baseline_correction_single(
-                        seg_y, method=method, lam=lam, fastchrom_params=fastchrom_params,
-                        baseline_offset=baseline_offset
-                    )
-                    baseline_segments.append(seg_baseline)
-                    corrected_segments.append(seg_corrected)
-                
-                if len(baseline_segments) > 0:
-                    full_baseline = np.concatenate(baseline_segments)
-                    full_corrected = np.concatenate(corrected_segments)
-                    return full_baseline, full_corrected
-                # Fall through to single-segment if something went wrong
+        Signal is split into segments based on:
+          1. The MS-on time window (ms_range). Regions outside this window are
+             not fit — they receive NaN baseline values.
+          2. User-defined break_points within the MS-on region.
         
-        return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params, baseline_offset=baseline_offset)
+        Each fit=True segment is fitted independently with pybaselines; fit=False
+        segments are filled with NaN. Results are concatenated to produce a
+        full-length baseline (with NaN holes) and corrected signal.
+        
+        Args:
+            x: Retention time array.
+            y: Signal intensity array (already smoothed if smoothing is enabled).
+            method: pybaselines method name.
+            lam: Lambda regularization parameter (for methods that use it).
+            fastchrom_params: Optional fastchrom-specific params.
+            break_points: Optional list of break-point times (or dicts with 'time' key).
+            baseline_offset: Constant offset applied to the fitted baseline.
+            ms_range: Optional (t_lo, t_hi) tuple of MS-detector-on time window.
+                      Regions outside this window are not fitted.
+        
+        Returns:
+            (baseline_y, corrected_y) — both full-length arrays matching len(y).
+            Masked regions contain NaN.
+        
+        Raises:
+            ValueError: If ms_range is provided with t_lo > t_hi (propagated
+                from _build_baseline_segments).
+        """
+        if x is None or len(x) == 0 or len(y) == 0:
+            return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params, baseline_offset=baseline_offset)
+        
+        segments = _build_baseline_segments(x, ms_range, break_points)
+        
+        if not segments:
+            return np.zeros_like(y), np.copy(y)
+        
+        # Guard: if every segment is masked/demoted, there's nothing for pybaselines
+        # to fit. Fall back to zero baseline (caller sees y unmodified).
+        if not any(s.fit for s in segments):
+            print("Error: no fit-eligible segments (all masked or demoted). Returning zero baseline.")
+            return np.zeros_like(y), np.copy(y)
+        
+        baseline_pieces = []
+        corrected_pieces = []
+        
+        for seg in segments:
+            seg_y = y[seg.start:seg.end]
+            if len(seg_y) == 0:
+                continue
+            
+            if seg.fit:
+                print(f"  Baseline segment [{seg.start}:{seg.end}] (fit, length={len(seg_y)})")
+                seg_baseline, seg_corrected = self._apply_baseline_correction_single(
+                    seg_y, method=method, lam=lam,
+                    fastchrom_params=fastchrom_params,
+                    baseline_offset=baseline_offset,
+                )
+            else:
+                print(f"  Baseline segment [{seg.start}:{seg.end}] (masked, NaN, length={len(seg_y)})")
+                seg_baseline = np.full(len(seg_y), np.nan)
+                seg_corrected = np.full(len(seg_y), np.nan)
+            
+            baseline_pieces.append(seg_baseline)
+            corrected_pieces.append(seg_corrected)
+        
+        full_baseline = np.concatenate(baseline_pieces)
+        full_corrected = np.concatenate(corrected_pieces)
+        
+        # Invariant: _build_baseline_segments guarantees segments tile [0, len(y)) exactly,
+        # and _apply_baseline_correction_single returns same-length output. A mismatch
+        # here means the helper's contract has been violated — fail loudly rather than
+        # silently returning a wrong baseline that includes the solvent peak.
+        assert len(full_baseline) == len(y), (
+            f"baseline segment tiling invariant violated: "
+            f"got len(baseline)={len(full_baseline)}, expected len(y)={len(y)}. "
+            f"This is a bug in _build_baseline_segments."
+        )
+        
+        return full_baseline, full_corrected
     
     def _apply_baseline_correction_single(self, y, method="asls", lam=1e6, fastchrom_params=None, baseline_offset=0.0):
         """Apply baseline correction to a single signal segment."""
@@ -1447,6 +1657,12 @@ class ChromatogramProcessor:
 
         # Use the smoothed signal for detection if available
         signal_for_detection = smoothed_y if smoothed_y is not None else y
+
+        # Extend NaN regions (from MS-gated baseline masking) with the nearest finite
+        # value. This creates a flat 'shelf' that prevents find_peaks from treating
+        # the masked/unmasked boundary as a peak (a -inf sentinel would create a
+        # spurious step that find_peaks interprets as a local maximum).
+        signal_for_detection = _extend_nan_with_nearest_finite(signal_for_detection)
 
         # Negate the signal so that negative peaks become positive peaks
         negated = -signal_for_detection

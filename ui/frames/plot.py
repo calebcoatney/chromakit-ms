@@ -366,8 +366,16 @@ class PlotFrame(QWidget):
                 if self._invert_x:
                     x_full_range = x_full_range[::-1]
                 
-                y_min = np.min(baseline_to_show)
-                y_max_raw = np.max(main_y)
+                # NaN-safe: baseline_to_show may contain NaN in MS-gated masked regions.
+                # Use nanmin/nanmax to compute axis limits from finite values only.
+                if np.any(np.isfinite(baseline_to_show)):
+                    y_min = float(np.nanmin(baseline_to_show))
+                else:
+                    y_min = 0.0
+                if np.any(np.isfinite(main_y)):
+                    y_max_raw = float(np.nanmax(main_y))
+                else:
+                    y_max_raw = 1.0
                 # Add 10% padding at the top - handle negative values correctly
                 if y_max_raw >= 0:
                     y_max = y_max_raw * 1.1  # Positive: multiply to increase
@@ -383,7 +391,10 @@ class PlotFrame(QWidget):
                         # Mask FID x to MS x range
                         mask = (x >= ms_x_min) & (x <= ms_x_max)
                         if np.any(mask):
-                            y_max_in_ms_range = np.max(main_y[mask])
+                            if np.any(np.isfinite(main_y[mask])):
+                                y_max_in_ms_range = float(np.nanmax(main_y[mask]))
+                            else:
+                                y_max_in_ms_range = y_max_raw  # Fall back to outer y_max_raw
                             # 10% padding - handle negative values correctly
                             if y_max_in_ms_range >= 0:
                                 y_max = y_max_in_ms_range * 1.1
@@ -505,11 +516,20 @@ class PlotFrame(QWidget):
                 if self._invert_x:
                     x_full_range = x_full_range[::-1]
                 
+                # NaN-safe: baseline_y may theoretically contain NaN (currently TIC baseline
+                # doesn't run through MS-gated correction, but defensive coding makes this
+                # robust to future changes).
                 if show_baseline and baseline_y is not None:
-                    y_min = np.min(baseline_y)
+                    if np.any(np.isfinite(baseline_y)):
+                        y_min = float(np.nanmin(baseline_y))
+                    else:
+                        y_min = 0.0
                 else:
                     y_min = 0
-                y_max_raw = np.max(y)
+                if np.any(np.isfinite(y)):
+                    y_max_raw = float(np.nanmax(y))
+                else:
+                    y_max_raw = 1.0
                 # Add 10% padding at the top - handle negative values correctly
                 if y_max_raw >= 0:
                     y_max = y_max_raw * 1.1  # Positive: multiply to increase

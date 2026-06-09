@@ -1658,6 +1658,8 @@ def integrate_emg_components(components, x, corrected_y, baseline_y, area_factor
         x_peak = comp.t_curve[left_idx_in_curve:right_idx_in_curve + 1]
         y_peak = comp.y_curve[left_idx_in_curve:right_idx_in_curve + 1]
         baseline_peak = np.interp(x_peak, x, baseline_y)
+        # Sanitize NaN (from MS-gated masked region) — treat as zero so areas don't become NaN.
+        baseline_peak = np.nan_to_num(baseline_peak, nan=0.0)
 
         peaks_list.append(peak)
         x_peaks.append(x_peak)
@@ -1733,6 +1735,8 @@ def integrate_deconv_components(components, x, corrected_y, baseline_y, area_fac
         x_peak = x[si:ei + 1]
         y_peak = corrected_y[si:ei + 1]
         baseline_peak = baseline_y[si:ei + 1]
+        # Sanitize NaN (from MS-gated masked region) — treat as zero so areas don't become NaN.
+        baseline_peak = np.nan_to_num(baseline_peak, nan=0.0)
 
         peaks_list.append(peak)
         x_peaks.append(x_peak)
