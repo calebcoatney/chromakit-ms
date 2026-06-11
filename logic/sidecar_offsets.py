@@ -130,3 +130,35 @@ def save_offsets_batch(
             "source": source,
         }
     path.write_text(json.dumps(data, indent=2))
+
+
+def load_offsets_for_paths(
+    data_paths: list[str],
+    sidecar_path: Optional[Path] = None,
+) -> dict:
+    """Return dict mapping data_path -> OffsetEntry for paths that have
+    a saved offset. Paths with no saved offset are absent from the result.
+
+    Reads the sidecar JSON exactly once (vs. N reads for per-path lookup).
+    Returns empty dict if the sidecar file is missing or corrupt.
+
+    Args:
+        data_paths: List of absolute `.D` directory paths to look up.
+        sidecar_path: Override default sidecar location (mainly for tests).
+    """
+    path = _resolve_path(sidecar_path)
+    raw = _read_sidecar(path)
+    result = {}
+    for p in data_paths:
+        entry = raw.get(str(p))
+        if not isinstance(entry, dict):
+            continue
+        try:
+            result[str(p)] = OffsetEntry(
+                offset_min=float(entry["offset_min"]),
+                timestamp=float(entry.get("timestamp", 0.0)),
+                source=entry.get("source", "manual"),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return result

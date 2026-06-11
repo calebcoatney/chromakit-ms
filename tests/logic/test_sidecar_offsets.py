@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from logic.sidecar_offsets import load_offset, save_offset, save_offsets_batch
+from logic.sidecar_offsets import load_offset, load_offsets_for_paths, save_offset, save_offsets_batch
 
 
 def test_load_returns_none_when_sidecar_missing(tmp_path):
@@ -125,3 +125,31 @@ def test_save_offsets_batch_rejects_invalid_source(tmp_path):
         save_offsets_batch(["/abs/a.D"], offset_min=0.01, source="bogus",
                            sidecar_path=sidecar)
     assert not sidecar.exists()
+
+
+def test_load_offsets_for_paths_returns_only_matched(tmp_path):
+    """Function returns dict only for paths that have entries."""
+    sidecar = tmp_path / "ms_time_offsets.json"
+    save_offset("/abs/a.D", 0.01, source="manual", sidecar_path=sidecar)
+    save_offset("/abs/c.D", -0.02, source="auto", sidecar_path=sidecar)
+    result = load_offsets_for_paths(
+        ["/abs/a.D", "/abs/b.D", "/abs/c.D"], sidecar_path=sidecar
+    )
+    assert set(result.keys()) == {"/abs/a.D", "/abs/c.D"}
+    assert result["/abs/a.D"].offset_min == pytest.approx(0.01)
+    assert result["/abs/c.D"].offset_min == pytest.approx(-0.02)
+
+
+def test_load_offsets_for_paths_handles_missing_sidecar(tmp_path):
+    """Returns empty dict (not error) when sidecar file doesn't exist."""
+    sidecar = tmp_path / "missing.json"
+    result = load_offsets_for_paths(["/abs/a.D"], sidecar_path=sidecar)
+    assert result == {}
+
+
+def test_load_offsets_for_paths_handles_corrupt_sidecar(tmp_path):
+    """Returns empty dict (not error) when sidecar JSON is malformed."""
+    sidecar = tmp_path / "ms_time_offsets.json"
+    sidecar.write_text("{not valid json")
+    result = load_offsets_for_paths(["/abs/a.D"], sidecar_path=sidecar)
+    assert result == {}
