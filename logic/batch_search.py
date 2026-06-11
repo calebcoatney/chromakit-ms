@@ -50,195 +50,44 @@ class BatchSearchWorker(QRunnable):
     
     @Slot()
     def run(self):
-        """Run the batch search."""
+        """Run the batch search by delegating to ms_search_core.run_batch_search.
+
+        The worker's responsibility shrinks to:
+          1. Emit Qt signals (started, progress, finished, error, log_message)
+             via callbacks bound to ms_search_core.
+          2. Forward the cancellation flag.
+          3. Translate the BatchSearchSummary into the legacy finished/error signals.
+        """
+        from logic.ms_search_core import run_batch_search
         try:
-            # Signal the start of processing
             self.signals.started.emit(len(self.peaks))
-            self.signals.log_message.emit(f"Starting batch search on {len(self.peaks)} peaks...")
-            
-            # Track successful matches and saturated peaks
-            successful_matches = 0
-            saturated_peaks = 0
-            
-            # Get options
-            options = self.options
-            debug = options.get('debug', True)
-            
-            # Process each peak
-            for i, peak in enumerate(self.peaks):
-                # Check for cancellation
-                if self.cancelled:
-                    if debug:
-                        print("Batch search cancelled by user")
-                    self.signals.log_message.emit("Batch search cancelled by user")
-                    break
-                
-                # CRITICAL FIX: Skip peaks that have been manually assigned
-                if hasattr(peak, 'manual_assignment') and peak.manual_assignment:
-                    # Keep the manual assignment
-                    compound_name = peak.compound_id
-                    self.signals.progress.emit(i, compound_name, [(compound_name, 1.0)])
-                    self.signals.log_message.emit(f"Peak {i+1}/{len(self.peaks)}: Using manual assignment '{compound_name}'")
-                    successful_matches += 1
-                    continue
-                
-                # Add this: periodically log progress
-                if i == 0 or i == len(self.peaks)-1 or (i+1) % 5 == 0:
-                    self.signals.log_message.emit(
-                        f"Processing peak {i+1}/{len(self.peaks)} at RT={peak.retention_time:.3f}"
-                    )
-                
-                # Extract spectrum: use deconvolved if available, otherwise point-in-time
-                if hasattr(peak, 'deconvolved_spectrum') and peak.deconvolved_spectrum is not None:
-                    spectrum = peak.deconvolved_spectrum
-                    # Fall back to raw extraction if deconvolved spectrum is empty
-                    if len(spectrum.get('mz', [])) == 0:
-                        spectrum = self.spectrum_extractor.extract_for_peak(
-                            self.data_directory,
-                            peak,
-                            self.options
-                        )
-                    # Deconvolved spectrum is already clean — skip background subtraction
-                else:
-                    spectrum = self.spectrum_extractor.extract_for_peak(
-                        self.data_directory,
-                        peak,
-                        self.options
-                    )
 
-                if not spectrum or 'mz' not in spectrum or 'intensities' not in spectrum:
-                    # Signal progress even when spectrum extraction fails
-                    self.signals.progress.emit(i, f"No spectrum at RT {peak.retention_time:.3f}", [])
-                    continue
+            def on_progress(index, label, results):
+                self.signals.progress.emit(index, label, results)
 
-                if len(spectrum['mz']) == 0:
-                    self.signals.progress.emit(i, f"Empty spectrum at RT {peak.retention_time:.3f}", [])
-                    continue
-                
-                # Check for saturation and store in peak object
-                if 'is_saturated' in spectrum and spectrum['is_saturated']:
-                    peak.is_saturated = True
-                    peak.saturation_level = spectrum.get('saturation_level', 0)
-                    saturated_peaks += 1
-                    
-                    # Log saturation warning
-                    self.signals.log_message.emit(
-                        f"WARNING: Peak {peak.peak_number} at RT={peak.retention_time:.3f} shows detector saturation! "
-                        f"Max intensity: {peak.saturation_level:.2e}"
-                    )
-                else:
-                    peak.is_saturated = False
-                
-                # Continue with search as usual...
-                # Create spectrum tuples
-                query_spectrum = [(m, i) for m, i in zip(spectrum['mz'], spectrum['intensities'])]
-                
-                # Search based on selected method
-                search_method = options.get('search_method', 'vector')
-                results = []
-                
-                try:
-                    if search_method == 'vector':
-                        results = self.ms_toolkit.search_vector(
-                            query_spectrum,
-                            top_n=options.get('top_n', 5),
-                            composite=(options.get('similarity', 'composite') == 'composite'),
-                            weighting_scheme=options.get('weighting', 'NIST_GC'),
-                            unmatched_method=options.get('unmatched', 'keep_all'),
-                            top_k_clusters=options.get('top_k_clusters', 1)
-                        )
-                    elif search_method == 'w2v':
-                        results = self.ms_toolkit.search_w2v(
-                            query_spectrum,
-                            top_n=options.get('top_n', 5),
-                            intensity_power=options.get('intensity_power', 0.6),
-                            top_k_clusters=options.get('top_k_clusters', 1)
-                        )
-                    elif search_method == 'hybrid':
-                        hybrid_method = options.get('hybrid_method', 'auto')
-                        results = self.ms_toolkit.search_hybrid(
-                            query_spectrum,
-                            method=hybrid_method,
-                            top_n=options.get('top_n', 5),
-                            intensity_power=options.get('intensity_power', 0.6),
-                            weighting_scheme=options.get('weighting', 'NIST_GC'),
-                            composite=(options.get('similarity', 'composite') == 'composite'),
-                            unmatched_method=options.get('unmatched', 'keep_all'),
-                            top_k_clusters=options.get('top_k_clusters', 1)
-                        )
-                    else:
-                        results = self.ms_toolkit.search_vector(
-                            query_spectrum,
-                            top_n=options.get('top_n', 5),
-                            composite=(options.get('similarity', 'composite') == 'composite'),
-                            weighting_scheme=options.get('weighting', 'NIST_GC'),
-                            unmatched_method=options.get('unmatched', 'keep_all'),
-                            top_k_clusters=options.get('top_k_clusters', 1)
-                        )
-                except Exception as e:
-                    self.signals.log_message.emit(
-                        f"Search error for peak {i+1} at RT={peak.retention_time:.3f}: {e}"
-                    )
-                    self.signals.progress.emit(i, f"Search error at RT {peak.retention_time:.3f}", [])
-                    continue
-                
-                # Get best match
-                if results:
-                    best_match = results[0]
-                    
-                    # Get compound name and score
-                    compound_name = best_match[0]
-                    match_score = best_match[1]
-                    
-                    # Get CAS number if available in the library
-                    casno = None
-                    try:
-                        # Access the library through the toolkit
-                        if hasattr(self.ms_toolkit, 'library') and compound_name in self.ms_toolkit.library:
-                            compound = self.ms_toolkit.library[compound_name]
-                            if hasattr(compound, 'casno'):
-                                casno = self.format_casno(compound.casno)
-                    except Exception as e:
-                        if debug:
-                            print(f"Error getting CAS number for {compound_name}: {e}")
-                    
-                    # Update peak with match info - use exact same field names as in the notebook
-                    peak.compound_id = compound_name
-                    peak.Compound_ID = compound_name  # Add notebook-style field name
-                    peak.casno = casno
-                    peak.Qual = match_score  # Use exact same field name as notebook
-                    
-                    # Signal progress
-                    self.signals.progress.emit(i, peak.compound_id, results)
-                    self.signals.log_message.emit(f"Processed peak {i+1}/{len(self.peaks)}: {peak.compound_id}")
-                    successful_matches += 1
-                    
-                    # After processing peak, add a bit more to the progress log for significant matches
-                    if match_score > 0.7:  # Only log good matches
-                        self.signals.log_message.emit(
-                            f"Peak {i+1} identified as {compound_name} (score: {match_score:.3f})"
-                        )
-                else:
-                    # Signal progress even when no matches are found
-                    self.signals.progress.emit(i, "No matches found", [])
-            
-            # Include saturation info in final summary
-            self.signals.log_message.emit(
-                f"Batch search {'completed' if not self.cancelled else 'cancelled'}: "
-                f"{successful_matches}/{len(self.peaks)} peaks matched, "
-                f"{saturated_peaks} peaks showed detector saturation"
+            def on_log(message):
+                self.signals.log_message.emit(message)
+
+            def should_cancel():
+                return self.cancelled
+
+            run_batch_search(
+                ms_toolkit=self.ms_toolkit,
+                peaks=self.peaks,
+                data_directory=self.data_directory,
+                options=self.options,
+                respect_manual_assignments=True,
+                progress_callback=on_progress,
+                log_callback=on_log,
+                should_cancel=should_cancel,
+                extractor=self.spectrum_extractor,
             )
-            
-            # THIS IS THE CRITICAL FIX - EXPLICIT SIGNAL EMISSION
+
             self.signals.finished.emit()
-            
         except Exception as e:
-            # Capture full exception info
             error_msg = f"Error in batch search: {str(e)}\n{traceback.format_exc()}"
             self.signals.error.emit(error_msg)
             self.signals.log_message.emit(f"Error in batch search: {str(e)}")
-            
-            # Also emit finished signal on error to prevent hanging
             self.signals.finished.emit()
     
     def _on_search_completed(self):
