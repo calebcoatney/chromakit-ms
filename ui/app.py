@@ -3164,6 +3164,9 @@ class ChromaKitApp(QMainWindow):
         self._deconv_inspector.apply_offset_requested.connect(
             self._on_inspector_apply_offset_requested
         )
+        self._deconv_inspector.apply_offset_to_folder_requested.connect(
+            self._on_inspector_apply_offset_to_folder_requested
+        )
         self._deconv_inspector.show()
 
     def _on_inspector_rerun_requested(self, deconv_params, grouping_params):
@@ -3233,6 +3236,75 @@ class ChromaKitApp(QMainWindow):
             "Library search results may be stale — rerun if needed."
         )
         self._on_inspector_rerun_requested(deconv_params, grouping_params)
+
+    def _on_inspector_apply_offset_to_folder_requested(
+        self, offset_min: float, source: str
+    ):
+        """Open BatchOffsetDialog and persist offset to selected sibling .D files."""
+        from PySide6.QtWidgets import QDialog, QMessageBox
+        from ui.dialogs.batch_offset_dialog import BatchOffsetDialog
+        from logic.sidecar_offsets import (
+            DEFAULT_SIDECAR_PATH, save_offsets_batch, load_offsets_for_paths,
+        )
+
+        current_path = getattr(self.data_handler, 'current_directory_path', None)
+        if not current_path:
+            self.status_bar.showMessage("No file loaded; offset not applied.")
+            return
+
+        siblings = list(self.data_handler.available_directories)
+        if len(siblings) <= 1:
+            QMessageBox.information(
+                self, "No Sibling Files",
+                "No sibling .D files found in this folder. "
+                "Use the 'Apply' button to set the offset for the current file only."
+            )
+            return
+
+        existing = load_offsets_for_paths(
+            siblings, sidecar_path=DEFAULT_SIDECAR_PATH
+        )
+
+        dialog = BatchOffsetDialog(
+            offset_min=offset_min,
+            siblings=siblings,
+            current_path=str(current_path),
+            existing_offsets=existing,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        selected = dialog.selected_paths()
+        try:
+            save_offsets_batch(
+                data_paths=selected,
+                offset_min=offset_min,
+                source=source,
+                sidecar_path=DEFAULT_SIDECAR_PATH,
+            )
+        except OSError as e:
+            QMessageBox.critical(self, "Sidecar Write Failed", str(e))
+            return
+
+        # Delegate to existing single-file flow for current-file state updates
+        # (data_handler.ms_time_offset, plot_frame, rerun deconv, inspector close).
+        # The current file's sidecar entry is re-written here — harmless redundant
+        # write; saves restructuring the existing flow.
+        self._on_inspector_apply_offset_requested(offset_min, source)
+
+        # Override the status bar message set by the inner method so the
+        # sibling count is the last word the user sees.
+        siblings_count = len(selected) - 1  # exclude current
+        self.status_bar.showMessage(
+            f"Offset {offset_min:+.4f} min applied to "
+            f"{os.path.basename(str(current_path))} + {siblings_count} sibling files. "
+            "Library search results may be stale — rerun if needed."
+        )
+        print(
+            f"[BatchOffset] Applied {offset_min:+.4f} min to {len(selected)} files "
+            f"in {os.path.dirname(str(current_path))}"
+        )
 
     def _on_cluster_search_requested(self, spectrum_dict: dict, rt: float):
         """Run MS library search for a deconvolved cluster spectrum.
