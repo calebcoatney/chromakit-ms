@@ -24,8 +24,12 @@ class BatchSearchSummary:
     errors: list = field(default_factory=list)  # list[tuple[int, str]]
 
 
-def _format_casno(casno) -> str:
-    """Format a CAS number with dashes (pads to 9 digits then splits N-NN-N)."""
+def format_casno(casno) -> str:
+    """Format a CAS Registry Number with dashes.
+
+    Pads to 9 digits then splits as ``NNNNNN-NN-N`` (the standard CAS format).
+    Returns '' for empty / non-string input.
+    """
     if not casno or not isinstance(casno, str):
         return ""
     padded = casno.zfill(9)
@@ -75,7 +79,7 @@ def _lookup_casno(ms_toolkit, compound_name: str) -> Optional[str]:
         if hasattr(ms_toolkit, 'library') and compound_name in ms_toolkit.library:
             compound = ms_toolkit.library[compound_name]
             if hasattr(compound, 'casno'):
-                return _format_casno(compound.casno)
+                return format_casno(compound.casno)
     except Exception:
         pass
     return None

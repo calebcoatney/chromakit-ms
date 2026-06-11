@@ -1,10 +1,13 @@
-import numpy as np
-from PySide6.QtCore import QObject, QRunnable, Signal, Slot, QThreadPool
 import traceback
-import sys
-import rainbow as rb
+from PySide6.QtCore import QObject, QRunnable, Signal, Slot, QThreadPool
 # Import the spectrum extractor
 from logic.spectrum_extractor import SpectrumExtractor
+from logic.ms_search_core import run_batch_search
+# Re-export format_casno so legacy module-level imports keep working.
+# (Several call sites in ui/app.py and logic/automation_worker.py historically
+# imported `format_casno` from this module; it had quietly been ClassName.format_casno
+# only, breaking those imports. Now both forms work.)
+from logic.ms_search_core import format_casno  # noqa: F401
 
 class BatchSearchWorkerSignals(QObject):
     """Signals for the batch search worker."""
@@ -40,8 +43,7 @@ class BatchSearchWorker(QRunnable):
         self.options = options or {}
         self.signals = BatchSearchWorkerSignals()
         self.cancelled = False  # Add cancellation flag
-        self.search_completed = False  # Add search completion flag
-        
+
         # Ensure the toolkit's mz_shift matches the UI value
         if 'mz_shift' in self.options:
             self.ms_toolkit.mz_shift = self.options['mz_shift']
@@ -58,7 +60,6 @@ class BatchSearchWorker(QRunnable):
           2. Forward the cancellation flag.
           3. Translate the BatchSearchSummary into the legacy finished/error signals.
         """
-        from logic.ms_search_core import run_batch_search
         try:
             self.signals.started.emit(len(self.peaks))
 
@@ -89,20 +90,3 @@ class BatchSearchWorker(QRunnable):
             self.signals.error.emit(error_msg)
             self.signals.log_message.emit(f"Error in batch search: {str(e)}")
             self.signals.finished.emit()
-    
-    def _on_search_completed(self):
-        """Handle MS search completion."""
-        # Don't interact with UI objects directly from the worker thread
-        self.search_completed = True
-        
-        # Just emit a signal and let the main thread handle the UI update
-        if not self.cancelled:
-            self.signals.log_message.emit("MS library search completed")
-
-    @staticmethod
-    def format_casno(casno):
-        """Format a CAS number with dashes."""
-        if not casno or not isinstance(casno, str):
-            return ""
-        padded_casno = casno.zfill(9)
-        return padded_casno[:-3] + '-' + padded_casno[-3:-1] + '-' + padded_casno[-1:]
