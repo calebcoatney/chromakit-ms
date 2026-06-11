@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -384,7 +386,6 @@ async def run_pipeline(request: RunRequest):
     Writes a JSON result file alongside the data file and returns the peak table
     plus the output file path.
     """
-    import numpy as np
     from logic.method import ChromaMethod
     from logic.json_exporter import export_integration_results_to_json, _resolve_export_context
 
