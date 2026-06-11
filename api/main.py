@@ -28,6 +28,7 @@ from logic.spectral_deconv_runner import (
 )
 from logic.spectral_deconvolution import DeconvolutionParams
 from logic.integration import ChromatographicPeak
+from logic.ms_search_core import run_batch_search, BatchSearchSummary
 from api.models import (
     BrowseResponse, FileEntry,
     LoadFileRequest, LoadFileResponse, ChromatogramData, TICData,
@@ -425,10 +426,59 @@ async def ms_search(request: dict):
     raise HTTPException(status_code=501, detail="MS search endpoint not yet implemented")
 
 
-@app.post("/api/ms/batch-search")
-async def ms_batch_search(request: dict):
-    """Batch MS library search with progress. Requires ms-toolkit-nrel."""
-    raise HTTPException(status_code=501, detail="Batch MS search not yet implemented")
+@app.post("/api/ms/batch-search", response_model=MSBatchSearchResponse)
+async def ms_batch_search(request: MSBatchSearchRequest):
+    """Batch MS library search across a list of peaks.
+
+    Requires `/api/ms/library/load` to have run first. Returns enriched
+    peaks plus a summary. Per-peak errors go in `errors[]`, not HTTP errors.
+    """
+    import time
+    from api import ms_toolkit_singleton
+
+    if not request.peaks:
+        raise HTTPException(status_code=422, detail="`peaks` must be non-empty")
+
+    if not Path(request.data_directory).exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"data_directory not found: {request.data_directory}",
+        )
+
+    try:
+        ms_toolkit = ms_toolkit_singleton.get_toolkit()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    try:
+        peaks = [ChromatographicPeak.from_dict(p) for p in request.peaks]
+    except KeyError as e:
+        raise HTTPException(
+            status_code=422, detail=f"Malformed peak missing required field: {e}"
+        )
+
+    start_ts = time.time()
+    try:
+        summary = run_batch_search(
+            ms_toolkit=ms_toolkit,
+            peaks=peaks,
+            data_directory=request.data_directory,
+            options=request.options,
+            respect_manual_assignments=request.respect_manual_assignments,
+            log_callback=print,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch search error: {e}")
+    elapsed = round(time.time() - start_ts, 3)
+
+    return MSBatchSearchResponse(
+        peaks=[p.as_dict() for p in peaks],
+        total_peaks=summary.total_peaks,
+        successful_matches=summary.successful_matches,
+        saturated_peaks=summary.saturated_peaks,
+        errors=[{"peak_index": i, "message": msg} for (i, msg) in summary.errors],
+        elapsed_seconds=elapsed,
+    )
 
 
 # ─── Quantitation (stub) ─────────────────────────────────────────────
