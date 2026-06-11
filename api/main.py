@@ -22,6 +22,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from logic.data_handler import DataHandler
 from logic.processor import ChromatogramProcessor
 from logic.spectrum_extractor import SpectrumExtractor
+from logic.spectral_deconv_runner import (
+    run_spectral_deconvolution,
+    WindowGroupingParams,
+)
+from logic.spectral_deconvolution import DeconvolutionParams
+from logic.integration import ChromatographicPeak
 from api.models import (
     BrowseResponse, FileEntry,
     LoadFileRequest, LoadFileResponse, ChromatogramData, TICData,
@@ -245,6 +251,81 @@ async def extract_spectrum(request: SpectrumRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Spectral Deconvolution ──────────────────────────────────────────
+
+@app.post("/api/spectral-deconvolution", response_model=SpectralDeconvolutionResponse)
+async def spectral_deconvolution(request: SpectralDeconvolutionRequest):
+    """Run ADAP-GC spectral deconvolution on a list of integrated peaks.
+
+    Peaks come in as dicts (Peak.as_dict shape); we re-hydrate them via
+    Peak.from_dict, call the pure runner, and serialize back.
+    """
+    import time
+    if not request.peaks:
+        raise HTTPException(status_code=422, detail="`peaks` must be non-empty")
+    if not Path(request.ms_data_path).exists():
+        raise HTTPException(
+            status_code=404, detail=f"ms_data_path not found: {request.ms_data_path}"
+        )
+
+    try:
+        peaks = [ChromatographicPeak.from_dict(p) for p in request.peaks]
+    except KeyError as e:
+        raise HTTPException(
+            status_code=422, detail=f"Malformed peak missing required field: {e}"
+        )
+
+    deconv_params = (
+        DeconvolutionParams(**request.deconv_params)
+        if request.deconv_params else DeconvolutionParams()
+    )
+    grouping_params = (
+        WindowGroupingParams(**request.grouping_params)
+        if request.grouping_params else WindowGroupingParams()
+    )
+
+    start_ts = time.time()
+    try:
+        run_spectral_deconvolution(
+            peaks=peaks,
+            ms_data_path=request.ms_data_path,
+            deconv_params=deconv_params,
+            grouping_params=grouping_params,
+            ms_time_offset=request.ms_time_offset,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Deconvolution error: {e}")
+    elapsed = round(time.time() - start_ts, 3)
+
+    # Serialize peaks back; also attach deconvolved_spectrum for the response
+    out_peaks = []
+    components_assigned = 0
+    for p in peaks:
+        d = p.as_dict()
+        if p.deconvolved_spectrum is not None:
+            components_assigned += 1
+            d['deconvolved_spectrum'] = {
+                'mz': p.deconvolved_spectrum['mz'].tolist(),
+                'intensities': p.deconvolved_spectrum['intensities'].tolist(),
+            }
+        if p.deconvolution_component_count is not None:
+            d['deconvolution_component_count'] = p.deconvolution_component_count
+        out_peaks.append(d)
+
+    components_total = sum(
+        (p.deconvolution_component_count or 0) for p in peaks
+    )
+
+    return SpectralDeconvolutionResponse(
+        peaks=out_peaks,
+        components_total=components_total,
+        components_assigned=components_assigned,
+        elapsed_seconds=elapsed,
+    )
 
 
 # ─── Manual Assignments ──────────────────────────────────────────────
