@@ -55,13 +55,7 @@ def _validate_source(source: str) -> None:
 
 def load_offset(data_path: str, sidecar_path: Optional[Path] = None) -> Optional[OffsetEntry]:
     """Return the saved offset for `data_path`, or None if absent / unreadable."""
-    path = _resolve_path(sidecar_path)
-    if not path.exists():
-        return None
-    try:
-        raw = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    raw = _read_sidecar(_resolve_path(sidecar_path))
     entry = raw.get(str(data_path))
     if not isinstance(entry, dict):
         return None
@@ -135,7 +129,7 @@ def save_offsets_batch(
 def load_offsets_for_paths(
     data_paths: list[str],
     sidecar_path: Optional[Path] = None,
-) -> dict:
+) -> dict[str, OffsetEntry]:
     """Return dict mapping data_path -> OffsetEntry for paths that have
     a saved offset. Paths with no saved offset are absent from the result.
 
