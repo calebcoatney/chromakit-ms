@@ -2,16 +2,11 @@
 
 Uses pytest-qt. Skipped on environments where pytest-qt isn't installed.
 """
-import sys
-import os
-
 # Skip whole file if pytest-qt isn't available (e.g., headless CI envs)
 import pytest
 pytest.importorskip('pytestqt')
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDialog
 
 from logic.sidecar_offsets import OffsetEntry
 from ui.dialogs.batch_offset_dialog import BatchOffsetDialog
@@ -138,7 +133,6 @@ def test_dialog_apply_disabled_when_only_current_selected(qtbot):
 
 def test_dialog_returns_accepted_on_apply(qtbot):
     """Clicking Apply triggers QDialog.Accepted."""
-    from PySide6.QtWidgets import QDialog
     dlg = _make_dialog(qtbot)
     # Programmatically click Apply (avoids relying on actual mouse events)
     dlg._apply_btn.click()
