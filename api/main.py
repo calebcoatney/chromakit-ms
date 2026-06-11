@@ -29,6 +29,11 @@ from logic.spectral_deconv_runner import (
 from logic.spectral_deconvolution import DeconvolutionParams
 from logic.integration import ChromatographicPeak
 from logic.ms_search_core import run_batch_search, BatchSearchSummary
+from logic.quantitation_runner import (
+    run_quantitation, lookup_compound_metadata,
+    InternalStandardSpec, SampleSpec,
+)
+from functools import partial
 from api.models import (
     BrowseResponse, FileEntry,
     LoadFileRequest, LoadFileResponse, ChromatogramData, TICData,
@@ -481,17 +486,87 @@ async def ms_batch_search(request: MSBatchSearchRequest):
     )
 
 
-# ─── Quantitation (stub) ─────────────────────────────────────────────
+# ─── Quantitation ────────────────────────────────────────────────────
 
-@app.post("/api/quantitate")
-async def quantitate(request: dict):
-    """Quantitate peaks using Polyarc + internal standard method."""
+@app.post("/api/quantitate", response_model=QuantitateResponse)
+async def quantitate(request: QuantitateRequest):
+    """Quantitate peaks using Polyarc + Internal Standard method.
+
+    Requires `/api/ms/library/load` to have run first (needed for per-compound
+    formula + MW lookup). IS-not-found and zero-quantitated both return 200
+    with explicit fields/warnings, not HTTP errors.
+    """
+    from api import ms_toolkit_singleton
+
+    if not request.peaks:
+        raise HTTPException(status_code=422, detail="`peaks` must be non-empty")
+
+    # Validate and build typed IS spec
+    is_dict = request.internal_standard
+    required = ('compound_name', 'volume_uL', 'density_g_mL', 'molecular_weight', 'formula')
+    missing = [k for k in required if k not in is_dict or is_dict[k] in (None, "")]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"internal_standard missing required fields: {missing}",
+        )
+
     try:
-        from logic.quantitation import QuantitationCalculator
-        # TODO: Wire up QuantitationCalculator with request data
-        raise HTTPException(status_code=501, detail="Quantitation endpoint not yet implemented")
-    except ImportError:
-        raise HTTPException(status_code=500, detail="Quantitation module not found")
+        is_spec = InternalStandardSpec(
+            compound_name=str(is_dict['compound_name']),
+            volume_uL=float(is_dict['volume_uL']),
+            density_g_mL=float(is_dict['density_g_mL']),
+            molecular_weight=float(is_dict['molecular_weight']),
+            formula=str(is_dict['formula']),
+        )
+    except (TypeError, ValueError) as e:
+        raise HTTPException(
+            status_code=422, detail=f"internal_standard value invalid: {e}"
+        )
+
+    sample_dict = request.sample or {}
+    sample_spec = SampleSpec(
+        volume_uL=sample_dict.get('volume_uL'),
+        density_g_mL=sample_dict.get('density_g_mL'),
+    )
+
+    # Library is required for compound metadata lookup
+    try:
+        ms_toolkit = ms_toolkit_singleton.get_toolkit()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    # Re-hydrate peaks
+    try:
+        peaks = [ChromatographicPeak.from_dict(p) for p in request.peaks]
+    except KeyError as e:
+        raise HTTPException(
+            status_code=422, detail=f"Malformed peak missing required field: {e}"
+        )
+
+    compound_lookup = partial(lookup_compound_metadata, ms_toolkit)
+
+    try:
+        summary = run_quantitation(
+            peaks=peaks,
+            internal_standard=is_spec,
+            sample=sample_spec,
+            compound_lookup=compound_lookup,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quantitation error: {e}")
+
+    return QuantitateResponse(
+        peaks=[p.as_dict() for p in peaks],
+        response_factor=summary.response_factor,
+        internal_standard_compound=is_spec.compound_name,
+        internal_standard_peak_index=summary.internal_standard_peak_index,
+        peaks_quantitated=summary.peaks_quantitated,
+        sample_mass_mg=summary.sample_mass_mg,
+        total_analyte_mass_mg=summary.total_analyte_mass_mg,
+        carbon_balance_percent=summary.carbon_balance_percent,
+        warnings=summary.warnings,
+    )
 
 
 # ─── Export ───────────────────────────────────────────────────────────
