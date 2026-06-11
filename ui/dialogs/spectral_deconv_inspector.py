@@ -103,6 +103,7 @@ class SpectralDeconvInspectorDialog(QDialog):
     rerun_requested = Signal(object, object)  # (DeconvolutionParams, WindowGroupingParams)
     cluster_search_requested = Signal(object, float)  # (spectrum_dict: dict, rt: float)
     apply_offset_requested = Signal(float, str)  # (offset_min, source)
+    apply_offset_to_folder_requested = Signal(float, str)  # (offset_min, source)
 
     def __init__(
         self,
@@ -193,9 +194,15 @@ class SpectralDeconvInspectorDialog(QDialog):
             "Apply this offset to all windows of this .D file and persist it.\n"
             "Slider drags only preview the current window."
         )
+        self._offset_apply_folder_btn = QPushButton("Apply to folder...")
+        self._offset_apply_folder_btn.setToolTip(
+            "Open a dialog to apply this offset to multiple .D files\n"
+            "in the same parent folder."
+        )
         button_row.addWidget(self._offset_auto_btn)
         button_row.addWidget(self._offset_reset_btn)
         button_row.addStretch(1)
+        button_row.addWidget(self._offset_apply_folder_btn)
         button_row.addWidget(self._offset_apply_btn)
         offset_layout.addLayout(button_row)
         layout.addWidget(offset_group)
@@ -208,6 +215,9 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._offset_auto_btn.clicked.connect(self._on_offset_auto_clicked)
         self._offset_reset_btn.clicked.connect(self._on_offset_reset_clicked)
         self._offset_apply_btn.clicked.connect(self._on_offset_apply_clicked)
+        self._offset_apply_folder_btn.clicked.connect(
+            self._on_offset_apply_folder_clicked
+        )
 
         # Window Grouping group
         wg_group = QGroupBox("Peak Window Grouping")
@@ -475,6 +485,11 @@ class SpectralDeconvInspectorDialog(QDialog):
     def _on_offset_apply_clicked(self) -> None:
         self.apply_offset_requested.emit(self._current_preview_offset_min, self._offset_source)
 
+    def _on_offset_apply_folder_clicked(self) -> None:
+        self.apply_offset_to_folder_requested.emit(
+            self._current_preview_offset_min, self._offset_source
+        )
+
     # ── Window management ──────────────────────────────────────────────────────
 
     def _rebuild_windows(self):
@@ -557,7 +572,8 @@ class SpectralDeconvInspectorDialog(QDialog):
                   self._excluded_mz_edit, self._top_n_spin,
             self._normalize_eic_check):
             w.setEnabled(enabled)
-        for w in (self._offset_slider, self._offset_auto_btn, self._offset_reset_btn, self._offset_apply_btn):
+        for w in (self._offset_slider, self._offset_auto_btn, self._offset_reset_btn,
+                  self._offset_apply_btn, self._offset_apply_folder_btn):
             w.setEnabled(enabled)
 
     # ── Navigation slots ───────────────────────────────────────────────────────
