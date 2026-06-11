@@ -32,6 +32,10 @@ from api.models import (
     NavigationResponse,
     ExportRequest,
     RunRequest, RunResponse,
+    LibraryLoadRequest, LibraryLoadResponse,
+    SpectralDeconvolutionRequest, SpectralDeconvolutionResponse,
+    MSBatchSearchRequest, MSBatchSearchResponse,
+    QuantitateRequest, QuantitateResponse,
 )
 from api.utils import serialize_numpy, convert_params_for_processor
 
@@ -297,6 +301,31 @@ async def set_scaling_factors(request: ScalingFactorsRequest):
 async def get_scaling_factors():
     """Get current scaling factors."""
     return {"signal_factor": data_handler.signal_factor, "area_factor": 1.0}
+
+
+# ─── MS Library Lifecycle ────────────────────────────────────────────
+
+@app.post("/api/ms/library/load", response_model=LibraryLoadResponse)
+async def ms_library_load(request: LibraryLoadRequest):
+    """Load (or reload) the MS library + optional preselector/w2v models.
+
+    The singleton is process-wide; subsequent calls swap the library in place.
+    """
+    from api import ms_toolkit_singleton
+    try:
+        summary = ms_toolkit_singleton.load_library(
+            library_path=request.library_path,
+            cache_path=request.cache_path,
+            preselector_path=request.preselector_path,
+            w2v_path=request.w2v_path,
+        )
+        return LibraryLoadResponse(**summary)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─── MS Library Search (stub — requires ms-toolkit-nrel) ─────────────
