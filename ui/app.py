@@ -3296,7 +3296,6 @@ class ChromaKitApp(QMainWindow):
         # Override the status bar message set by the inner method so the
         # sibling count is the last word the user sees.
         siblings_count = len(selected) - 1  # exclude current
-        import os
         self.status_bar.showMessage(
             f"Offset {offset_min:+.4f} min applied to "
             f"{os.path.basename(str(current_path))} + {siblings_count} sibling files. "
