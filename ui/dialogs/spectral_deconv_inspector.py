@@ -188,7 +188,11 @@ class SpectralDeconvInspectorDialog(QDialog):
         button_row = QHBoxLayout()
         self._offset_auto_btn = QPushButton("Auto")
         self._offset_reset_btn = QPushButton("Reset")
-        self._offset_apply_btn = QPushButton("Apply globally")
+        self._offset_apply_btn = QPushButton("Apply")
+        self._offset_apply_btn.setToolTip(
+            "Apply this offset to all windows of this .D file and persist it.\n"
+            "Slider drags only preview the current window."
+        )
         button_row.addWidget(self._offset_auto_btn)
         button_row.addWidget(self._offset_reset_btn)
         button_row.addStretch(1)
