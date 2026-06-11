@@ -91,6 +91,7 @@ def run_batch_search(
     progress_callback: Optional[Callable[[int, str, list], None]] = None,
     log_callback: Optional[Callable[[str], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
+    extractor: Optional[SpectrumExtractor] = None,
 ) -> BatchSearchSummary:
     """Run MS library search across `peaks`, mutating them in place.
 
@@ -111,6 +112,10 @@ def run_batch_search(
         progress_callback: Optional callable(peak_index, label, results) per peak.
         log_callback: Optional callable(message) for human-readable progress lines.
         should_cancel: Optional callable() -> bool; loop breaks when it returns True.
+        extractor: Optional pre-constructed SpectrumExtractor instance.
+            When None (default), a fresh one is built internally. The GUI
+            worker passes its own extractor so tests that patch the
+            worker's instance continue to verify real behavior.
 
     Returns:
         BatchSearchSummary with counts and per-peak errors.
@@ -120,7 +125,8 @@ def run_batch_search(
     if 'mz_shift' in options:
         ms_toolkit.mz_shift = options['mz_shift']
 
-    extractor = SpectrumExtractor(debug=options.get('debug', False))
+    if extractor is None:
+        extractor = SpectrumExtractor(debug=options.get('debug', False))
 
     def _log(msg: str):
         if log_callback is not None:

@@ -271,3 +271,23 @@ def test_lookup_casno_returns_none_when_compound_missing_from_library():
     )
     assert peak.compound_id == "Hexane"
     assert peak.casno is None, f"expected None on library miss, got {peak.casno!r}"
+
+
+def test_caller_provided_extractor_is_used():
+    """When an extractor is passed in, the function uses it instead of constructing one."""
+    ms_toolkit = _make_toolkit()
+    peak = _make_peak(with_deconvolved=False)
+    fake_spectrum = {'mz': np.array([50.0, 73.0]), 'intensities': np.array([100.0, 200.0])}
+
+    injected_extractor = MagicMock()
+    injected_extractor.extract_for_peak.return_value = fake_spectrum
+
+    run_batch_search(
+        ms_toolkit=ms_toolkit,
+        peaks=[peak],
+        data_directory='/fake/path.D',
+        options={'search_method': 'vector', 'top_n': 5},
+        extractor=injected_extractor,
+    )
+    injected_extractor.extract_for_peak.assert_called_once()
+    assert peak.compound_id == "Hexane"
