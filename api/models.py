@@ -87,17 +87,34 @@ class RTTableMatchRequest(BaseModel):
 
 
 class QuantitateRequest(BaseModel):
-    """Request to quantitate peaks."""
+    """Request to run Polyarc + IS quantitation against a list of peaks.
+
+    `internal_standard` must contain:
+      compound_name, volume_uL, density_g_mL, molecular_weight, formula
+    `sample` (optional) contains: volume_uL, density_g_mL.
+    """
     peaks: List[Dict[str, Any]]
-    settings: Dict[str, Any]
+    internal_standard: Dict[str, Any]
+    sample: Optional[Dict[str, Any]] = None
 
 
 class ExportRequest(BaseModel):
-    """Request to export results."""
+    """Request to export results.
+
+    When `output_path` is None, the writer resolves the destination from
+    `file_path` via _resolve_export_context (writes inside the .D folder
+    or inside <.C>/results/). When `output_path` is set, the writer
+    creates parent dirs and writes there — used by R&D agents that want
+    distinct outputs per sweep iteration.
+    """
     peaks: List[Dict[str, Any]]
     file_path: str
     format: str = Field(default="json", description="'json', 'csv', or 'xlsx'")
     options: Optional[Dict[str, Any]] = None
+    output_path: Optional[str] = Field(
+        default=None,
+        description="If set, write the export file to this absolute path instead of the default location",
+    )
 
 
 class AssignmentRequest(BaseModel):
@@ -208,3 +225,95 @@ class RunResponse(BaseModel):
     output_files: List[str] = Field(
         ..., description="Absolute paths of JSON files written to disk"
     )
+
+
+# ─── R&D Experimentation Endpoints (Phase 1) ──────────────────────────
+
+class LibraryLoadRequest(BaseModel):
+    """Request to load the MS library + optional models into the API singleton."""
+    library_path: str = Field(..., description="Path to a library file (.txt or .json)")
+    cache_path: Optional[str] = Field(None, description="Path to a JSON cache (faster path)")
+    preselector_path: Optional[str] = Field(None, description="Path to a .pkl preselector model")
+    w2v_path: Optional[str] = Field(None, description="Path to a Word2Vec .model file")
+
+
+class LibraryLoadResponse(BaseModel):
+    """Response from POST /api/ms/library/load."""
+    status: str
+    compound_count: int
+    library_path: str
+    preselector_loaded: bool
+    w2v_loaded: bool
+    elapsed_seconds: float
+
+
+class SpectralDeconvolutionRequest(BaseModel):
+    """Request to run ADAP-GC spectral deconvolution on integrated peaks."""
+    peaks: List[Dict[str, Any]] = Field(..., description="Integrated peaks (Peak.as_dict shape)")
+    ms_data_path: str = Field(..., description="Path to the .D or .C directory")
+    deconv_params: Optional[Dict[str, Any]] = Field(
+        None, description="Serialized DeconvolutionParams; None = defaults"
+    )
+    grouping_params: Optional[Dict[str, Any]] = Field(
+        None, description="Serialized WindowGroupingParams; None = defaults"
+    )
+    ms_time_offset: float = 0.0
+
+
+class SpectralDeconvolutionResponse(BaseModel):
+    """Response from POST /api/spectral-deconvolution."""
+    peaks: List[Dict[str, Any]] = Field(
+        ..., description="Same peaks with deconvolved_spectrum populated"
+    )
+    components_total: int
+    components_assigned: int
+    elapsed_seconds: float
+
+
+class MSBatchSearchRequest(BaseModel):
+    """Request for batch MS library search across a list of peaks."""
+    peaks: List[Dict[str, Any]] = Field(..., description="Integrated peaks (with or without deconvolved_spectrum)")
+    data_directory: str = Field(..., description="Path to .D or .C (used by SpectrumExtractor)")
+    options: Dict[str, Any] = Field(
+        ...,
+        description=(
+            "Full search options. Defaults to mimic GUI: "
+            "{'search_method': 'vector', 'top_n': 5, 'similarity': 'composite', "
+            "'weighting': 'NIST_GC', 'unmatched': 'keep_all', 'top_k_clusters': 1, "
+            "'extraction_method': 'apex', 'range_points': 5, 'range_time': 0.05, "
+            "'tic_weight': True, 'subtract_enabled': True, 'subtraction_method': 'min_tic', "
+            "'subtract_weight': 0.1, 'intensity_power': 0.6}. "
+            "See ui/frames/ms.py:51-67 for the full default set."
+        ),
+    )
+    respect_manual_assignments: bool = True
+
+
+class MSBatchSearchResponse(BaseModel):
+    """Response from POST /api/ms/batch-search."""
+    peaks: List[Dict[str, Any]]
+    total_peaks: int
+    successful_matches: int
+    saturated_peaks: int
+    errors: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Per-peak errors as [{'peak_index': int, 'message': str}]",
+    )
+    elapsed_seconds: float
+
+
+class QuantitateResponse(BaseModel):
+    """Response from POST /api/quantitate."""
+    peaks: List[Dict[str, Any]]
+    response_factor: Optional[float]
+    internal_standard_compound: str
+    internal_standard_peak_index: int = Field(
+        ..., description="-1 if the IS compound was not found in `peaks`"
+    )
+    peaks_quantitated: int = Field(
+        ..., description="Number of analyte peaks (excludes IS) successfully quantitated"
+    )
+    sample_mass_mg: Optional[float]
+    total_analyte_mass_mg: Optional[float]
+    carbon_balance_percent: Optional[float]
+    warnings: List[str] = Field(default_factory=list)

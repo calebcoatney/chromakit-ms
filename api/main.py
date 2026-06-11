@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -20,6 +22,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from logic.data_handler import DataHandler
 from logic.processor import ChromatogramProcessor
 from logic.spectrum_extractor import SpectrumExtractor
+from logic.spectral_deconv_runner import (
+    run_spectral_deconvolution,
+    WindowGroupingParams,
+)
+from logic.spectral_deconvolution import DeconvolutionParams
+from logic.integration import ChromatographicPeak
+from logic.ms_search_core import run_batch_search, BatchSearchSummary
+from logic.quantitation_runner import (
+    run_quantitation, lookup_compound_metadata,
+    InternalStandardSpec, SampleSpec,
+)
+from functools import partial
 from api.models import (
     BrowseResponse, FileEntry,
     LoadFileRequest, LoadFileResponse, ChromatogramData, TICData,
@@ -30,6 +44,10 @@ from api.models import (
     NavigationResponse,
     ExportRequest,
     RunRequest, RunResponse,
+    LibraryLoadRequest, LibraryLoadResponse,
+    SpectralDeconvolutionRequest, SpectralDeconvolutionResponse,
+    MSBatchSearchRequest, MSBatchSearchResponse,
+    QuantitateRequest, QuantitateResponse,
 )
 from api.utils import serialize_numpy, convert_params_for_processor
 
@@ -241,6 +259,81 @@ async def extract_spectrum(request: SpectrumRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─── Spectral Deconvolution ──────────────────────────────────────────
+
+@app.post("/api/spectral-deconvolution", response_model=SpectralDeconvolutionResponse)
+async def spectral_deconvolution(request: SpectralDeconvolutionRequest):
+    """Run ADAP-GC spectral deconvolution on a list of integrated peaks.
+
+    Peaks come in as dicts (Peak.as_dict shape); we re-hydrate them via
+    Peak.from_dict, call the pure runner, and serialize back.
+    """
+    import time
+    if not request.peaks:
+        raise HTTPException(status_code=422, detail="`peaks` must be non-empty")
+    if not Path(request.ms_data_path).exists():
+        raise HTTPException(
+            status_code=404, detail=f"ms_data_path not found: {request.ms_data_path}"
+        )
+
+    try:
+        peaks = [ChromatographicPeak.from_dict(p) for p in request.peaks]
+    except KeyError as e:
+        raise HTTPException(
+            status_code=422, detail=f"Malformed peak missing required field: {e}"
+        )
+
+    deconv_params = (
+        DeconvolutionParams(**request.deconv_params)
+        if request.deconv_params else DeconvolutionParams()
+    )
+    grouping_params = (
+        WindowGroupingParams(**request.grouping_params)
+        if request.grouping_params else WindowGroupingParams()
+    )
+
+    start_ts = time.time()
+    try:
+        run_spectral_deconvolution(
+            peaks=peaks,
+            ms_data_path=request.ms_data_path,
+            deconv_params=deconv_params,
+            grouping_params=grouping_params,
+            ms_time_offset=request.ms_time_offset,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Deconvolution error: {e}")
+    elapsed = round(time.time() - start_ts, 3)
+
+    # Serialize peaks back; also attach deconvolved_spectrum for the response
+    out_peaks = []
+    components_assigned = 0
+    for p in peaks:
+        d = p.as_dict()
+        if p.deconvolved_spectrum is not None:
+            components_assigned += 1
+            d['deconvolved_spectrum'] = {
+                'mz': p.deconvolved_spectrum['mz'].tolist(),
+                'intensities': p.deconvolved_spectrum['intensities'].tolist(),
+            }
+        if p.deconvolution_component_count is not None:
+            d['deconvolution_component_count'] = p.deconvolution_component_count
+        out_peaks.append(d)
+
+    components_total = sum(
+        (p.deconvolution_component_count or 0) for p in peaks
+    )
+
+    return SpectralDeconvolutionResponse(
+        peaks=out_peaks,
+        components_total=components_total,
+        components_assigned=components_assigned,
+        elapsed_seconds=elapsed,
+    )
+
+
 # ─── Manual Assignments ──────────────────────────────────────────────
 
 OVERRIDES_PATH = Path(__file__).parent.parent / "overrides" / "manual_assignments.json"
@@ -297,6 +390,31 @@ async def get_scaling_factors():
     return {"signal_factor": data_handler.signal_factor, "area_factor": 1.0}
 
 
+# ─── MS Library Lifecycle ────────────────────────────────────────────
+
+@app.post("/api/ms/library/load", response_model=LibraryLoadResponse)
+async def ms_library_load(request: LibraryLoadRequest):
+    """Load (or reload) the MS library + optional preselector/w2v models.
+
+    The singleton is process-wide; subsequent calls swap the library in place.
+    """
+    from api import ms_toolkit_singleton
+    try:
+        summary = ms_toolkit_singleton.load_library(
+            library_path=request.library_path,
+            cache_path=request.cache_path,
+            preselector_path=request.preselector_path,
+            w2v_path=request.w2v_path,
+        )
+        return LibraryLoadResponse(**summary)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─── MS Library Search (stub — requires ms-toolkit-nrel) ─────────────
 
 @app.post("/api/ms/search")
@@ -313,23 +431,142 @@ async def ms_search(request: dict):
     raise HTTPException(status_code=501, detail="MS search endpoint not yet implemented")
 
 
-@app.post("/api/ms/batch-search")
-async def ms_batch_search(request: dict):
-    """Batch MS library search with progress. Requires ms-toolkit-nrel."""
-    raise HTTPException(status_code=501, detail="Batch MS search not yet implemented")
+@app.post("/api/ms/batch-search", response_model=MSBatchSearchResponse)
+async def ms_batch_search(request: MSBatchSearchRequest):
+    """Batch MS library search across a list of peaks.
 
+    Requires `/api/ms/library/load` to have run first. Returns enriched
+    peaks plus a summary. Per-peak errors go in `errors[]`, not HTTP errors.
+    """
+    import time
+    from api import ms_toolkit_singleton
 
-# ─── Quantitation (stub) ─────────────────────────────────────────────
+    if not request.peaks:
+        raise HTTPException(status_code=422, detail="`peaks` must be non-empty")
 
-@app.post("/api/quantitate")
-async def quantitate(request: dict):
-    """Quantitate peaks using Polyarc + internal standard method."""
+    if not Path(request.data_directory).exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"data_directory not found: {request.data_directory}",
+        )
+
     try:
-        from logic.quantitation import QuantitationCalculator
-        # TODO: Wire up QuantitationCalculator with request data
-        raise HTTPException(status_code=501, detail="Quantitation endpoint not yet implemented")
-    except ImportError:
-        raise HTTPException(status_code=500, detail="Quantitation module not found")
+        ms_toolkit = ms_toolkit_singleton.get_toolkit()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    try:
+        peaks = [ChromatographicPeak.from_dict(p) for p in request.peaks]
+    except KeyError as e:
+        raise HTTPException(
+            status_code=422, detail=f"Malformed peak missing required field: {e}"
+        )
+
+    start_ts = time.time()
+    try:
+        summary = run_batch_search(
+            ms_toolkit=ms_toolkit,
+            peaks=peaks,
+            data_directory=request.data_directory,
+            options=request.options,
+            respect_manual_assignments=request.respect_manual_assignments,
+            log_callback=print,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch search error: {e}")
+    elapsed = round(time.time() - start_ts, 3)
+
+    return MSBatchSearchResponse(
+        peaks=[p.as_dict() for p in peaks],
+        total_peaks=summary.total_peaks,
+        successful_matches=summary.successful_matches,
+        saturated_peaks=summary.saturated_peaks,
+        errors=[{"peak_index": i, "message": msg} for (i, msg) in summary.errors],
+        elapsed_seconds=elapsed,
+    )
+
+
+# ─── Quantitation ────────────────────────────────────────────────────
+
+@app.post("/api/quantitate", response_model=QuantitateResponse)
+async def quantitate(request: QuantitateRequest):
+    """Quantitate peaks using Polyarc + Internal Standard method.
+
+    Requires `/api/ms/library/load` to have run first (needed for per-compound
+    formula + MW lookup). IS-not-found and zero-quantitated both return 200
+    with explicit fields/warnings, not HTTP errors.
+    """
+    from api import ms_toolkit_singleton
+
+    if not request.peaks:
+        raise HTTPException(status_code=422, detail="`peaks` must be non-empty")
+
+    # Validate and build typed IS spec
+    is_dict = request.internal_standard
+    required = ('compound_name', 'volume_uL', 'density_g_mL', 'molecular_weight', 'formula')
+    missing = [k for k in required if k not in is_dict or is_dict[k] in (None, "")]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"internal_standard missing required fields: {missing}",
+        )
+
+    try:
+        is_spec = InternalStandardSpec(
+            compound_name=str(is_dict['compound_name']),
+            volume_uL=float(is_dict['volume_uL']),
+            density_g_mL=float(is_dict['density_g_mL']),
+            molecular_weight=float(is_dict['molecular_weight']),
+            formula=str(is_dict['formula']),
+        )
+    except (TypeError, ValueError) as e:
+        raise HTTPException(
+            status_code=422, detail=f"internal_standard value invalid: {e}"
+        )
+
+    sample_dict = request.sample or {}
+    sample_spec = SampleSpec(
+        volume_uL=sample_dict.get('volume_uL'),
+        density_g_mL=sample_dict.get('density_g_mL'),
+    )
+
+    # Library is required for compound metadata lookup
+    try:
+        ms_toolkit = ms_toolkit_singleton.get_toolkit()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    # Re-hydrate peaks
+    try:
+        peaks = [ChromatographicPeak.from_dict(p) for p in request.peaks]
+    except KeyError as e:
+        raise HTTPException(
+            status_code=422, detail=f"Malformed peak missing required field: {e}"
+        )
+
+    compound_lookup = partial(lookup_compound_metadata, ms_toolkit)
+
+    try:
+        summary = run_quantitation(
+            peaks=peaks,
+            internal_standard=is_spec,
+            sample=sample_spec,
+            compound_lookup=compound_lookup,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quantitation error: {e}")
+
+    return QuantitateResponse(
+        peaks=[p.as_dict() for p in peaks],
+        response_factor=summary.response_factor,
+        internal_standard_compound=is_spec.compound_name,
+        internal_standard_peak_index=summary.internal_standard_peak_index,
+        peaks_quantitated=summary.peaks_quantitated,
+        sample_mass_mg=summary.sample_mass_mg,
+        total_analyte_mass_mg=summary.total_analyte_mass_mg,
+        carbon_balance_percent=summary.carbon_balance_percent,
+        warnings=summary.warnings,
+    )
 
 
 # ─── Export ───────────────────────────────────────────────────────────
@@ -338,9 +575,9 @@ async def quantitate(request: dict):
 async def export_results(request: ExportRequest):
     """Export serialized peak results to a JSON file.
 
-    Accepts peak dicts from a prior /api/integrate call.
-    Writes to the same location as the GUI exporter (inside the .D directory,
-    or inside {.C}/results/ for .C folders).
+    When `output_path` is set, write there (parent dirs created if missing).
+    When `output_path` is None, fall back to _resolve_export_context for
+    backward compatibility with the bridge contract.
 
     Only 'json' format is supported in Phase 1.
     """
@@ -354,9 +591,17 @@ async def export_results(request: ExportRequest):
                 detail=f"Format '{request.format}' not supported. Only 'json' is available.",
             )
 
-        metadata, output_path = _resolve_export_context(
-            request.file_path, data_handler.current_detector
-        )
+        if request.output_path:
+            # Custom destination — caller controls path
+            output_path = request.output_path
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            # Minimal metadata when caller bypasses _resolve_export_context
+            metadata = {}
+        else:
+            # Default — resolve based on .D / .C structure
+            metadata, output_path = _resolve_export_context(
+                request.file_path, data_handler.current_detector
+            )
 
         result_data = {
             **metadata,
@@ -384,7 +629,6 @@ async def run_pipeline(request: RunRequest):
     Writes a JSON result file alongside the data file and returns the peak table
     plus the output file path.
     """
-    import numpy as np
     from logic.method import ChromaMethod
     from logic.json_exporter import export_integration_results_to_json, _resolve_export_context
 
