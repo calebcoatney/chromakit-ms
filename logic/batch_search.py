@@ -1,5 +1,5 @@
 import traceback
-from PySide6.QtCore import QObject, QRunnable, Signal, Slot, QThreadPool
+from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 # Import the spectrum extractor
 from logic.spectrum_extractor import SpectrumExtractor
 from logic.ms_search_core import run_batch_search
