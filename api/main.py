@@ -340,9 +340,9 @@ async def quantitate(request: dict):
 async def export_results(request: ExportRequest):
     """Export serialized peak results to a JSON file.
 
-    Accepts peak dicts from a prior /api/integrate call.
-    Writes to the same location as the GUI exporter (inside the .D directory,
-    or inside {.C}/results/ for .C folders).
+    When `output_path` is set, write there (parent dirs created if missing).
+    When `output_path` is None, fall back to _resolve_export_context for
+    backward compatibility with the bridge contract.
 
     Only 'json' format is supported in Phase 1.
     """
@@ -356,9 +356,17 @@ async def export_results(request: ExportRequest):
                 detail=f"Format '{request.format}' not supported. Only 'json' is available.",
             )
 
-        metadata, output_path = _resolve_export_context(
-            request.file_path, data_handler.current_detector
-        )
+        if request.output_path:
+            # Custom destination — caller controls path
+            output_path = request.output_path
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            # Minimal metadata when caller bypasses _resolve_export_context
+            metadata = {}
+        else:
+            # Default — resolve based on .D / .C structure
+            metadata, output_path = _resolve_export_context(
+                request.file_path, data_handler.current_detector
+            )
 
         result_data = {
             **metadata,
