@@ -83,3 +83,48 @@ def save_offset(
         "source": source,
     }
     path.write_text(json.dumps(data, indent=2))
+
+
+def save_offsets_batch(
+    data_paths: list,
+    offset_min: float,
+    source: Source,
+    sidecar_path: Optional[Path] = None,
+) -> None:
+    """Persist the same `offset_min` for every path in `data_paths`.
+
+    Equivalent to looping `save_offset` per path, but reads + writes the
+    sidecar JSON file exactly once. All entries share one timestamp.
+
+    Args:
+        data_paths: List of absolute `.D` directory paths.
+        offset_min: Offset in minutes to apply to every path.
+        source: Provenance tag ('manual' or 'auto'); must match VALID_SOURCES.
+
+    Raises:
+        ValueError: source is not in VALID_SOURCES.
+
+    No-op when data_paths is empty.
+    """
+    if source not in VALID_SOURCES:
+        raise ValueError(f"source must be one of {VALID_SOURCES}, got {source!r}")
+    if not data_paths:
+        return
+    path = _resolve_path(sidecar_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text())
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, json.JSONDecodeError):
+            data = {}
+    now = time.time()
+    for p in data_paths:
+        data[str(p)] = {
+            "offset_min": float(offset_min),
+            "timestamp": now,
+            "source": source,
+        }
+    path.write_text(json.dumps(data, indent=2))
