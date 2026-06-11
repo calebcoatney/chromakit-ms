@@ -63,8 +63,14 @@ def _do_search(ms_toolkit, query_spectrum, options: dict) -> list:
     )
 
 
-def _lookup_casno(ms_toolkit, compound_name: str) -> str:
-    """Look up a CAS number from the loaded library; return formatted string or ''."""
+def _lookup_casno(ms_toolkit, compound_name: str) -> Optional[str]:
+    """Look up a CAS number from the loaded library.
+
+    Returns the formatted CAS string on a hit, or None on miss / when the
+    library is unavailable. None semantics match the original
+    BatchSearchWorker behavior so downstream `casno is None` checks remain
+    valid.
+    """
     try:
         if hasattr(ms_toolkit, 'library') and compound_name in ms_toolkit.library:
             compound = ms_toolkit.library[compound_name]
@@ -72,7 +78,7 @@ def _lookup_casno(ms_toolkit, compound_name: str) -> str:
                 return _format_casno(compound.casno)
     except Exception:
         pass
-    return ""
+    return None
 
 
 def run_batch_search(

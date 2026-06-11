@@ -251,3 +251,23 @@ def test_search_exception_recorded_per_peak_not_aborting():
     assert summary.errors[0][0] == 0
     assert peaks[0].compound_id == "unknown"
     assert peaks[1].compound_id == "Toluene"
+
+
+def test_lookup_casno_returns_none_when_compound_missing_from_library():
+    """If the compound is matched but not in toolkit.library (or library is empty),
+    peak.casno must be None (matching original BatchSearchWorker semantics), not ''."""
+    ms = _make_toolkit()
+    # Override: library has only "Pentane", but search will match "Hexane"
+    pentane_compound = MagicMock()
+    pentane_compound.casno = "109660"
+    ms.library = {"Pentane": pentane_compound}
+    # Hexane is the match returned by search_vector but not in library
+    peak = _make_peak(with_deconvolved=True)
+    run_batch_search(
+        ms_toolkit=ms,
+        peaks=[peak],
+        data_directory='/fake/path.D',
+        options={'search_method': 'vector', 'top_n': 5},
+    )
+    assert peak.compound_id == "Hexane"
+    assert peak.casno is None, f"expected None on library miss, got {peak.casno!r}"
