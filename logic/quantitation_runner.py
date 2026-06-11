@@ -53,7 +53,6 @@ class QuantitationSummary:
 def lookup_compound_metadata(ms_toolkit, compound_name: str) -> CompoundMetadata:
     """Resolve compound formula + MW from an MSToolkit's loaded library.
 
-    Mirrors ui/app.py::_get_compound_formula and _get_compound_mw.
     Returns CompoundMetadata(None, None) if the compound isn't in the library
     or the library isn't loaded.
     """

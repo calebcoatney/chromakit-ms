@@ -3420,30 +3420,6 @@ class ChromaKitApp(QMainWindow):
                 if export_result.get('csv'):
                     print("[Quantitation] CSV results overwritten.")
 
-    def _get_compound_formula(self, compound_name):
-        """Get molecular formula for a compound from MS library."""
-        try:
-            if hasattr(self.ms_frame, 'ms_toolkit') and self.ms_frame.ms_toolkit:
-                if hasattr(self.ms_frame.ms_toolkit, 'library') and compound_name in self.ms_frame.ms_toolkit.library:
-                    compound = self.ms_frame.ms_toolkit.library[compound_name]
-                    if hasattr(compound, 'formula'):
-                        return compound.formula
-        except Exception as e:
-            print(f"Error getting formula for {compound_name}: {e}")
-        return None
-    
-    def _get_compound_mw(self, compound_name):
-        """Get molecular weight for a compound from MS library."""
-        try:
-            if hasattr(self.ms_frame, 'ms_toolkit') and self.ms_frame.ms_toolkit:
-                if hasattr(self.ms_frame.ms_toolkit, 'library') and compound_name in self.ms_frame.ms_toolkit.library:
-                    compound = self.ms_frame.ms_toolkit.library[compound_name]
-                    if hasattr(compound, 'mw'):
-                        return compound.mw
-        except Exception as e:
-            print(f"Error getting MW for {compound_name}: {e}")
-        return None
-
     def _update_peak_match_in_results(self, peak_index, compound_name, match_score):
         """Update peak match in results table."""
         # Update the compound name and match score in results table
