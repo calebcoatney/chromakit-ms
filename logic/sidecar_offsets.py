@@ -36,6 +36,23 @@ def _resolve_path(sidecar_path: Optional[Path]) -> Path:
     return Path(sidecar_path) if sidecar_path is not None else DEFAULT_SIDECAR_PATH
 
 
+def _read_sidecar(path: Path) -> dict:
+    """Read the sidecar JSON; return {} if missing or unparseable."""
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text())
+        return loaded if isinstance(loaded, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _validate_source(source: str) -> None:
+    """Raise ValueError if source is not in VALID_SOURCES."""
+    if source not in VALID_SOURCES:
+        raise ValueError(f"source must be one of {VALID_SOURCES}, got {source!r}")
+
+
 def load_offset(data_path: str, sidecar_path: Optional[Path] = None) -> Optional[OffsetEntry]:
     """Return the saved offset for `data_path`, or None if absent / unreadable."""
     path = _resolve_path(sidecar_path)
@@ -65,18 +82,10 @@ def save_offset(
     sidecar_path: Optional[Path] = None,
 ) -> None:
     """Persist `offset_min` for `data_path` in the sidecar (creating it if needed)."""
-    if source not in VALID_SOURCES:
-        raise ValueError(f"source must be one of {VALID_SOURCES}, got {source!r}")
+    _validate_source(source)
     path = _resolve_path(sidecar_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data: dict = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text())
-            if isinstance(loaded, dict):
-                data = loaded
-        except (OSError, json.JSONDecodeError):
-            data = {}
+    data = _read_sidecar(path)
     data[str(data_path)] = {
         "offset_min": float(offset_min),
         "timestamp": time.time(),
@@ -86,7 +95,7 @@ def save_offset(
 
 
 def save_offsets_batch(
-    data_paths: list,
+    data_paths: list[str],
     offset_min: float,
     source: Source,
     sidecar_path: Optional[Path] = None,
@@ -100,26 +109,19 @@ def save_offsets_batch(
         data_paths: List of absolute `.D` directory paths.
         offset_min: Offset in minutes to apply to every path.
         source: Provenance tag ('manual' or 'auto'); must match VALID_SOURCES.
+        sidecar_path: Override default sidecar location (mainly for tests).
 
     Raises:
         ValueError: source is not in VALID_SOURCES.
 
     No-op when data_paths is empty.
     """
-    if source not in VALID_SOURCES:
-        raise ValueError(f"source must be one of {VALID_SOURCES}, got {source!r}")
+    _validate_source(source)
     if not data_paths:
         return
     path = _resolve_path(sidecar_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data: dict = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text())
-            if isinstance(loaded, dict):
-                data = loaded
-        except (OSError, json.JSONDecodeError):
-            data = {}
+    data = _read_sidecar(path)
     now = time.time()
     for p in data_paths:
         data[str(p)] = {
