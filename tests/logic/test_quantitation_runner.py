@@ -189,3 +189,25 @@ def test_is_match_is_case_insensitive_and_trims():
         sample=SampleSpec(),
     )
     assert summary.internal_standard_peak_index == 0
+
+
+def test_duplicate_is_name_peaks_all_excluded_from_composition():
+    """Every peak named with the IS compound (not just the first) is excluded
+    from composition percentages, matching GUI behavior at ui/app.py:3388,3441."""
+    is_peak1 = _make_peak("Decane", area=1.0e6, rt=5.0, peak_number=3)
+    is_peak2 = _make_peak("Decane", area=0.5e6, rt=5.5, peak_number=4)  # duplicate IS name
+    benzene = _make_peak("Benzene", area=5.0e5, rt=3.0, peak_number=1)
+
+    summary = run_quantitation(
+        peaks=[benzene, is_peak1, is_peak2],
+        internal_standard=_is_spec(),
+        sample=SampleSpec(),
+        compound_lookup=_lookup,
+    )
+    # Both is_peak1 and is_peak2 should have None percentages (treated as IS).
+    assert is_peak1.mol_C_percent is None
+    assert is_peak2.mol_C_percent is None
+    # Composition counts only Benzene as analyte.
+    assert summary.peaks_quantitated == 1
+    # Benzene should have 100% of the analyte composition.
+    assert benzene.mol_C_percent == pytest.approx(100.0, abs=0.01)

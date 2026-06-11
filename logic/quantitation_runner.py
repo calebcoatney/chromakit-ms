@@ -156,7 +156,7 @@ def run_quantitation(
         if not compound_id:
             continue
 
-        is_internal = (i == is_index)
+        is_internal = _is_match(compound_id, internal_standard.compound_name)
 
         meta = compound_lookup(compound_id)
         if not meta.formula or not meta.molecular_weight:
@@ -192,10 +192,12 @@ def run_quantitation(
         peak.mol_percent = result.get('mol_percent')
         peak.wt_percent = result.get('wt_percent')
 
-    # IS percentages stay None
-    is_peak.mol_C_percent = None
-    is_peak.mol_percent = None
-    is_peak.wt_percent = None
+    # IS-matching peaks stay None for percentages (excluded from composition)
+    for peak in peaks:
+        if _is_match(_peak_compound_id(peak), internal_standard.compound_name):
+            peak.mol_C_percent = None
+            peak.mol_percent = None
+            peak.wt_percent = None
 
     # 6. Carbon balance (when sample volume + density given)
     if sample.volume_uL and sample.density_g_mL:
