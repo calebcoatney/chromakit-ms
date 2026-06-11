@@ -158,7 +158,80 @@ class ChromatographicPeak(Feature):
             d['wt_percent'] = self.wt_percent
 
         return d
-    
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ChromatographicPeak":
+        """Reconstruct a ChromatographicPeak from its as_dict() serialization.
+
+        Inverse of as_dict(). Tolerates missing optional fields (sets them to
+        their __init__ defaults). When `deconvolved_spectrum` is present as
+        dict-of-lists (e.g. after a JSON round-trip), arrays are restored via
+        np.array() because downstream consumers expect np.ndarray.
+
+        Used by API endpoints to lift peak dicts from request bodies back into
+        Peak objects the logic/ layer can mutate.
+        """
+        peak = cls(
+            compound_id=d['compound_id'],
+            peak_number=d['peak_number'],
+            retention_time=d['retention_time'],
+            integrator=d['integrator'],
+            width=d['width'],
+            area=d['area'],
+            start_time=d['start_time'],
+            end_time=d['end_time'],
+        )
+        # Quality flags
+        peak.is_shoulder = d.get('is_shoulder', False)
+        peak.is_negative = d.get('is_negative', False)
+        peak.is_convoluted = d.get('is_convoluted', False)
+        peak.is_saturated = d.get('is_saturated', False)
+        peak.is_grouped = d.get('is_grouped', False)
+        peak.quality_issues = d.get('quality_issues', [])
+        # MS identification fields (added by BatchSearchWorker at runtime)
+        if 'Qual' in d:
+            peak.Qual = d['Qual']
+        if 'casno' in d:
+            peak.casno = d['casno']
+        if 'compound_name' in d:
+            peak.compound_name = d['compound_name']
+        if 'match_score' in d:
+            peak.match_score = d['match_score']
+        # Quality detail
+        if 'asymmetry' in d:
+            peak.asymmetry = d['asymmetry']
+        if 'spectral_coherence' in d:
+            peak.spectral_coherence = d['spectral_coherence']
+        if 'saturation_level' in d:
+            peak.saturation_level = d['saturation_level']
+        if 'grouped_peak_count' in d:
+            peak.grouped_peak_count = d['grouped_peak_count']
+        # Quantitation
+        if 'mol_C' in d:
+            peak.mol_C = d['mol_C']
+        if 'mol_C_percent' in d:
+            peak.mol_C_percent = d['mol_C_percent']
+        if 'num_carbons' in d:
+            peak.num_carbons = d['num_carbons']
+        if 'mol' in d:
+            peak.mol = d['mol']
+        if 'mass_mg' in d:
+            peak.mass_mg = d['mass_mg']
+        if 'mol_percent' in d:
+            peak.mol_percent = d['mol_percent']
+        if 'wt_percent' in d:
+            peak.wt_percent = d['wt_percent']
+        # Deconvolved spectrum (not emitted by as_dict but may be in API payloads)
+        if 'deconvolved_spectrum' in d and d['deconvolved_spectrum'] is not None:
+            spec = d['deconvolved_spectrum']
+            peak.deconvolved_spectrum = {
+                'mz': np.asarray(spec['mz']),
+                'intensities': np.asarray(spec['intensities']),
+            }
+        if 'deconvolution_component_count' in d:
+            peak.deconvolution_component_count = d['deconvolution_component_count']
+        return peak
+
     @property
     def apex_time(self):
         """Get the retention time at the peak apex."""
