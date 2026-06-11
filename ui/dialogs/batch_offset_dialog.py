@@ -33,12 +33,13 @@ class BatchOffsetDialog(QDialog):
     def __init__(
         self,
         offset_min: float,
-        siblings: list,            # absolute .D paths (sorted)
-        current_path: str,         # absolute path of the .D currently loaded
-        existing_offsets: dict,    # {abs_path: OffsetEntry} for paths with entries
+        siblings: list[str],
+        current_path: str,
+        existing_offsets: dict[str, OffsetEntry],
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
+        assert siblings, "BatchOffsetDialog requires at least one sibling path"
         self.setWindowTitle("Apply MS Time Offset to Folder")
         self.setModal(True)
         self.setMinimumSize(520, 420)
@@ -48,8 +49,13 @@ class BatchOffsetDialog(QDialog):
         self._current_path = str(current_path)
         self._existing_offsets = dict(existing_offsets or {})
 
+        # Defensive: ensure current_path appears in siblings so disabled-checked
+        # semantics and selected_paths() promise both hold. Inserts at the front.
+        if self._current_path and self._current_path not in self._siblings:
+            self._siblings.insert(0, self._current_path)
+
         # Each row: (abs_path, checkbox_widget)
-        self._row_widgets: list = []
+        self._row_widgets: list[tuple[str, QCheckBox]] = []
 
         self._build_ui()
         self._update_count_label()
@@ -135,7 +141,6 @@ class BatchOffsetDialog(QDialog):
 
         item = QListWidgetItem(self._list_widget)
         item.setSizeHint(checkbox.sizeHint())
-        self._list_widget.addItem(item)
         self._list_widget.setItemWidget(item, checkbox)
 
         self._row_widgets.append((abs_path, checkbox))
