@@ -470,7 +470,10 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._tic_signal,
             verbose=False,
         )
-        offset_min = -lag_seconds / 60.0
+        # lag_seconds > 0 means FID lags the TIC (Polyarc transit before FID).
+        # shifted_xlabels ADDS the offset to MS times, so aligning MS onto the
+        # FID axis requires the same sign as the lag, not its negation.
+        offset_min = lag_seconds / 60.0
         self._set_offset_slider_value(offset_min, source="auto")
         self._rebuild_windows()
         if self._last_render_payload is not None:

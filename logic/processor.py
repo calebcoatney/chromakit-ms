@@ -982,7 +982,10 @@ class ChromatogramProcessor:
             log(f"Max correlation: {restricted_corr[best_lag_idx]:.4f}")
             
             # Step 10: Apply lag to original TIC time
-            aligned_tic_time = tic_time - lag_seconds/60.0  # Convert seconds to minutes
+            # lag_seconds > 0 means the FID trace lags the TIC, so aligning the
+            # TIC onto the FID axis means shifting TIC times LATER (+), matching
+            # the shifted_xlabels(ms, offset) convention used everywhere else.
+            aligned_tic_time = tic_time + lag_seconds/60.0  # Convert seconds to minutes
             aligned_tic_signal = tic_signal  # Signal values remain unchanged
             
             return aligned_tic_time, aligned_tic_signal, lag_seconds
