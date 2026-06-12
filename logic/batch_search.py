@@ -26,21 +26,25 @@ def extract_peak_spectrum(data_directory, peak, **kwargs):
 class BatchSearchWorker(QRunnable):
     """Worker for batch MS library search on integrated peaks."""
     
-    def __init__(self, ms_toolkit, peaks, data_directory, options=None):
+    def __init__(self, ms_toolkit, peaks, data_directory, options=None,
+                 ms_time_offset: float = 0.0):
         """
         Initialize the worker.
-                
+
                 Args:
                     ms_toolkit: The MSToolkit instance
                     peaks: List of Peak objects
                     data_directory: Path to the data directory
                     options: Dictionary of search options
+                    ms_time_offset: MS-vs-FID offset in minutes (shifted_xlabels
+                        convention), forwarded to spectrum extraction
         """
         super().__init__()
         self.ms_toolkit = ms_toolkit
         self.peaks = peaks
         self.data_directory = data_directory
         self.options = options or {}
+        self.ms_time_offset = ms_time_offset
         self.signals = BatchSearchWorkerSignals()
         self.cancelled = False  # Add cancellation flag
 
@@ -82,6 +86,7 @@ class BatchSearchWorker(QRunnable):
                 log_callback=on_log,
                 should_cancel=should_cancel,
                 extractor=self.spectrum_extractor,
+                ms_time_offset=self.ms_time_offset,
             )
 
             self.signals.finished.emit()

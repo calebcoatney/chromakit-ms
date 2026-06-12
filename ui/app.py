@@ -2350,9 +2350,10 @@ class ChromaKitApp(QMainWindow):
                 **search_options,
                 'mz_shift': mz_shift,
                 'debug': True
-            }
+            },
+            ms_time_offset=float(getattr(self.data_handler, 'ms_time_offset', 0.0)),
         )
-        
+
         return worker
 
 
