@@ -63,9 +63,41 @@ class SpectrumRequest(BaseModel):
 
 
 class MSSearchRequest(BaseModel):
-    """Request to search a mass spectrum against the library."""
-    spectrum: Dict[str, Any] = Field(..., description="Spectrum with 'mz' and 'intensities' arrays")
-    options: Optional[Dict[str, Any]] = None
+    """Request to search a single mass spectrum against the loaded MS library.
+
+    Mirrors MSBatchSearchRequest's options shape but takes a spectrum
+    directly instead of a peak + data_directory. Use this when the agent
+    already has a spectrum in hand and wants to test it across several
+    search configurations without re-running batch.
+
+    Note: this redefines the unused stub previously at api/models.py:65-68.
+    No other module imports it (verified via grep), so the redefinition
+    is safe.
+    """
+    spectrum: Dict[str, Any] = Field(
+        ...,
+        description="Spectrum with 'mz' and 'intensities' arrays of equal length",
+    )
+    options: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Search options matching MSBatchSearchRequest.options shape. "
+            "Reads 'search_method' (vector|w2v|hybrid), 'top_n', 'similarity', "
+            "'weighting', 'unmatched', 'top_k_clusters', 'intensity_power', "
+            "'hybrid_method'. See do_single_search in logic/ms_search_core.py."
+        ),
+    )
+    mz_shift: int = Field(
+        default=0,
+        description=(
+            "Integer m/z shift applied to the toolkit's library spectra "
+            "before searching. Default 0 (no shift)."
+        ),
+    )
+    top_n: int = Field(
+        default=5,
+        description="Convenience override of options['top_n']. Default 5.",
+    )
 
 
 class BatchMSSearchRequest(BaseModel):
@@ -316,6 +348,25 @@ class MSBatchSearchResponse(BaseModel):
     errors: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="Per-peak errors as [{'peak_index': int, 'message': str}]",
+    )
+    elapsed_seconds: float
+
+
+class MSSearchHit(BaseModel):
+    """One library match returned by /api/ms/search."""
+    name: str = Field(..., description="Compound name from the library")
+    score: float = Field(..., description="Similarity score (higher = better)")
+    casno: Optional[str] = Field(
+        default=None,
+        description="CAS Registry Number, formatted NNNNNN-NN-N. None if not in library.",
+    )
+
+
+class MSSearchResponse(BaseModel):
+    """Response from POST /api/ms/search."""
+    results: List[MSSearchHit] = Field(
+        ...,
+        description="Top-N matches in descending score order. May be empty.",
     )
     elapsed_seconds: float
 
