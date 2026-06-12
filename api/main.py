@@ -47,6 +47,7 @@ from api.models import (
     LibraryLoadRequest, LibraryLoadResponse,
     SpectralDeconvolutionRequest, SpectralDeconvolutionResponse,
     MSBatchSearchRequest, MSBatchSearchResponse,
+    MSSearchRequest, MSSearchHit, MSSearchResponse,
     QuantitateRequest, QuantitateResponse,
 )
 from api.utils import serialize_numpy, convert_params_for_processor
@@ -415,20 +416,68 @@ async def ms_library_load(request: LibraryLoadRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── MS Library Search (stub — requires ms-toolkit-nrel) ─────────────
+# ─── MS Library Search ───────────────────────────────────────────────
 
-@app.post("/api/ms/search")
-async def ms_search(request: dict):
-    """Search a mass spectrum against the MS library. Requires ms-toolkit-nrel."""
+@app.post("/api/ms/search", response_model=MSSearchResponse)
+async def ms_search(request: MSSearchRequest):
+    """Search a single mass spectrum against the loaded MS library.
+
+    Requires `/api/ms/library/load` to have run first. Use this for
+    one-off scoring of a spectrum the agent already has in hand (e.g.,
+    re-scoring the same spectrum across several search configurations
+    without re-running batch).
+
+    For batch search across many peaks, use POST /api/ms/batch-search.
+    """
+    import time
+    from api import ms_toolkit_singleton
+    from logic.ms_search_core import do_single_search, _lookup_casno
+
     try:
-        from ms_toolkit import MSToolkit
-    except ImportError:
+        ms_toolkit = ms_toolkit_singleton.get_toolkit()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    mz = request.spectrum.get('mz', [])
+    intensities = request.spectrum.get('intensities', [])
+    if not mz or not intensities:
         raise HTTPException(
-            status_code=501,
-            detail="MS library search requires ms-toolkit-nrel. Install with: pip install ms-toolkit-nrel"
+            status_code=422,
+            detail="spectrum must have non-empty 'mz' and 'intensities' arrays",
         )
-    # TODO: Implement once ms-toolkit is available
-    raise HTTPException(status_code=501, detail="MS search endpoint not yet implemented")
+    if len(mz) != len(intensities):
+        raise HTTPException(
+            status_code=422,
+            detail="spectrum 'mz' and 'intensities' must have equal length",
+        )
+
+    # Apply m/z shift (top-level field takes precedence; mirrors batch-search policy)
+    if request.mz_shift:
+        ms_toolkit.mz_shift = request.mz_shift
+
+    query_spectrum = list(zip(mz, intensities))
+    options = dict(request.options)
+    # Convenience: top-level top_n fills in if options doesn't already specify it
+    options.setdefault('top_n', request.top_n)
+
+    start_ts = time.time()
+    try:
+        results = do_single_search(ms_toolkit, query_spectrum, options)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search error: {e}")
+    elapsed = round(time.time() - start_ts, 3)
+
+    # Absorb both 2-tuples (name, score) and 5-tuples (name, score, prob, p_low, p_high)
+    # via *_ — see wiki/entities/ms-toolkit-probability.md for context.
+    hits = [
+        MSSearchHit(
+            name=name,
+            score=float(score),
+            casno=_lookup_casno(ms_toolkit, name),
+        )
+        for (name, score, *_) in results
+    ]
+    return MSSearchResponse(results=hits, elapsed_seconds=elapsed)
 
 
 @app.post("/api/ms/batch-search", response_model=MSBatchSearchResponse)
