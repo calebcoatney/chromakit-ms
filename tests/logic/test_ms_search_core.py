@@ -291,3 +291,52 @@ def test_caller_provided_extractor_is_used():
     )
     injected_extractor.extract_for_peak.assert_called_once()
     assert peak.compound_id == "Hexane"
+
+
+def test_run_batch_search_passes_ms_time_offset_to_extractor():
+    """The ms_time_offset kwarg must reach SpectrumExtractor.extract_for_peak."""
+    ms_toolkit = _make_toolkit()
+    peak = _make_peak()  # no deconvolved spectrum → forces extractor call
+
+    fake_extractor = MagicMock()
+    fake_extractor.extract_for_peak.return_value = {
+        'mz': np.array([50.0, 73.0]),
+        'intensities': np.array([1000.0, 500.0]),
+    }
+
+    run_batch_search(
+        ms_toolkit=ms_toolkit,
+        peaks=[peak],
+        data_directory="/fake/dir.D",
+        options={'search_method': 'vector'},
+        extractor=fake_extractor,
+        ms_time_offset=0.123,
+    )
+
+    # Verify the offset was forwarded as a keyword arg
+    fake_extractor.extract_for_peak.assert_called_once()
+    call_kwargs = fake_extractor.extract_for_peak.call_args.kwargs
+    assert call_kwargs.get('ms_time_offset') == 0.123
+
+
+def test_run_batch_search_default_offset_is_zero():
+    """Existing callers (GUI BatchSearchWorker) that don't pass offset must still work."""
+    ms_toolkit = _make_toolkit()
+    peak = _make_peak()
+    fake_extractor = MagicMock()
+    fake_extractor.extract_for_peak.return_value = {
+        'mz': np.array([50.0]),
+        'intensities': np.array([1000.0]),
+    }
+
+    # Note: no ms_time_offset kwarg passed
+    run_batch_search(
+        ms_toolkit=ms_toolkit,
+        peaks=[peak],
+        data_directory="/fake/dir.D",
+        options={'search_method': 'vector'},
+        extractor=fake_extractor,
+    )
+
+    call_kwargs = fake_extractor.extract_for_peak.call_args.kwargs
+    assert call_kwargs.get('ms_time_offset') == 0.0

@@ -96,6 +96,7 @@ def run_batch_search(
     log_callback: Optional[Callable[[str], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
     extractor: Optional[SpectrumExtractor] = None,
+    ms_time_offset: float = 0.0,
 ) -> BatchSearchSummary:
     """Run MS library search across `peaks`, mutating them in place.
 
@@ -120,6 +121,10 @@ def run_batch_search(
             When None (default), a fresh one is built internally. The GUI
             worker passes its own extractor so tests that patch the
             worker's instance continue to verify real behavior.
+        ms_time_offset: Constant shift (minutes) applied to MS retention
+            times when extracting spectra for each peak. Forwarded to
+            SpectrumExtractor.extract_for_peak(). Default 0.0 (no shift).
+            Mirrors the same parameter on /api/spectral-deconvolution.
 
     Returns:
         BatchSearchSummary with counts and per-peak errors.
@@ -157,9 +162,13 @@ def run_batch_search(
         if getattr(peak, 'deconvolved_spectrum', None) is not None:
             spectrum = peak.deconvolved_spectrum
             if len(spectrum.get('mz', [])) == 0:
-                spectrum = extractor.extract_for_peak(data_directory, peak, options)
+                spectrum = extractor.extract_for_peak(
+                    data_directory, peak, options, ms_time_offset=ms_time_offset
+                )
         else:
-            spectrum = extractor.extract_for_peak(data_directory, peak, options)
+            spectrum = extractor.extract_for_peak(
+                data_directory, peak, options, ms_time_offset=ms_time_offset
+            )
 
         if not spectrum or 'mz' not in spectrum or 'intensities' not in spectrum or len(spectrum['mz']) == 0:
             if progress_callback is not None:
