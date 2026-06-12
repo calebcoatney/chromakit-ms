@@ -62,3 +62,17 @@ def test_ms_search_response_round_trips():
 
     restored = MSSearchResponse.model_validate(dumped)
     assert restored.results[0].score == 0.91
+
+
+def test_ms_search_hit_normalizes_empty_casno_to_none():
+    """Empty string casno (from format_casno on missing CAS) becomes None."""
+    from api.models import MSSearchHit
+    hit = MSSearchHit(name='Hexane', score=0.91, casno='')
+    assert hit.casno is None
+
+
+def test_ms_search_hit_preserves_valid_casno():
+    """A real CAS string is passed through unchanged."""
+    from api.models import MSSearchHit
+    hit = MSSearchHit(name='Hexane', score=0.91, casno='110-54-3')
+    assert hit.casno == '110-54-3'

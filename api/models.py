@@ -4,7 +4,7 @@ Mirrors the processing parameters from ui/frames/parameters.py and
 the data structures from logic/.
 """
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ── Processing param models — canonical definitions live in logic/method.py ──
 from logic.method import (
@@ -358,8 +358,26 @@ class MSSearchHit(BaseModel):
     score: float = Field(..., description="Similarity score (higher = better)")
     casno: Optional[str] = Field(
         default=None,
-        description="CAS Registry Number, formatted NNNNNN-NN-N. None if not in library.",
+        description=(
+            "CAS Registry Number, formatted NNNNNN-NN-N. None if the "
+            "compound is not in the loaded library or has no CAS number "
+            "(empty strings from the library are normalized to None for "
+            "a clean contract)."
+        ),
     )
+
+    @field_validator('casno', mode='before')
+    @classmethod
+    def _normalize_empty_casno(cls, v):
+        """Normalize empty strings from format_casno() to None.
+
+        logic.ms_search_core.format_casno returns "" for empty/non-string
+        input. Mapping that to None here keeps the agent-facing contract
+        simple: callers see either a formatted CAS string or None.
+        """
+        if v == "":
+            return None
+        return v
 
 
 class MSSearchResponse(BaseModel):
