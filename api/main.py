@@ -462,14 +462,21 @@ async def ms_batch_search(request: MSBatchSearchRequest):
             status_code=422, detail=f"Malformed peak missing required field: {e}"
         )
 
+    # Merge top-level convenience fields into options.
+    # Top-level mz_shift always wins (even when 0) so the agent has a
+    # single, deterministic knob.
+    merged_options = dict(request.options)
+    merged_options['mz_shift'] = request.mz_shift
+
     start_ts = time.time()
     try:
         summary = run_batch_search(
             ms_toolkit=ms_toolkit,
             peaks=peaks,
             data_directory=request.data_directory,
-            options=request.options,
+            options=merged_options,
             respect_manual_assignments=request.respect_manual_assignments,
+            ms_time_offset=request.ms_time_offset,
             log_callback=print,
         )
     except Exception as e:
