@@ -88,8 +88,11 @@ def do_single_search(ms_toolkit, query_spectrum, options: dict) -> list:
 _do_search = do_single_search
 
 
-def _lookup_casno(ms_toolkit, compound_name: str) -> Optional[str]:
+def lookup_casno(ms_toolkit, compound_name: str) -> Optional[str]:
     """Look up a CAS number from the loaded library.
+
+    Public helper used by both run_batch_search (via the in-loop search
+    handler) and the /api/ms/search endpoint.
 
     Returns the formatted CAS string on a hit, or None on miss / when the
     library is unavailable. None semantics match the original
@@ -104,6 +107,10 @@ def _lookup_casno(ms_toolkit, compound_name: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+# Backwards-compatible alias (will be removed after one release cycle).
+_lookup_casno = lookup_casno
 
 
 def run_batch_search(
@@ -222,7 +229,7 @@ def run_batch_search(
             peak.compound_id = best_name
             peak.Compound_ID = best_name
             peak.Qual = best_score
-            peak.casno = _lookup_casno(ms_toolkit, best_name)
+            peak.casno = lookup_casno(ms_toolkit, best_name)
             if progress_callback is not None:
                 progress_callback(i, best_name, results)
             summary.successful_matches += 1

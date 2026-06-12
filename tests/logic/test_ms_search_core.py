@@ -386,3 +386,9 @@ def test_do_search_alias_still_works():
     ms_toolkit = _make_toolkit()
     result = _do_search(ms_toolkit, [(50.0, 1000.0)], {'search_method': 'vector'})
     assert result == [("Hexane", 0.93), ("Pentane", 0.51)]
+
+
+def test_lookup_casno_alias_still_works():
+    """The legacy _lookup_casno name remains available for one release cycle."""
+    from logic.ms_search_core import _lookup_casno, lookup_casno
+    assert _lookup_casno is lookup_casno

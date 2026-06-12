@@ -431,7 +431,7 @@ async def ms_search(request: MSSearchRequest):
     """
     import time
     from api import ms_toolkit_singleton
-    from logic.ms_search_core import do_single_search, _lookup_casno
+    from logic.ms_search_core import do_single_search, lookup_casno
 
     try:
         ms_toolkit = ms_toolkit_singleton.get_toolkit()
@@ -473,7 +473,7 @@ async def ms_search(request: MSSearchRequest):
         MSSearchHit(
             name=name,
             score=float(score),
-            casno=_lookup_casno(ms_toolkit, name),
+            casno=lookup_casno(ms_toolkit, name),
         )
         for (name, score, *_) in results
     ]

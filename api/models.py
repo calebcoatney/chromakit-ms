@@ -91,7 +91,10 @@ class MSSearchRequest(BaseModel):
         default=0,
         description=(
             "Integer m/z shift applied to the toolkit's library spectra "
-            "before searching. Default 0 (no shift)."
+            "before searching. Always applied (even at the default of 0), "
+            "overwriting any prior toolkit state, to guarantee deterministic "
+            "results across sequential requests on the shared singleton. "
+            "Default 0 (no shift)."
         ),
     )
     top_n: int = Field(
@@ -334,7 +337,9 @@ class MSBatchSearchRequest(BaseModel):
         description=(
             "Integer m/z shift applied to the toolkit's library spectra "
             "before searching. Overrides options['mz_shift'] if both set. "
-            "Default 0 (no shift)."
+            "Always applied (even at the default of 0), overwriting any "
+            "prior toolkit state, to guarantee deterministic results across "
+            "sequential requests on the shared singleton. Default 0 (no shift)."
         ),
     )
 
