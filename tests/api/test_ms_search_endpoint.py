@@ -106,6 +106,35 @@ def test_ms_search_applies_mz_shift_to_toolkit(client):
     assert ms_toolkit.mz_shift == 2
 
 
+def test_ms_search_mz_shift_default_zero_resets_toolkit(client):
+    """Default mz_shift=0 unconditionally resets the toolkit's value.
+
+    Mirrors /api/ms/batch-search behavior — top-level always wins, even at 0.
+    Prevents 'sticky' mz_shift state leaking between requests on the
+    process-wide singleton.
+    """
+    ms_toolkit = MagicMock()
+    ms_toolkit.search_vector.return_value = []
+    ms_toolkit.library = {}
+    # Pre-set a non-zero shift (simulating a prior request)
+    ms_toolkit.mz_shift = 5
+    singleton._toolkit = ms_toolkit
+
+    response = client.post(
+        '/api/ms/search',
+        json={
+            'spectrum': {'mz': [50.0], 'intensities': [1000.0]},
+            # mz_shift omitted → defaults to 0
+        },
+    )
+
+    assert response.status_code == 200
+    assert ms_toolkit.mz_shift == 0, (
+        "mz_shift=0 (default) must overwrite a previously-set toolkit value "
+        "for single-deterministic-knob semantics (matches batch-search policy)."
+    )
+
+
 def test_ms_search_absorbs_5_tuple_probability_shape(client):
     """When toolkit returns 5-tuples (compute_probability=True), the endpoint still works."""
     ms_toolkit = MagicMock()

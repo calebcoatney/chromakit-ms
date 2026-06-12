@@ -451,9 +451,9 @@ async def ms_search(request: MSSearchRequest):
             detail="spectrum 'mz' and 'intensities' must have equal length",
         )
 
-    # Apply m/z shift (top-level field takes precedence; mirrors batch-search policy)
-    if request.mz_shift:
-        ms_toolkit.mz_shift = request.mz_shift
+    # Apply m/z shift unconditionally (top-level always wins, even when 0).
+    # Matches /api/ms/batch-search policy: single deterministic knob.
+    ms_toolkit.mz_shift = request.mz_shift
 
     query_spectrum = list(zip(mz, intensities))
     options = dict(request.options)
