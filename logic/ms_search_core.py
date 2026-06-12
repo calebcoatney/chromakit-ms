@@ -36,8 +36,25 @@ def format_casno(casno) -> str:
     return padded[:-3] + '-' + padded[-3:-1] + '-' + padded[-1:]
 
 
-def _do_search(ms_toolkit, query_spectrum, options: dict) -> list:
-    """Dispatch to the correct ms_toolkit search method based on options."""
+def do_single_search(ms_toolkit, query_spectrum, options: dict) -> list:
+    """Dispatch to the correct ms_toolkit search method based on options.
+
+    Public helper used by both run_batch_search (for per-peak searches in
+    the batch loop) and the /api/ms/search endpoint (for one-off searches
+    of a single spectrum).
+
+    Args:
+        ms_toolkit: A loaded MSToolkit instance.
+        query_spectrum: List of (mz, intensity) tuples.
+        options: Search options dict. Reads 'search_method' (vector|w2v|hybrid),
+            'top_n', 'similarity', 'weighting', 'unmatched', 'top_k_clusters',
+            'intensity_power', 'hybrid_method'.
+
+    Returns:
+        List of (name, score) tuples in descending score order, length <= top_n.
+        Note: when compute_probability=True is set on the toolkit, results may
+        be 5-tuples — callers should unpack with `(name, score, *_)`.
+    """
     search_method = options.get('search_method', 'vector')
     if search_method == 'w2v':
         return ms_toolkit.search_w2v(
@@ -65,6 +82,10 @@ def _do_search(ms_toolkit, query_spectrum, options: dict) -> list:
         unmatched_method=options.get('unmatched', 'keep_all'),
         top_k_clusters=options.get('top_k_clusters', 1),
     )
+
+
+# Backwards-compatible alias (will be removed after one release cycle).
+_do_search = do_single_search
 
 
 def _lookup_casno(ms_toolkit, compound_name: str) -> Optional[str]:
@@ -187,7 +208,7 @@ def run_batch_search(
         # Search
         query_spectrum = list(zip(spectrum['mz'], spectrum['intensities']))
         try:
-            results = _do_search(ms_toolkit, query_spectrum, options)
+            results = do_single_search(ms_toolkit, query_spectrum, options)
         except Exception as e:
             err_msg = f"{type(e).__name__}: {e}"
             summary.errors.append((i, err_msg))

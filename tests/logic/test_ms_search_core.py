@@ -340,3 +340,49 @@ def test_run_batch_search_default_offset_is_zero():
 
     call_kwargs = fake_extractor.extract_for_peak.call_args.kwargs
     assert call_kwargs.get('ms_time_offset') == 0.0
+
+
+def test_do_single_search_dispatches_vector():
+    """do_single_search routes to search_vector when search_method='vector'."""
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    query = [(50.0, 1000.0), (73.0, 500.0)]
+    result = do_single_search(ms_toolkit, query, {'search_method': 'vector', 'top_n': 3})
+
+    ms_toolkit.search_vector.assert_called_once()
+    ms_toolkit.search_w2v.assert_not_called()
+    ms_toolkit.search_hybrid.assert_not_called()
+    assert result == [("Hexane", 0.93), ("Pentane", 0.51)]
+
+
+def test_do_single_search_dispatches_w2v():
+    """do_single_search routes to search_w2v when search_method='w2v'."""
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    query = [(50.0, 1000.0)]
+    do_single_search(ms_toolkit, query, {'search_method': 'w2v'})
+
+    ms_toolkit.search_w2v.assert_called_once()
+    ms_toolkit.search_vector.assert_not_called()
+
+
+def test_do_single_search_dispatches_hybrid():
+    """do_single_search routes to search_hybrid when search_method='hybrid'."""
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    query = [(50.0, 1000.0)]
+    do_single_search(ms_toolkit, query, {'search_method': 'hybrid'})
+
+    ms_toolkit.search_hybrid.assert_called_once()
+
+
+def test_do_search_alias_still_works():
+    """The legacy _do_search name remains available for one release cycle."""
+    from logic.ms_search_core import _do_search
+
+    ms_toolkit = _make_toolkit()
+    result = _do_search(ms_toolkit, [(50.0, 1000.0)], {'search_method': 'vector'})
+    assert result == [("Hexane", 0.93), ("Pentane", 0.51)]
