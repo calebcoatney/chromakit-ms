@@ -112,3 +112,28 @@ def test_export_request_has_output_path_field():
 def test_export_request_output_path_defaults_none():
     req = ExportRequest(peaks=[], file_path="/data.D")
     assert req.output_path is None
+
+
+def test_ms_batch_search_request_accepts_ms_time_offset_and_mz_shift():
+    """New top-level fields must accept floats/ints with default 0."""
+    from api.models import MSBatchSearchRequest
+
+    # Defaults
+    req = MSBatchSearchRequest(
+        peaks=[{'retention_time': 1.0}],
+        data_directory='/tmp/x.D',
+        options={'search_method': 'vector'},
+    )
+    assert req.ms_time_offset == 0.0
+    assert req.mz_shift == 0
+
+    # Explicit values
+    req2 = MSBatchSearchRequest(
+        peaks=[{'retention_time': 1.0}],
+        data_directory='/tmp/x.D',
+        options={'search_method': 'vector'},
+        ms_time_offset=0.123,
+        mz_shift=1,
+    )
+    assert req2.ms_time_offset == 0.123
+    assert req2.mz_shift == 1

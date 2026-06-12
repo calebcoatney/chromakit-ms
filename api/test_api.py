@@ -128,6 +128,95 @@ def test_load_file(file_path):
         return None
 
 
+def test_batch_search_top_level_knobs():
+    """Smoke test: POST /api/ms/batch-search with top-level ms_time_offset and mz_shift.
+
+    Requires:
+      - A loaded MS library (run test_library_load first).
+      - A real .D directory with integrated peaks (run test_run first).
+
+    This test is a no-op if the library isn't loaded — prints a skip message
+    rather than failing the suite, since the test ordering is interactive.
+    """
+    print("\n🧪 Testing /api/ms/batch-search with top-level knobs...")
+
+    # Probe library status
+    health = requests.get(f"{BASE_URL}/api/health").json()
+    if not health.get('library_loaded'):
+        print("⚠️ Library not loaded; skipping (run test_library_load first)")
+        return
+
+    # Minimal request showing both knobs. Real callers would have peaks from
+    # /api/run; here we use a synthetic peak just to exercise the wire format.
+    request = {
+        'peaks': [{
+            'compound_id': 'unknown', 'peak_number': 1, 'retention_time': 2.5,
+            'integrator': 'BB', 'width': 0.05, 'area': 1000.0,
+            'start_time': 2.475, 'end_time': 2.525,
+            'is_shoulder': False, 'is_negative': False, 'is_convoluted': False,
+            'is_saturated': False, 'is_grouped': False, 'quality_issues': [],
+        }],
+        'data_directory': '/path/to/your/sample.D',  # ← edit this for live test
+        'options': {'search_method': 'vector', 'top_n': 5},
+        'ms_time_offset': 0.05,
+        'mz_shift': 1,
+    }
+    response = requests.post(f"{BASE_URL}/api/ms/batch-search", json=request)
+    print(f"Status: {response.status_code}")
+    if response.status_code != 200:
+        print(f"⚠️ Skipped (likely missing data_directory): {response.json()}")
+        return
+    body = response.json()
+    print(f"  total_peaks: {body['total_peaks']}, errors: {len(body['errors'])}")
+    print("✅ Batch search with top-level knobs accepted!")
+
+
+def test_ms_search_single_spectrum():
+    """Smoke test: POST /api/ms/search with a hand-crafted spectrum."""
+    print("\n🧪 Testing /api/ms/search (single spectrum)...")
+
+    request = {
+        'spectrum': {
+            'mz': [43.0, 57.0, 71.0, 85.0, 99.0],
+            'intensities': [100.0, 80.0, 60.0, 40.0, 20.0],
+        },
+        'options': {'search_method': 'vector'},
+        'top_n': 3,
+    }
+    response = requests.post(f"{BASE_URL}/api/ms/search", json=request)
+    print(f"Status: {response.status_code}")
+    if response.status_code == 409:
+        print("⚠️ Library not loaded; skipping (run test_library_load first)")
+        return
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+    body = response.json()
+    print(f"  results: {len(body['results'])}, elapsed: {body['elapsed_seconds']}s")
+    if body['results']:
+        top = body['results'][0]
+        print(f"  top hit: {top['name']} (score {top['score']:.3f}, cas {top['casno']})")
+    print("✅ Single-spectrum search working!")
+
+
+def test_run_with_write_output_false():
+    """Smoke test: POST /api/run with write_output=False returns peaks without writing JSON."""
+    print("\n🧪 Testing /api/run with write_output=False...")
+
+    request = {
+        'data_path': '/path/to/your/sample.D',          # ← edit this for live test
+        'method_path': '/path/to/your/sample.chromethod',  # ← edit this for live test
+        'write_output': False,
+    }
+    response = requests.post(f"{BASE_URL}/api/run", json=request)
+    print(f"Status: {response.status_code}")
+    if response.status_code != 200:
+        print(f"⚠️ Skipped (likely missing data_path or method_path): {response.text}")
+        return
+    body = response.json()
+    print(f"  peak_count: {body['peak_count']}, output_files: {body['output_files']}")
+    assert body['output_files'] == [], f"Expected empty output_files, got {body['output_files']}"
+    print("✅ /api/run write_output=False working!")
+
+
 def main():
     """Run all tests."""
     print("=" * 60)

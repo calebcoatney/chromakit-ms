@@ -29,6 +29,10 @@ from logic.spectral_deconv_runner import (
 from logic.spectral_deconvolution import DeconvolutionParams
 from logic.integration import ChromatographicPeak
 from logic.ms_search_core import run_batch_search, BatchSearchSummary
+from logic.json_exporter import (
+    export_integration_results_to_json,
+    _resolve_export_context,
+)
 from logic.quantitation_runner import (
     run_quantitation, lookup_compound_metadata,
     InternalStandardSpec, SampleSpec,
@@ -47,6 +51,7 @@ from api.models import (
     LibraryLoadRequest, LibraryLoadResponse,
     SpectralDeconvolutionRequest, SpectralDeconvolutionResponse,
     MSBatchSearchRequest, MSBatchSearchResponse,
+    MSSearchRequest, MSSearchHit, MSSearchResponse,
     QuantitateRequest, QuantitateResponse,
 )
 from api.utils import serialize_numpy, convert_params_for_processor
@@ -415,20 +420,68 @@ async def ms_library_load(request: LibraryLoadRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── MS Library Search (stub — requires ms-toolkit-nrel) ─────────────
+# ─── MS Library Search ───────────────────────────────────────────────
 
-@app.post("/api/ms/search")
-async def ms_search(request: dict):
-    """Search a mass spectrum against the MS library. Requires ms-toolkit-nrel."""
+@app.post("/api/ms/search", response_model=MSSearchResponse)
+async def ms_search(request: MSSearchRequest):
+    """Search a single mass spectrum against the loaded MS library.
+
+    Requires `/api/ms/library/load` to have run first. Use this for
+    one-off scoring of a spectrum the agent already has in hand (e.g.,
+    re-scoring the same spectrum across several search configurations
+    without re-running batch).
+
+    For batch search across many peaks, use POST /api/ms/batch-search.
+    """
+    import time
+    from api import ms_toolkit_singleton
+    from logic.ms_search_core import do_single_search, lookup_casno
+
     try:
-        from ms_toolkit import MSToolkit
-    except ImportError:
+        ms_toolkit = ms_toolkit_singleton.get_toolkit()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    mz = request.spectrum.get('mz', [])
+    intensities = request.spectrum.get('intensities', [])
+    if not mz or not intensities:
         raise HTTPException(
-            status_code=501,
-            detail="MS library search requires ms-toolkit-nrel. Install with: pip install ms-toolkit-nrel"
+            status_code=422,
+            detail="spectrum must have non-empty 'mz' and 'intensities' arrays",
         )
-    # TODO: Implement once ms-toolkit is available
-    raise HTTPException(status_code=501, detail="MS search endpoint not yet implemented")
+    if len(mz) != len(intensities):
+        raise HTTPException(
+            status_code=422,
+            detail="spectrum 'mz' and 'intensities' must have equal length",
+        )
+
+    # Apply m/z shift unconditionally (top-level always wins, even when 0).
+    # Matches /api/ms/batch-search policy: single deterministic knob.
+    ms_toolkit.mz_shift = request.mz_shift
+
+    query_spectrum = list(zip(mz, intensities))
+    options = dict(request.options)
+    # Convenience: top-level top_n fills in if options doesn't already specify it
+    options.setdefault('top_n', request.top_n)
+
+    start_ts = time.time()
+    try:
+        results = do_single_search(ms_toolkit, query_spectrum, options)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search error: {e}")
+    elapsed = round(time.time() - start_ts, 3)
+
+    # Absorb both 2-tuples (name, score) and 5-tuples (name, score, prob, p_low, p_high)
+    # via *_ — see wiki/entities/ms-toolkit-probability.md for context.
+    hits = [
+        MSSearchHit(
+            name=name,
+            score=float(score),
+            casno=lookup_casno(ms_toolkit, name),
+        )
+        for (name, score, *_) in results
+    ]
+    return MSSearchResponse(results=hits, elapsed_seconds=elapsed)
 
 
 @app.post("/api/ms/batch-search", response_model=MSBatchSearchResponse)
@@ -462,14 +515,21 @@ async def ms_batch_search(request: MSBatchSearchRequest):
             status_code=422, detail=f"Malformed peak missing required field: {e}"
         )
 
+    # Merge top-level convenience fields into options.
+    # Top-level mz_shift always wins (even when 0) so the agent has a
+    # single, deterministic knob.
+    merged_options = dict(request.options)
+    merged_options['mz_shift'] = request.mz_shift
+
     start_ts = time.time()
     try:
         summary = run_batch_search(
             ms_toolkit=ms_toolkit,
             peaks=peaks,
             data_directory=request.data_directory,
-            options=request.options,
+            options=merged_options,
             respect_manual_assignments=request.respect_manual_assignments,
+            ms_time_offset=request.ms_time_offset,
             log_callback=print,
         )
     except Exception as e:
@@ -630,7 +690,6 @@ async def run_pipeline(request: RunRequest):
     plus the output file path.
     """
     from logic.method import ChromaMethod
-    from logic.json_exporter import export_integration_results_to_json, _resolve_export_context
 
     try:
         # 1. Load method
@@ -666,21 +725,24 @@ async def run_pipeline(request: RunRequest):
         )
         peaks = integrated.get("peaks", [])
 
-        # 5. Export JSON (writes alongside data file, same as GUI behavior)
-        export_integration_results_to_json(
-            peaks=peaks,
-            d_path=request.data_path,
-            detector=data_handler.current_detector,
-            processing_params=raw_params,
-            ms_time_offset=float(getattr(data_handler, 'ms_time_offset', 0.0)),
-        )
+        # 5. Export JSON (writes alongside data file, same as GUI behavior).
+        # Skipped when write_output=False so sweep iterations don't spam disk.
+        if request.write_output:
+            export_integration_results_to_json(
+                peaks=peaks,
+                d_path=request.data_path,
+                detector=data_handler.current_detector,
+                processing_params=raw_params,
+                ms_time_offset=float(getattr(data_handler, 'ms_time_offset', 0.0)),
+            )
+            _, output_file = _resolve_export_context(
+                request.data_path, data_handler.current_detector
+            )
+            output_files = [str(output_file)]
+        else:
+            output_files = []
 
-        # 6. Determine output file path
-        _, output_file = _resolve_export_context(
-            request.data_path, data_handler.current_detector
-        )
-
-        # 7. Serialize peaks for response
+        # 6. Serialize peaks for response
         peaks_dicts = []
         for peak in peaks:
             d = peak.as_dict() if hasattr(peak, "as_dict") else peak
@@ -694,7 +756,7 @@ async def run_pipeline(request: RunRequest):
             signal_type=method.signal_type,
             peak_count=len(peaks_dicts),
             peaks=peaks_dicts,
-            output_files=[str(output_file)],
+            output_files=output_files,
         )
 
     except HTTPException:

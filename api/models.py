@@ -4,7 +4,7 @@ Mirrors the processing parameters from ui/frames/parameters.py and
 the data structures from logic/.
 """
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ── Processing param models — canonical definitions live in logic/method.py ──
 from logic.method import (
@@ -63,9 +63,44 @@ class SpectrumRequest(BaseModel):
 
 
 class MSSearchRequest(BaseModel):
-    """Request to search a mass spectrum against the library."""
-    spectrum: Dict[str, Any] = Field(..., description="Spectrum with 'mz' and 'intensities' arrays")
-    options: Optional[Dict[str, Any]] = None
+    """Request to search a single mass spectrum against the loaded MS library.
+
+    Mirrors MSBatchSearchRequest's options shape but takes a spectrum
+    directly instead of a peak + data_directory. Use this when the agent
+    already has a spectrum in hand and wants to test it across several
+    search configurations without re-running batch.
+
+    Note: this redefines the unused stub previously at api/models.py:65-68.
+    No other module imports it (verified via grep), so the redefinition
+    is safe.
+    """
+    spectrum: Dict[str, Any] = Field(
+        ...,
+        description="Spectrum with 'mz' and 'intensities' arrays of equal length",
+    )
+    options: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Search options matching MSBatchSearchRequest.options shape. "
+            "Reads 'search_method' (vector|w2v|hybrid), 'top_n', 'similarity', "
+            "'weighting', 'unmatched', 'top_k_clusters', 'intensity_power', "
+            "'hybrid_method'. See do_single_search in logic/ms_search_core.py."
+        ),
+    )
+    mz_shift: int = Field(
+        default=0,
+        description=(
+            "Integer m/z shift applied to the toolkit's library spectra "
+            "before searching. Always applied (even at the default of 0), "
+            "overwriting any prior toolkit state, to guarantee deterministic "
+            "results across sequential requests on the shared singleton. "
+            "Default 0 (no shift)."
+        ),
+    )
+    top_n: int = Field(
+        default=5,
+        description="Convenience override of options['top_n']. Default 5.",
+    )
 
 
 class BatchMSSearchRequest(BaseModel):
@@ -211,6 +246,16 @@ class RunRequest(BaseModel):
         None,
         description="Detector to use (e.g. 'FID1A'). Auto-detected if omitted.",
     )
+    write_output: bool = Field(
+        default=True,
+        description=(
+            "If True (default), write the integration results JSON file to "
+            "disk alongside the data file. If False, return the peaks in the "
+            "response without writing any file — useful for agents doing many "
+            "sweep iterations per sample that only persist selected runs via "
+            "/api/export. Back-compat default is True for spectro_bridge."
+        ),
+    )
 
 
 class RunResponse(BaseModel):
@@ -283,10 +328,30 @@ class MSBatchSearchRequest(BaseModel):
             "'extraction_method': 'apex', 'range_points': 5, 'range_time': 0.05, "
             "'tic_weight': True, 'subtract_enabled': True, 'subtraction_method': 'min_tic', "
             "'subtract_weight': 0.1, 'intensity_power': 0.6}. "
-            "See ui/frames/ms.py:51-67 for the full default set."
+            "See ui/frames/ms.py:51-67 for the full default set. "
+            "Note: 'mz_shift' is also read here for backward compatibility, but the "
+            "top-level mz_shift field takes precedence if both are set."
         ),
     )
     respect_manual_assignments: bool = True
+    ms_time_offset: float = Field(
+        default=0.0,
+        description=(
+            "Constant shift (minutes) applied to MS retention times "
+            "when extracting spectra. Mirrors the same field on "
+            "/api/spectral-deconvolution. Default 0.0 (no shift)."
+        ),
+    )
+    mz_shift: int = Field(
+        default=0,
+        description=(
+            "Integer m/z shift applied to the toolkit's library spectra "
+            "before searching. Overrides options['mz_shift'] if both set. "
+            "Always applied (even at the default of 0), overwriting any "
+            "prior toolkit state, to guarantee deterministic results across "
+            "sequential requests on the shared singleton. Default 0 (no shift)."
+        ),
+    )
 
 
 class MSBatchSearchResponse(BaseModel):
@@ -298,6 +363,43 @@ class MSBatchSearchResponse(BaseModel):
     errors: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="Per-peak errors as [{'peak_index': int, 'message': str}]",
+    )
+    elapsed_seconds: float
+
+
+class MSSearchHit(BaseModel):
+    """One library match returned by /api/ms/search."""
+    name: str = Field(..., description="Compound name from the library")
+    score: float = Field(..., description="Similarity score (higher = better)")
+    casno: Optional[str] = Field(
+        default=None,
+        description=(
+            "CAS Registry Number, formatted NNNNNN-NN-N. None if the "
+            "compound is not in the loaded library or has no CAS number "
+            "(empty strings from the library are normalized to None for "
+            "a clean contract)."
+        ),
+    )
+
+    @field_validator('casno', mode='before')
+    @classmethod
+    def _normalize_empty_casno(cls, v):
+        """Normalize empty strings from format_casno() to None.
+
+        logic.ms_search_core.format_casno returns "" for empty/non-string
+        input. Mapping that to None here keeps the agent-facing contract
+        simple: callers see either a formatted CAS string or None.
+        """
+        if v == "":
+            return None
+        return v
+
+
+class MSSearchResponse(BaseModel):
+    """Response from POST /api/ms/search."""
+    results: List[MSSearchHit] = Field(
+        ...,
+        description="Top-N matches in descending score order. May be empty.",
     )
     elapsed_seconds: float
 

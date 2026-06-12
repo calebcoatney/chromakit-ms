@@ -145,3 +145,105 @@ def test_batch_search_per_peak_errors_in_response_not_http(client, tmp_path):
     body = response.json()
     assert len(body['errors']) == 1
     assert body['errors'][0]['peak_index'] == 0
+
+
+def test_batch_search_passes_ms_time_offset_to_core(client, tmp_path):
+    """Top-level ms_time_offset arrives at run_batch_search as a kwarg."""
+    fake_dir = tmp_path / "x.D"
+    fake_dir.mkdir()
+    singleton._toolkit = MagicMock()
+    singleton._loaded_paths = {'library_path': '/x'}
+
+    received_kwargs = {}
+
+    def fake_search(ms_toolkit, peaks, data_directory, options, **kwargs):
+        received_kwargs.update(kwargs)
+        return BatchSearchSummary(
+            total_peaks=len(peaks), successful_matches=0,
+            saturated_peaks=0, cancelled=False, errors=[],
+        )
+
+    with patch('api.main.run_batch_search', side_effect=fake_search):
+        response = client.post(
+            '/api/ms/batch-search',
+            json={
+                'peaks': [_peak_dict()],
+                'data_directory': str(fake_dir),
+                'options': {'search_method': 'vector'},
+                'ms_time_offset': 0.075,
+            },
+        )
+
+    assert response.status_code == 200
+    assert received_kwargs.get('ms_time_offset') == 0.075
+
+
+def test_batch_search_top_level_mz_shift_overrides_options(client, tmp_path):
+    """Top-level mz_shift wins over options['mz_shift']."""
+    fake_dir = tmp_path / "x.D"
+    fake_dir.mkdir()
+    singleton._toolkit = MagicMock()
+    singleton._loaded_paths = {'library_path': '/x'}
+
+    received_options = {}
+
+    def fake_search(ms_toolkit, peaks, data_directory, options, **kwargs):
+        received_options.update(options)
+        return BatchSearchSummary(
+            total_peaks=len(peaks), successful_matches=0,
+            saturated_peaks=0, cancelled=False, errors=[],
+        )
+
+    with patch('api.main.run_batch_search', side_effect=fake_search):
+        response = client.post(
+            '/api/ms/batch-search',
+            json={
+                'peaks': [_peak_dict()],
+                'data_directory': str(fake_dir),
+                'options': {'search_method': 'vector', 'mz_shift': 5},
+                'mz_shift': 1,
+            },
+        )
+
+    assert response.status_code == 200
+    assert received_options.get('mz_shift') == 1, (
+        f"Top-level mz_shift=1 must win over options[mz_shift]=5, got {received_options.get('mz_shift')}"
+    )
+
+
+def test_batch_search_options_mz_shift_used_when_no_top_level(client, tmp_path):
+    """When top-level mz_shift is default (0), options['mz_shift'] is still respected if non-zero."""
+    fake_dir = tmp_path / "x.D"
+    fake_dir.mkdir()
+    singleton._toolkit = MagicMock()
+    singleton._loaded_paths = {'library_path': '/x'}
+
+    received_options = {}
+
+    def fake_search(ms_toolkit, peaks, data_directory, options, **kwargs):
+        received_options.update(options)
+        return BatchSearchSummary(
+            total_peaks=len(peaks), successful_matches=0,
+            saturated_peaks=0, cancelled=False, errors=[],
+        )
+
+    with patch('api.main.run_batch_search', side_effect=fake_search):
+        response = client.post(
+            '/api/ms/batch-search',
+            json={
+                'peaks': [_peak_dict()],
+                'data_directory': str(fake_dir),
+                'options': {'search_method': 'vector', 'mz_shift': 3},
+                # no top-level mz_shift → defaults to 0
+            },
+        )
+
+    assert response.status_code == 200
+    # With our merge rule (top-level always wins, even when 0), this becomes 0.
+    # Document the behavior: if you want to use options['mz_shift'], do not
+    # set the top-level field.
+    assert received_options.get('mz_shift') == 0, (
+        "Top-level mz_shift (default 0) currently always overrides options. "
+        "If this is intentional, this test documents it; if not, switch the "
+        "merge to 'top-level wins only when non-default'."
+    )

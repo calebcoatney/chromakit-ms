@@ -36,8 +36,25 @@ def format_casno(casno) -> str:
     return padded[:-3] + '-' + padded[-3:-1] + '-' + padded[-1:]
 
 
-def _do_search(ms_toolkit, query_spectrum, options: dict) -> list:
-    """Dispatch to the correct ms_toolkit search method based on options."""
+def do_single_search(ms_toolkit, query_spectrum, options: dict) -> list:
+    """Dispatch to the correct ms_toolkit search method based on options.
+
+    Public helper used by both run_batch_search (for per-peak searches in
+    the batch loop) and the /api/ms/search endpoint (for one-off searches
+    of a single spectrum).
+
+    Args:
+        ms_toolkit: A loaded MSToolkit instance.
+        query_spectrum: List of (mz, intensity) tuples.
+        options: Search options dict. Reads 'search_method' (vector|w2v|hybrid),
+            'top_n', 'similarity', 'weighting', 'unmatched', 'top_k_clusters',
+            'intensity_power', 'hybrid_method'.
+
+    Returns:
+        List of (name, score) tuples in descending score order, length <= top_n.
+        Note: when compute_probability=True is set on the toolkit, results may
+        be 5-tuples — callers should unpack with `(name, score, *_)`.
+    """
     search_method = options.get('search_method', 'vector')
     if search_method == 'w2v':
         return ms_toolkit.search_w2v(
@@ -67,8 +84,15 @@ def _do_search(ms_toolkit, query_spectrum, options: dict) -> list:
     )
 
 
-def _lookup_casno(ms_toolkit, compound_name: str) -> Optional[str]:
+# Backwards-compatible alias (will be removed after one release cycle).
+_do_search = do_single_search
+
+
+def lookup_casno(ms_toolkit, compound_name: str) -> Optional[str]:
     """Look up a CAS number from the loaded library.
+
+    Public helper used by both run_batch_search (via the in-loop search
+    handler) and the /api/ms/search endpoint.
 
     Returns the formatted CAS string on a hit, or None on miss / when the
     library is unavailable. None semantics match the original
@@ -85,6 +109,10 @@ def _lookup_casno(ms_toolkit, compound_name: str) -> Optional[str]:
     return None
 
 
+# Backwards-compatible alias (will be removed after one release cycle).
+_lookup_casno = lookup_casno
+
+
 def run_batch_search(
     ms_toolkit,
     peaks: list,
@@ -96,6 +124,7 @@ def run_batch_search(
     log_callback: Optional[Callable[[str], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
     extractor: Optional[SpectrumExtractor] = None,
+    ms_time_offset: float = 0.0,
 ) -> BatchSearchSummary:
     """Run MS library search across `peaks`, mutating them in place.
 
@@ -120,6 +149,10 @@ def run_batch_search(
             When None (default), a fresh one is built internally. The GUI
             worker passes its own extractor so tests that patch the
             worker's instance continue to verify real behavior.
+        ms_time_offset: Constant shift (minutes) applied to MS retention
+            times when extracting spectra for each peak. Forwarded to
+            SpectrumExtractor.extract_for_peak(). Default 0.0 (no shift).
+            Mirrors the same parameter on /api/spectral-deconvolution.
 
     Returns:
         BatchSearchSummary with counts and per-peak errors.
@@ -157,9 +190,13 @@ def run_batch_search(
         if getattr(peak, 'deconvolved_spectrum', None) is not None:
             spectrum = peak.deconvolved_spectrum
             if len(spectrum.get('mz', [])) == 0:
-                spectrum = extractor.extract_for_peak(data_directory, peak, options)
+                spectrum = extractor.extract_for_peak(
+                    data_directory, peak, options, ms_time_offset=ms_time_offset
+                )
         else:
-            spectrum = extractor.extract_for_peak(data_directory, peak, options)
+            spectrum = extractor.extract_for_peak(
+                data_directory, peak, options, ms_time_offset=ms_time_offset
+            )
 
         if not spectrum or 'mz' not in spectrum or 'intensities' not in spectrum or len(spectrum['mz']) == 0:
             if progress_callback is not None:
@@ -178,7 +215,7 @@ def run_batch_search(
         # Search
         query_spectrum = list(zip(spectrum['mz'], spectrum['intensities']))
         try:
-            results = _do_search(ms_toolkit, query_spectrum, options)
+            results = do_single_search(ms_toolkit, query_spectrum, options)
         except Exception as e:
             err_msg = f"{type(e).__name__}: {e}"
             summary.errors.append((i, err_msg))
@@ -192,7 +229,7 @@ def run_batch_search(
             peak.compound_id = best_name
             peak.Compound_ID = best_name
             peak.Qual = best_score
-            peak.casno = _lookup_casno(ms_toolkit, best_name)
+            peak.casno = lookup_casno(ms_toolkit, best_name)
             if progress_callback is not None:
                 progress_callback(i, best_name, results)
             summary.successful_matches += 1

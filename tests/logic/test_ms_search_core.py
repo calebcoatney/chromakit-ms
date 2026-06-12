@@ -291,3 +291,104 @@ def test_caller_provided_extractor_is_used():
     )
     injected_extractor.extract_for_peak.assert_called_once()
     assert peak.compound_id == "Hexane"
+
+
+def test_run_batch_search_passes_ms_time_offset_to_extractor():
+    """The ms_time_offset kwarg must reach SpectrumExtractor.extract_for_peak."""
+    ms_toolkit = _make_toolkit()
+    peak = _make_peak()  # no deconvolved spectrum → forces extractor call
+
+    fake_extractor = MagicMock()
+    fake_extractor.extract_for_peak.return_value = {
+        'mz': np.array([50.0, 73.0]),
+        'intensities': np.array([1000.0, 500.0]),
+    }
+
+    run_batch_search(
+        ms_toolkit=ms_toolkit,
+        peaks=[peak],
+        data_directory="/fake/dir.D",
+        options={'search_method': 'vector'},
+        extractor=fake_extractor,
+        ms_time_offset=0.123,
+    )
+
+    # Verify the offset was forwarded as a keyword arg
+    fake_extractor.extract_for_peak.assert_called_once()
+    call_kwargs = fake_extractor.extract_for_peak.call_args.kwargs
+    assert call_kwargs.get('ms_time_offset') == 0.123
+
+
+def test_run_batch_search_default_offset_is_zero():
+    """Existing callers (GUI BatchSearchWorker) that don't pass offset must still work."""
+    ms_toolkit = _make_toolkit()
+    peak = _make_peak()
+    fake_extractor = MagicMock()
+    fake_extractor.extract_for_peak.return_value = {
+        'mz': np.array([50.0]),
+        'intensities': np.array([1000.0]),
+    }
+
+    # Note: no ms_time_offset kwarg passed
+    run_batch_search(
+        ms_toolkit=ms_toolkit,
+        peaks=[peak],
+        data_directory="/fake/dir.D",
+        options={'search_method': 'vector'},
+        extractor=fake_extractor,
+    )
+
+    call_kwargs = fake_extractor.extract_for_peak.call_args.kwargs
+    assert call_kwargs.get('ms_time_offset') == 0.0
+
+
+def test_do_single_search_dispatches_vector():
+    """do_single_search routes to search_vector when search_method='vector'."""
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    query = [(50.0, 1000.0), (73.0, 500.0)]
+    result = do_single_search(ms_toolkit, query, {'search_method': 'vector', 'top_n': 3})
+
+    ms_toolkit.search_vector.assert_called_once()
+    ms_toolkit.search_w2v.assert_not_called()
+    ms_toolkit.search_hybrid.assert_not_called()
+    assert result == [("Hexane", 0.93), ("Pentane", 0.51)]
+
+
+def test_do_single_search_dispatches_w2v():
+    """do_single_search routes to search_w2v when search_method='w2v'."""
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    query = [(50.0, 1000.0)]
+    do_single_search(ms_toolkit, query, {'search_method': 'w2v'})
+
+    ms_toolkit.search_w2v.assert_called_once()
+    ms_toolkit.search_vector.assert_not_called()
+
+
+def test_do_single_search_dispatches_hybrid():
+    """do_single_search routes to search_hybrid when search_method='hybrid'."""
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    query = [(50.0, 1000.0)]
+    do_single_search(ms_toolkit, query, {'search_method': 'hybrid'})
+
+    ms_toolkit.search_hybrid.assert_called_once()
+
+
+def test_do_search_alias_still_works():
+    """The legacy _do_search name remains available for one release cycle."""
+    from logic.ms_search_core import _do_search
+
+    ms_toolkit = _make_toolkit()
+    result = _do_search(ms_toolkit, [(50.0, 1000.0)], {'search_method': 'vector'})
+    assert result == [("Hexane", 0.93), ("Pentane", 0.51)]
+
+
+def test_lookup_casno_alias_still_works():
+    """The legacy _lookup_casno name remains available for one release cycle."""
+    from logic.ms_search_core import _lookup_casno, lookup_casno
+    assert _lookup_casno is lookup_casno
