@@ -283,10 +283,28 @@ class MSBatchSearchRequest(BaseModel):
             "'extraction_method': 'apex', 'range_points': 5, 'range_time': 0.05, "
             "'tic_weight': True, 'subtract_enabled': True, 'subtraction_method': 'min_tic', "
             "'subtract_weight': 0.1, 'intensity_power': 0.6}. "
-            "See ui/frames/ms.py:51-67 for the full default set."
+            "See ui/frames/ms.py:51-67 for the full default set. "
+            "Note: 'mz_shift' is also read here for backward compatibility, but the "
+            "top-level mz_shift field takes precedence if both are set."
         ),
     )
     respect_manual_assignments: bool = True
+    ms_time_offset: float = Field(
+        default=0.0,
+        description=(
+            "Constant shift (minutes) applied to MS retention times "
+            "when extracting spectra. Mirrors the same field on "
+            "/api/spectral-deconvolution. Default 0.0 (no shift)."
+        ),
+    )
+    mz_shift: int = Field(
+        default=0,
+        description=(
+            "Integer m/z shift applied to the toolkit's library spectra "
+            "before searching. Overrides options['mz_shift'] if both set. "
+            "Default 0 (no shift)."
+        ),
+    )
 
 
 class MSBatchSearchResponse(BaseModel):
