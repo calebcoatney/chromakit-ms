@@ -246,6 +246,16 @@ class RunRequest(BaseModel):
         None,
         description="Detector to use (e.g. 'FID1A'). Auto-detected if omitted.",
     )
+    write_output: bool = Field(
+        default=True,
+        description=(
+            "If True (default), write the integration results JSON file to "
+            "disk alongside the data file. If False, return the peaks in the "
+            "response without writing any file — useful for agents doing many "
+            "sweep iterations per sample that only persist selected runs via "
+            "/api/export. Back-compat default is True for spectro_bridge."
+        ),
+    )
 
 
 class RunResponse(BaseModel):

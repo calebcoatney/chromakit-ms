@@ -29,6 +29,10 @@ from logic.spectral_deconv_runner import (
 from logic.spectral_deconvolution import DeconvolutionParams
 from logic.integration import ChromatographicPeak
 from logic.ms_search_core import run_batch_search, BatchSearchSummary
+from logic.json_exporter import (
+    export_integration_results_to_json,
+    _resolve_export_context,
+)
 from logic.quantitation_runner import (
     run_quantitation, lookup_compound_metadata,
     InternalStandardSpec, SampleSpec,
@@ -686,7 +690,6 @@ async def run_pipeline(request: RunRequest):
     plus the output file path.
     """
     from logic.method import ChromaMethod
-    from logic.json_exporter import export_integration_results_to_json, _resolve_export_context
 
     try:
         # 1. Load method
@@ -722,21 +725,24 @@ async def run_pipeline(request: RunRequest):
         )
         peaks = integrated.get("peaks", [])
 
-        # 5. Export JSON (writes alongside data file, same as GUI behavior)
-        export_integration_results_to_json(
-            peaks=peaks,
-            d_path=request.data_path,
-            detector=data_handler.current_detector,
-            processing_params=raw_params,
-            ms_time_offset=float(getattr(data_handler, 'ms_time_offset', 0.0)),
-        )
+        # 5. Export JSON (writes alongside data file, same as GUI behavior).
+        # Skipped when write_output=False so sweep iterations don't spam disk.
+        if request.write_output:
+            export_integration_results_to_json(
+                peaks=peaks,
+                d_path=request.data_path,
+                detector=data_handler.current_detector,
+                processing_params=raw_params,
+                ms_time_offset=float(getattr(data_handler, 'ms_time_offset', 0.0)),
+            )
+            _, output_file = _resolve_export_context(
+                request.data_path, data_handler.current_detector
+            )
+            output_files = [str(output_file)]
+        else:
+            output_files = []
 
-        # 6. Determine output file path
-        _, output_file = _resolve_export_context(
-            request.data_path, data_handler.current_detector
-        )
-
-        # 7. Serialize peaks for response
+        # 6. Serialize peaks for response
         peaks_dicts = []
         for peak in peaks:
             d = peak.as_dict() if hasattr(peak, "as_dict") else peak
@@ -750,7 +756,7 @@ async def run_pipeline(request: RunRequest):
             signal_type=method.signal_type,
             peak_count=len(peaks_dicts),
             peaks=peaks_dicts,
-            output_files=[str(output_file)],
+            output_files=output_files,
         )
 
     except HTTPException:
