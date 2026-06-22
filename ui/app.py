@@ -3587,8 +3587,12 @@ class ChromaKitApp(QMainWindow):
                 # Extract the spectrum at the given retention time
                 spectrum = ms.data[rt_index, :].astype(float)
                 
-                # Create mz array
-                mz_values = np.arange(len(spectrum)) + 1
+                # Get m/z values from the file's m/z axis (parsed by rainbow).
+                # ms.ylabels is the actual axis of m/z bins stored in data.ms — on
+                # instruments that scan a sub-range (e.g. low_mass=20) or store only
+                # above-threshold m/z bins, this axis is sparse and non-contiguous,
+                # so column index + 1 is the WRONG m/z label.
+                mz_values = np.asarray(ms.ylabels)
                 
                
                 
