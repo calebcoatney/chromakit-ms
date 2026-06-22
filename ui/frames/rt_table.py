@@ -18,8 +18,15 @@ GCXGC_COLUMN_HEADERS = [
 
 
 class AddToRTTableDialog(QDialog):
-    """Dialog for adding a peak to the RT table."""
-    
+    """Dialog for adding a peak to the RT table.
+
+    Strict NIST-backed selection: the Save/OK button is disabled until the user
+    picks a compound name from the dropdown of NIST library entries. If the user
+    types an exact case-insensitive match and clicks Save, the name is
+    auto-promoted to the canonical NIST entry. If no NIST library is loaded,
+    the dialog is read-only with an explanatory message.
+    """
+
     def __init__(self, parent=None, peak_data=None, library_compounds=None):
         super().__init__(parent)
         self.peak_data = peak_data
@@ -27,123 +34,160 @@ class AddToRTTableDialog(QDialog):
         self.selected_compound = None
         self.setWindowTitle("Add Peak to RT Table")
         self.setModal(True)
-        self.resize(500, 400)
-        
-        # Create layout
+        self.resize(500, 420)
+
+        # Build layout
         layout = QVBoxLayout(self)
-        
-        # Peak information display
+
+        # Peak info group
         info_group = QGroupBox("Peak Information")
         info_layout = QFormLayout(info_group)
-        
         if peak_data:
             info_layout.addRow("Start RT:", QLabel(f"{peak_data['start_time']:.3f} min"))
             info_layout.addRow("Apex RT:", QLabel(f"{peak_data['retention_time']:.3f} min"))
             info_layout.addRow("End RT:", QLabel(f"{peak_data['end_time']:.3f} min"))
             if 'peak_number' in peak_data:
                 info_layout.addRow("Peak Number:", QLabel(str(peak_data['peak_number'])))
-        
         layout.addWidget(info_group)
-        
-        # Compound name input with autocomplete
+
+        # Compound identification group
         compound_group = QGroupBox("Compound Identification")
         compound_layout = QVBoxLayout(compound_group)
-        
+
+        # Helper text — explains the strict-selection requirement.
+        helper = QLabel(
+            "Type to search the loaded NIST library. You must select a compound\n"
+            "from the dropdown to enable Save."
+        )
+        helper.setStyleSheet("color: #666; font-size: 10px;")
+        compound_layout.addWidget(helper)
+
         # Search input
         input_layout = QFormLayout()
         self.compound_name_edit = QLineEdit()
-        if self.library_compounds:
-            self.compound_name_edit.setPlaceholderText("Enter compound name or start typing to search...")
-        else:
-            self.compound_name_edit.setPlaceholderText("Enter compound name...")
+        self.compound_name_edit.setPlaceholderText("Type 3+ characters to search...")
         input_layout.addRow("Compound Name:", self.compound_name_edit)
         compound_layout.addLayout(input_layout)
-        
-        # Results list for autocomplete (initially hidden)
-        if self.library_compounds:
-            self.results_list = QListWidget()
-            self.results_list.itemClicked.connect(self.on_item_selected)
-            self.results_list.setMaximumHeight(120)
-            self.results_list.hide()  # Initially hidden
-            compound_layout.addWidget(self.results_list)
-            
-            # Set up autocomplete functionality
-            self._setup_autocomplete()
-        
+
+        # Results list
+        self.results_list = QListWidget()
+        self.results_list.itemClicked.connect(self.on_item_selected)
+        self.results_list.setMaximumHeight(150)
+        compound_layout.addWidget(self.results_list)
+
+        # No-library banner (shown only when library is empty)
+        self.no_library_label = QLabel(
+            "⚠ MS library not loaded. Load a library first to add compounds to the RT table."
+        )
+        self.no_library_label.setStyleSheet("color: #CC6600; font-weight: bold;")
+        self.no_library_label.setWordWrap(True)
+        self.no_library_label.setVisible(False)
+        compound_layout.addWidget(self.no_library_label)
+
         layout.addWidget(compound_group)
-        
-        # Buttons
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-        
-        # Set focus to compound name input
+
+        # Standard Ok/Cancel button box
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+        # Wire input change handler
+        self._setup_autocomplete()
+
+        # Initial state
+        if not self.library_compounds:
+            self._set_no_library_mode()
+        else:
+            self.button_box.button(QDialogButtonBox.Ok).setEnabled(False)
+
         self.compound_name_edit.setFocus()
-    
+
+    def _set_no_library_mode(self):
+        """Disable input when no NIST library is available."""
+        self.compound_name_edit.setEnabled(False)
+        self.results_list.setEnabled(False)
+        self.no_library_label.setVisible(True)
+        self.button_box.button(QDialogButtonBox.Ok).setEnabled(False)
+
     def _setup_autocomplete(self):
-        """Set up autocomplete functionality."""
+        """Set up filter-on-type with a debounce timer."""
         from PySide6.QtCore import QTimer
-        
-        # Create a timer for delayed filtering
+
         self.filter_timer = QTimer()
         self.filter_timer.setSingleShot(True)
         self.filter_timer.timeout.connect(self.filter_compounds)
-        
-        # Connect text changes to delayed filtering
+
         self.compound_name_edit.textChanged.connect(self.on_text_changed)
-    
+
     def on_text_changed(self):
-        """Handle text changes with delayed filtering."""
-        if not hasattr(self, 'filter_timer'):
-            return
-            
+        """Restart filter timer on each keystroke; disable Save until reselected."""
+        # Any typing invalidates the current selection — re-disable Save
+        self.selected_compound = None
+        self.button_box.button(QDialogButtonBox.Ok).setEnabled(False)
+
         self.filter_timer.stop()
-        if len(self.compound_name_edit.text()) >= 3:  # Start filtering after 3 characters
-            self.filter_timer.start(300)  # 300ms delay
+        if len(self.compound_name_edit.text()) >= 3:
+            self.filter_timer.start(300)
         else:
-            if hasattr(self, 'results_list'):
-                self.results_list.clear()
-                self.results_list.hide()
-    
-    def filter_compounds(self):
-        """Filter compounds based on search text."""
-        if not self.library_compounds or not hasattr(self, 'results_list'):
-            return
-            
-        text = self.compound_name_edit.text().lower().strip()
-        if len(text) < 3:
             self.results_list.clear()
-            self.results_list.hide()
-            return
-            
-        # Filter compounds that contain the search text
-        matching_compounds = [comp for comp in self.library_compounds 
-                             if text in comp.lower()]
-        
-        # Update results list
+
+    def filter_compounds(self):
+        """Show matching compounds in the results list."""
+        text = self.compound_name_edit.text().lower().strip()
         self.results_list.clear()
-        if matching_compounds:
-            self.results_list.addItems(matching_compounds[:25])  # Limit to 25 matches
-            self.results_list.show()
-            
-            # Auto-select if exact match
-            if text in [comp.lower() for comp in self.library_compounds]:
-                self.selected_compound = next(comp for comp in self.library_compounds if comp.lower() == text)
-        else:
-            self.results_list.hide()
-    
+        if len(text) < 3:
+            return
+
+        matching = [c for c in self.library_compounds if text in c.lower()]
+        self.results_list.addItems(matching[:25])
+
     def on_item_selected(self, item):
-        """Handle selection from the results list."""
-        if hasattr(self, 'results_list'):
-            selected_text = item.text()
-            self.compound_name_edit.setText(selected_text)
-            self.selected_compound = selected_text
-            self.results_list.hide()
-    
+        """Picked an item from the dropdown — enable Save."""
+        self.compound_name_edit.blockSignals(True)
+        self.compound_name_edit.setText(item.text())
+        self.compound_name_edit.blockSignals(False)
+        self.selected_compound = item.text()
+        self.button_box.button(QDialogButtonBox.Ok).setEnabled(True)
+
+    def accept(self):
+        """Override accept to support exact-match auto-promotion.
+
+        If the user typed a name that's an exact case-insensitive match for a
+        library entry but didn't click it, promote to that entry and accept.
+        Otherwise refuse to close (the Save button should already be disabled,
+        but this guards programmatic accept() calls).
+        """
+        if self.selected_compound:
+            super().accept()
+            return
+
+        # Exact case-insensitive match auto-promotion
+        if self.library_compounds:
+            typed = self.compound_name_edit.text().strip().lower()
+            exact = [c for c in self.library_compounds if c.lower() == typed]
+            if len(exact) == 1:
+                # Block signals so setText doesn't re-trigger on_text_changed
+                # and wipe selected_compound back to None.
+                self.compound_name_edit.blockSignals(True)
+                self.compound_name_edit.setText(exact[0])
+                self.compound_name_edit.blockSignals(False)
+                self.selected_compound = exact[0]
+                super().accept()
+                return
+
+        # No selection and no exact match — refuse with a warning
+        QMessageBox.warning(
+            self,
+            "Selection Required",
+            "Please select a compound from the dropdown list. The RT table only\n"
+            "accepts compound names that exist in the loaded NIST library."
+        )
+        # Do NOT call super().accept() — dialog stays open
+
     def get_compound_name(self):
-        """Get the entered compound name."""
-        return self.compound_name_edit.text().strip()
+        """Return the selected compound name (always a NIST library key when set)."""
+        return self.selected_compound or ""
 
 
 class RTTableFrame(QWidget):
