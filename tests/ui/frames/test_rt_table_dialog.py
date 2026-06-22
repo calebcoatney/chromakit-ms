@@ -300,3 +300,135 @@ class TestApplyRTMatchingDedup:
         # p1 was not RT-assigned, so dedup never considers it; p2 stays
         assert p1.compound_id == 'Nonane'
         assert p2.compound_id == 'Nonane'
+
+
+class TestResolveLibraryCompoundsForDialog:
+    """Tests for _resolve_library_compounds_for_dialog — the bug fix that broke
+    'Add to RT Table' when the NIST library was loaded.
+
+    Original bug: add_peak_to_rt_table read parent_app.ms_frame.library_compounds
+    (no such attribute), so the dialog always opened in "MS library not loaded"
+    mode even when the library WAS loaded. Fix uses self._library_compounds
+    first (populated by set_library_compounds() from the main app's library-load
+    hook), with a fallback that reads ms_frame.ms_toolkit.library.keys() directly.
+    """
+
+    def test_returns_self_library_compounds_when_populated(self, qtbot):
+        """When set_library_compounds() has been called, prefer that source."""
+        frame = RTTableFrame()
+        qtbot.addWidget(frame)
+        frame.set_library_compounds(['Decane', 'Nonane', 'Heptane'])
+        result = frame._resolve_library_compounds_for_dialog()
+        assert sorted(result) == ['Decane', 'Heptane', 'Nonane']
+
+    def test_returns_empty_list_when_no_library_and_no_parent(self, qtbot):
+        """No cached library, no parent with ms_toolkit → empty list."""
+        frame = RTTableFrame()
+        qtbot.addWidget(frame)
+        # No set_library_compounds() call, no parent app
+        result = frame._resolve_library_compounds_for_dialog()
+        assert result == []
+
+    def test_returns_copy_not_reference(self, qtbot):
+        """Returned list should be a copy — mutations don't affect the frame's cache."""
+        frame = RTTableFrame()
+        qtbot.addWidget(frame)
+        frame.set_library_compounds(['Decane'])
+        result = frame._resolve_library_compounds_for_dialog()
+        result.append('Mutation')
+        assert 'Mutation' not in frame._library_compounds
+
+    def test_fallback_reads_ms_toolkit_library_when_self_empty(self, qtbot):
+        """When self._library_compounds is empty but parent has a loaded library,
+        the fallback path reads ms_frame.ms_toolkit.library.keys()."""
+        from PySide6.QtWidgets import QWidget
+
+        # Build a fake parent with the canonical ms_frame.ms_toolkit.library shape
+        class FakeToolkit:
+            library = {"Hexane": object(), "Nonane": object(), "Decane": object()}
+
+        class FakeMSFrame:
+            ms_toolkit = FakeToolkit()
+
+        class FakeApp(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.ms_frame = FakeMSFrame()
+
+        app = FakeApp()
+        qtbot.addWidget(app)
+        frame = RTTableFrame(parent=app)
+        qtbot.addWidget(frame)
+
+        # Confirm self has no library yet
+        assert frame._library_compounds == []
+
+        result = frame._resolve_library_compounds_for_dialog()
+        assert sorted(result) == ['Decane', 'Hexane', 'Nonane']
+
+    def test_fallback_caches_resolved_library_into_self(self, qtbot):
+        """The fallback path should populate self._library_compounds for future calls."""
+        from PySide6.QtWidgets import QWidget
+
+        class FakeToolkit:
+            library = {"Toluene": object()}
+
+        class FakeMSFrame:
+            ms_toolkit = FakeToolkit()
+
+        class FakeApp(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.ms_frame = FakeMSFrame()
+
+        app = FakeApp()
+        qtbot.addWidget(app)
+        frame = RTTableFrame(parent=app)
+        qtbot.addWidget(frame)
+
+        assert frame._library_compounds == []
+        frame._resolve_library_compounds_for_dialog()
+        assert frame._library_compounds == ['Toluene']
+
+    def test_fallback_handles_empty_library_dict(self, qtbot):
+        """If parent has an ms_toolkit but library is empty/None, return empty."""
+        from PySide6.QtWidgets import QWidget
+
+        class FakeToolkit:
+            library = {}
+
+        class FakeMSFrame:
+            ms_toolkit = FakeToolkit()
+
+        class FakeApp(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.ms_frame = FakeMSFrame()
+
+        app = FakeApp()
+        qtbot.addWidget(app)
+        frame = RTTableFrame(parent=app)
+        qtbot.addWidget(frame)
+
+        result = frame._resolve_library_compounds_for_dialog()
+        assert result == []
+
+    def test_fallback_handles_missing_ms_toolkit(self, qtbot):
+        """If parent.ms_frame exists but has no ms_toolkit attr, return empty (no crash)."""
+        from PySide6.QtWidgets import QWidget
+
+        class FakeMSFrame:
+            pass  # no ms_toolkit attribute
+
+        class FakeApp(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.ms_frame = FakeMSFrame()
+
+        app = FakeApp()
+        qtbot.addWidget(app)
+        frame = RTTableFrame(parent=app)
+        qtbot.addWidget(frame)
+
+        result = frame._resolve_library_compounds_for_dialog()
+        assert result == []

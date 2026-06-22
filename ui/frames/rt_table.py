@@ -1170,26 +1170,45 @@ class RTTableFrame(QWidget):
         
         return None
     
+    def _resolve_library_compounds_for_dialog(self):
+        """Return the list of NIST library compound names for the Add-to-RT-Table dialog.
+
+        Primary source: self._library_compounds, populated by set_library_compounds()
+        whenever the main app detects a NIST library (re)load.
+
+        Fallback: walk up to the parent ChromaKitApp and read
+        ms_frame.ms_toolkit.library.keys() directly. Used when set_library_compounds()
+        hasn't been called yet (e.g. library was loaded just before the user
+        right-clicked a peak, before the wiring signal fired).
+
+        Returns an empty list when no library is available. The dialog uses an
+        empty list as the trigger for its "MS library not loaded" no-library mode.
+        """
+        if self._library_compounds:
+            return list(self._library_compounds)
+        try:
+            parent_app = self.parent()
+            while parent_app and not hasattr(parent_app, 'ms_frame'):
+                parent_app = parent_app.parent()
+            if parent_app and hasattr(parent_app, 'ms_frame'):
+                tk = getattr(parent_app.ms_frame, 'ms_toolkit', None)
+                if tk and hasattr(tk, 'library') and tk.library:
+                    keys = list(tk.library.keys())
+                    # Cache for future calls + trigger any pending revalidation
+                    self.set_library_compounds(keys)
+                    return keys
+        except Exception:
+            pass
+        return []
+
     def add_peak_to_rt_table(self, peak_data):
         """Add a peak to the RT table with user input for compound name."""
         if self.rt_table_data is None:
             # Create new RT table if none exists
             self.rt_table_data = pd.DataFrame(columns=['Compound', 'Start', 'Apex', 'End'])
-        
-        # Get library compounds for autocomplete if available
-        library_compounds = []
-        try:
-            # Try to get library compounds from parent app
-            parent_app = self.parent()
-            while parent_app and not hasattr(parent_app, 'ms_frame'):
-                parent_app = parent_app.parent()
-            
-            if parent_app and hasattr(parent_app, 'ms_frame') and hasattr(parent_app.ms_frame, 'library_compounds'):
-                library_compounds = parent_app.ms_frame.library_compounds
-        except Exception:
-            # If we can't get compounds, just continue without autocomplete
-            pass
-        
+
+        library_compounds = self._resolve_library_compounds_for_dialog()
+
         # Show dialog to get compound name
         dialog = AddToRTTableDialog(self, peak_data, library_compounds)
         if dialog.exec() == QDialog.Accepted:
