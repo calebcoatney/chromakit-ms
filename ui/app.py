@@ -1841,7 +1841,7 @@ class ChromaKitApp(QMainWindow):
                         spectrum,
                         top_n=1,
                         intensity_power=options.get('intensity_power', 0.6),
-                        top_k_clusters=options.get('top_k_clusters', 1),
+                        top_k_clusters=options.get('top_k_clusters', 10),
                     )
                 elif method == 'hybrid':
                     results = toolkit.search_hybrid(
@@ -1852,7 +1852,7 @@ class ChromaKitApp(QMainWindow):
                         weighting_scheme=options.get('weighting', 'NIST_GC'),
                         composite=(options.get('similarity') == 'composite'),
                         unmatched_method=options.get('unmatched', 'keep_all'),
-                        top_k_clusters=options.get('top_k_clusters', 1),
+                        top_k_clusters=options.get('top_k_clusters', 10),
                     )
                 else:  # 'vector' (default)
                     results = toolkit.search_vector(
@@ -1861,7 +1861,7 @@ class ChromaKitApp(QMainWindow):
                         composite=(options.get('similarity') == 'composite'),
                         weighting_scheme=options.get('weighting', 'NIST_GC'),
                         unmatched_method=options.get('unmatched', 'keep_all'),
-                        top_k_clusters=options.get('top_k_clusters', 1),
+                        top_k_clusters=options.get('top_k_clusters', 10),
                     )
                 if results:
                     peak.compound_name = results[0][0]
@@ -3547,7 +3547,7 @@ class ChromaKitApp(QMainWindow):
                     query,
                     top_n=options.get('top_n', 5),
                     intensity_power=options.get('intensity_power', 0.6),
-                    top_k_clusters=options.get('top_k_clusters', 1),
+                    top_k_clusters=options.get('top_k_clusters', 10),
                 )
             elif options.get('search_method') == 'hybrid':
                 results = toolkit.search_hybrid(
@@ -3558,7 +3558,7 @@ class ChromaKitApp(QMainWindow):
                     weighting_scheme=options.get('weighting', 'NIST_GC'),
                     composite=(options.get('similarity') == 'composite'),
                     unmatched_method=options.get('unmatched', 'keep_all'),
-                    top_k_clusters=options.get('top_k_clusters', 1),
+                    top_k_clusters=options.get('top_k_clusters', 10),
                 )
             else:
                 results = toolkit.search_vector(
@@ -3567,7 +3567,7 @@ class ChromaKitApp(QMainWindow):
                     composite=(options.get('similarity') == 'composite'),
                     weighting_scheme=options.get('weighting', 'NIST_GC'),
                     unmatched_method=options.get('unmatched', 'keep_all'),
-                    top_k_clusters=options.get('top_k_clusters', 1),
+                    top_k_clusters=options.get('top_k_clusters', 10),
                 )
         except Exception as e:
             if self._deconv_inspector:
