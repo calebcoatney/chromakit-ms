@@ -3395,8 +3395,14 @@ class ChromaKitApp(QMainWindow):
         if self._deconv_inspector:
             self._deconv_inspector.show_search_results(results, rt)
 
-    def _perform_quantitation(self):
-        """Perform quantitation using Polyarc + IS method (delegates to runner)."""
+    def _perform_quantitation(self, silent: bool = False):
+        """Perform quantitation using Polyarc + IS method (delegates to runner).
+
+        Args:
+            silent: When True, warnings (IS-not-found, zero-quantitated) are
+                routed to the quantitation status panel instead of modal dialogs.
+                Used by the auto-trigger after integration.
+        """
         from logic.quantitation_runner import (
             InternalStandardSpec, SampleSpec, run_quantitation, lookup_compound_metadata,
         )
@@ -3447,19 +3453,34 @@ class ChromaKitApp(QMainWindow):
             compound_lookup=compound_lookup,
         )
 
-        # Surface IS-not-found as a QMessageBox to match existing UX
+        # Surface IS-not-found — modal when loud, panel-only when silent
         if summary.internal_standard_peak_index < 0:
-            QMessageBox.warning(self, "Quantitation Error",
-                                f"Internal standard '{is_compound}' not found in detected peaks.\n\n"
-                                "Make sure the IS was detected and identified by MS search.")
+            if not silent:
+                QMessageBox.warning(self, "Quantitation Error",
+                                    f"Internal standard '{is_compound}' not found in detected peaks.\n\n"
+                                    "Make sure the IS was detected and identified by MS search.")
+            else:
+                # Aborted-run rendering: show banner in status panel since modal is silenced
+                self.quantitation_frame.status_summary_label.setText(
+                    f"<b>⚠ Run aborted:</b><br>"
+                    f"Internal standard <b>'{is_compound}'</b> not found in detected peaks.<br>"
+                    f"Make sure the IS was detected and identified."
+                )
+                self.quantitation_frame.skipped_list.setVisible(False)
+                self.quantitation_frame.stale_label.setVisible(False)
             return
 
-        # Surface zero-quantitated as a QMessageBox
+        # Surface zero-quantitated — modal when loud, panel-only when silent
         if summary.peaks_quantitated == 0:
-            QMessageBox.warning(self, "Quantitation Warning",
-                                "No peaks could be quantitated.\n\n"
-                                "This may be because formula/MW information is not available "
-                                "in the MS library.")
+            if not silent:
+                QMessageBox.warning(self, "Quantitation Warning",
+                                    "No peaks could be quantitated.\n\n"
+                                    "This may be because formula/MW information is not available "
+                                    "in the MS library.")
+            else:
+                # Aborted-run rendering for silent path: render structured counts
+                # so the user sees what happened (e.g. assigned but no metadata)
+                self.quantitation_frame.update_status(summary)
             return
 
         # Display RF + carbon balance in the GUI
@@ -3468,6 +3489,9 @@ class ChromaKitApp(QMainWindow):
 
         if summary.carbon_balance_percent is not None:
             self.quantitation_frame.set_carbon_balance(summary.carbon_balance_percent)
+
+        # Update structured status panel (2026-06-22 spec)
+        self.quantitation_frame.update_status(summary)
 
         # Console log (matches old print() statements for backward compatibility)
         print(f"\n=== Quantitation ===")
@@ -3574,14 +3598,24 @@ class ChromaKitApp(QMainWindow):
     def on_peaks_integrated(self, peaks):
         """Handle when peaks are integrated."""
         self.integrated_peaks = peaks
-        
+
+        # Clear stale quantitation status — we're about to re-quantitate (or not)
+        self.quantitation_frame.clear_status()
+
         # Update batch search button state based on peaks and library
-        has_library = (hasattr(self.ms_frame, 'library_loaded') and 
-                      
-                      self.ms_frame.library_loaded)
-        
+        has_library = (hasattr(self.ms_frame, 'library_loaded') and
+                       self.ms_frame.library_loaded)
+
         self.button_frame.batch_search_button.setEnabled(bool(peaks) and has_library)
         self.button_frame.deconvolve_ms_button.setEnabled(bool(peaks))
+
+        # Auto-quantitate if RT matching + quantitation are both enabled.
+        # This covers the RT-table-driven workflow where the user doesn't run
+        # MS search at all (2026-06-22 RT-table workflow spec, Section 2).
+        if (self.quantitation_frame.is_enabled() and
+                self.rt_table_frame.is_enabled() and
+                peaks):
+            self._perform_quantitation(silent=True)
 
         # Update other UI elements as needed
         self.update_results_view()
