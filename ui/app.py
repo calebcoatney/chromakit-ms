@@ -898,6 +898,12 @@ class ChromaKitApp(QMainWindow):
         if hasattr(self, 'quantitation_frame') and hasattr(self.ms_frame, 'ms_toolkit'):
             self.quantitation_frame.ms_toolkit = self.ms_frame.ms_toolkit
             print("MS toolkit reference set in quantitation frame")
+        
+        # Push library names to RT table for load-time validation (2026-06-22 spec)
+        if hasattr(self, 'rt_table_frame') and hasattr(self.ms_frame, 'ms_toolkit'):
+            tk = self.ms_frame.ms_toolkit
+            if tk and hasattr(tk, 'library') and tk.library:
+                self.rt_table_frame.set_library_compounds(list(tk.library.keys()))
     
     def on_edit_assignment_requested(self, peak_index):
         """Handle request to edit peak compound assignment."""

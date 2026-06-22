@@ -204,6 +204,11 @@ class RTTableFrame(QWidget):
         self.rt_table_data = None
         self.rt_table_file = None
         
+        # NIST library compound list for load-time validation (set by main app)
+        self._library_compounds = []
+        # Cache of compound names that don't match the loaded NIST library
+        self._library_mismatches = set()
+        
         # Change tracking
         self.is_modified = False
         self.original_data = None  # Store original data for comparison
@@ -218,6 +223,17 @@ class RTTableFrame(QWidget):
         
         # Add stretch at the end
         self.layout.addStretch()
+    
+    def set_library_compounds(self, library_compounds):
+        """Set the NIST library compound list for load-time validation.
+
+        Called by the main app whenever the MS library is (re)loaded.
+        Triggers revalidation of the currently loaded RT table if any.
+        """
+        self._library_compounds = list(library_compounds or [])
+        if self.rt_table_data is not None:
+            self._mark_library_mismatches()
+            self._populate_table()
     
     def _init_file_controls(self):
         """Initialize file loading controls."""
@@ -523,6 +539,23 @@ class RTTableFrame(QWidget):
             self.original_data = df.copy()
             self.is_modified = False
             
+            # Validate compound names against NIST library (if loaded)
+            self._mark_library_mismatches()
+            if self._library_mismatches:
+                mismatch_list = sorted(self._library_mismatches)
+                preview = "\n".join(f"  • {n}" for n in mismatch_list[:10])
+                more = (f"\n  ... and {len(mismatch_list) - 10} more"
+                        if len(mismatch_list) > 10 else "")
+                QMessageBox.warning(
+                    self,
+                    "RT Table Compounds Not in NIST Library",
+                    f"{len(mismatch_list)} compound(s) in this RT table do not match\n"
+                    f"the loaded NIST library and will be skipped during quantitation:\n\n"
+                    f"{preview}{more}\n\n"
+                    f"Edit the RT table or re-add these compounds via the (NIST-backed)\n"
+                    f"Add to RT Table dialog."
+                )
+            
             # Update UI
             self._populate_table()
             self._update_file_info()
@@ -683,6 +716,20 @@ class RTTableFrame(QWidget):
             self.is_modified = True
         
         return df
+
+    def _mark_library_mismatches(self):
+        """Identify RT table compounds that don't match the loaded NIST library.
+
+        Populates self._library_mismatches. Caller is responsible for refreshing
+        the table widget (call _populate_table after).
+        """
+        self._library_mismatches = set()
+        if not self._library_compounds or self.rt_table_data is None:
+            return
+        library_set = set(self._library_compounds)
+        for compound in self.rt_table_data['Compound']:
+            if compound not in library_set:
+                self._library_mismatches.add(compound)
 
     def _clear_rt_table(self):
         """Clear the loaded RT table."""
@@ -855,6 +902,15 @@ class RTTableFrame(QWidget):
                         abs(original_row['End'] - row['End']) > 0.001):
                         is_new_row = True
             
+            # Check if this compound is missing from the NIST library
+            is_library_mismatch = (
+                bool(self._library_compounds) and
+                row['Compound'] not in self._library_compounds
+            )
+
+            # Styling decision: orange if new OR mismatched, normal otherwise
+            should_highlight = is_new_row or is_library_mismatch
+
             # Create styling for modified items
             from PySide6.QtGui import QBrush, QColor, QFont
             modified_brush = QBrush(QColor("#CC6600"))  # Orange color
@@ -867,9 +923,14 @@ class RTTableFrame(QWidget):
             
             # Compound name
             compound_item = QTableWidgetItem(str(row['Compound']))
-            if is_new_row:
+            if should_highlight:
                 compound_item.setForeground(modified_brush)
                 compound_item.setFont(modified_font)
+                if is_library_mismatch:
+                    compound_item.setToolTip(
+                        f"'{row['Compound']}' is not in the loaded NIST library.\n"
+                        f"This compound will not be quantitated."
+                    )
             else:
                 compound_item.setForeground(normal_brush)
                 compound_item.setFont(normal_font)
@@ -878,7 +939,7 @@ class RTTableFrame(QWidget):
             # Start RT
             start_item = QTableWidgetItem(f"{row['Start']:.3f}")
             start_item.setTextAlignment(Qt.AlignCenter)
-            if is_new_row:
+            if should_highlight:
                 start_item.setForeground(modified_brush)
                 start_item.setFont(modified_font)
             else:
@@ -889,7 +950,7 @@ class RTTableFrame(QWidget):
             # Apex RT
             apex_item = QTableWidgetItem(f"{row['Apex']:.3f}")
             apex_item.setTextAlignment(Qt.AlignCenter)
-            if is_new_row:
+            if should_highlight:
                 apex_item.setForeground(modified_brush)
                 apex_item.setFont(modified_font)
             else:
@@ -900,7 +961,7 @@ class RTTableFrame(QWidget):
             # End RT
             end_item = QTableWidgetItem(f"{row['End']:.3f}")
             end_item.setTextAlignment(Qt.AlignCenter)
-            if is_new_row:
+            if should_highlight:
                 end_item.setForeground(modified_brush)
                 end_item.setFont(modified_font)
             else:
