@@ -358,6 +358,20 @@ class RTTableFrame(QWidget):
         )
         self.high_priority_checkbox.toggled.connect(self._on_settings_changed)
         settings_layout.addRow(self.high_priority_checkbox)
+
+        # Duplicate-match policy (2026-06-22 spec follow-up)
+        self.allow_duplicates_checkbox = QCheckBox(
+            "Allow duplicate matches (multiple peaks → same compound)"
+        )
+        self.allow_duplicates_checkbox.setChecked(True)  # permissive default
+        self.allow_duplicates_checkbox.setToolTip(
+            "When ON, multiple peaks can match the same RT-table compound\n"
+            "(useful for isomers, shoulders, or overlapping windows).\n\n"
+            "When OFF, only the peak closest to the table apex keeps the\n"
+            "compound name; other matches revert to 'Unknown'."
+        )
+        self.allow_duplicates_checkbox.toggled.connect(self._on_settings_changed)
+        settings_layout.addRow(self.allow_duplicates_checkbox)
         
         # RT Matching Mode Selection
         self.matching_mode_combo = QComboBox()
@@ -454,6 +468,7 @@ class RTTableFrame(QWidget):
         """Enable or disable the settings controls."""
         self.enable_checkbox.setEnabled(enabled)
         self.high_priority_checkbox.setEnabled(enabled and self.enable_checkbox.isChecked())
+        self.allow_duplicates_checkbox.setEnabled(enabled and self.enable_checkbox.isChecked())
         self.matching_mode_combo.setEnabled(enabled and self.enable_checkbox.isChecked())
         self.tolerance_spin.setEnabled(enabled and self.enable_checkbox.isChecked())
         self.weight_group.setEnabled(enabled and self.enable_checkbox.isChecked())
@@ -998,6 +1013,7 @@ class RTTableFrame(QWidget):
         
         # Update dependent controls
         self.high_priority_checkbox.setEnabled(enabled)
+        self.allow_duplicates_checkbox.setEnabled(enabled)
         self.matching_mode_combo.setEnabled(enabled)
         self.tolerance_spin.setEnabled(enabled)
         self.weight_group.setEnabled(enabled)
@@ -1019,6 +1035,7 @@ class RTTableFrame(QWidget):
         settings = {
             'enabled': enabled,
             'high_priority': self.high_priority_checkbox.isChecked(),
+            'allow_duplicates': self.allow_duplicates_checkbox.isChecked(),
             'matching_mode': self.matching_mode_combo.currentIndex(),
             'tolerance': self.tolerance_spin.value(),
             'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),
@@ -1266,6 +1283,7 @@ class RTTableFrame(QWidget):
         return {
             'enabled': self.is_enabled(),
             'high_priority': self.high_priority_checkbox.isChecked(),
+            'allow_duplicates': self.allow_duplicates_checkbox.isChecked(),
             'matching_mode': self.matching_mode_combo.currentIndex(),
             'tolerance': self.tolerance_spin.value(),
             'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),

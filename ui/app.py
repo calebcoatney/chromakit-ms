@@ -1996,6 +1996,51 @@ class ChromaKitApp(QMainWindow):
                     # Mark that RT matching was available but not used
                     peak.rt_match_available = rt_compound
 
+        # Optional dedup: if "Allow duplicate matches" is OFF, keep only the
+        # peak closest to the table apex for any compound matched by 2+ peaks.
+        # Losers revert to 'Unknown (RT)'. This guarantees 1:1 mapping between
+        # RT-table entries and assigned peaks per sample. (2026-06-22 spec
+        # follow-up — addresses RT-window leakage when matching mode tolerates
+        # peaks slightly outside the table window.)
+        #
+        # NOTE: this block is mirrored in tests/ui/frames/test_rt_table_dialog.py
+        # (TestApplyRTMatchingDedup._run_dedup). Keep the two in sync.
+        if not rt_table_frame.allow_duplicates_checkbox.isChecked():
+            by_compound = {}  # compound_id -> list of (peak, distance_to_apex)
+            for peak in peaks:
+                if not getattr(peak, 'rt_assignment', False):
+                    continue
+                cid = getattr(peak, 'compound_id', None)
+                if not cid:
+                    continue
+                window = rt_table_frame.get_rt_window(cid)
+                if not window:
+                    continue
+                # window is (start, apex, end)
+                dist = abs(peak.retention_time - window[1])
+                by_compound.setdefault(cid, []).append((peak, dist))
+
+            for cid, candidates in by_compound.items():
+                if len(candidates) <= 1:
+                    continue
+                # Sort by distance-to-apex ascending; keep the first
+                candidates.sort(key=lambda x: x[1])
+                kept_peak, kept_dist = candidates[0]
+                for peak, dist in candidates[1:]:
+                    placeholder = f"Unknown ({peak.retention_time:.3f})"
+                    peak.compound_id = placeholder
+                    if hasattr(peak, 'Compound_ID'):
+                        peak.Compound_ID = placeholder
+                    peak.rt_assignment = False
+                    peak.rt_assignment_source = None
+                    peak.Qual = None
+                    print(
+                        f"RT dedup: Peak {peak.peak_number} at {peak.retention_time:.3f} "
+                        f"reverted to '{placeholder}' (further from '{cid}' apex than "
+                        f"Peak {kept_peak.peak_number} at {kept_peak.retention_time:.3f}, "
+                        f"d={dist:.3f} vs {kept_dist:.3f})"
+                    )
+
     def _show_integration_results(self, integration_results):
         """Show integration results in a dialog."""
         # Create dialog
