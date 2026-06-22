@@ -577,6 +577,14 @@ class ChromaKitApp(QMainWindow):
                 delattr(self, 'integrated_peaks')
             if hasattr(self, 'integration_results'):
                 delattr(self, 'integration_results')
+
+            # Clear stale quantitation status when a new file is loaded
+            # (spec §3e — without this, the panel keeps showing the prior file's
+            # RF / counts even though peaks have been cleared).
+            if hasattr(self, 'quantitation_frame'):
+                self.quantitation_frame.clear_status()
+                self.quantitation_frame.set_response_factor(None)
+                self.quantitation_frame.set_carbon_balance(None)
             
             # Disable batch search button until new peaks are integrated
             self.button_frame.batch_search_button.setEnabled(False)
@@ -3453,36 +3461,43 @@ class ChromaKitApp(QMainWindow):
             compound_lookup=compound_lookup,
         )
 
-        # Surface IS-not-found — modal when loud, panel-only when silent
+        # Surface IS-not-found — modal popup when loud (transient notification),
+        # plus a persistent banner in the status panel (both paths).
+        # The banner ensures the panel doesn't keep showing stale RF/counts
+        # from a previous successful run.
         if summary.internal_standard_peak_index < 0:
             if not silent:
                 QMessageBox.warning(self, "Quantitation Error",
                                     f"Internal standard '{is_compound}' not found in detected peaks.\n\n"
                                     "Make sure the IS was detected and identified by MS search.")
-            else:
-                # Aborted-run rendering: show banner in status panel since modal is silenced.
-                # Escape is_compound — it's user-controlled text rendered into rich-text HTML.
-                from html import escape as _html_escape
-                self.quantitation_frame.status_summary_label.setText(
-                    f"<b>⚠ Run aborted:</b><br>"
-                    f"Internal standard <b>'{_html_escape(is_compound)}'</b> not found in detected peaks.<br>"
-                    f"Make sure the IS was detected and identified."
-                )
-                self.quantitation_frame.skipped_list.setVisible(False)
-                self.quantitation_frame.stale_label.setVisible(False)
+            # Aborted-run banner (both paths). Escape is_compound — user-controlled text
+            # rendered into rich-text HTML.
+            from html import escape as _html_escape
+            self.quantitation_frame.status_summary_label.setText(
+                f"<b>⚠ Run aborted:</b><br>"
+                f"Internal standard <b>'{_html_escape(is_compound)}'</b> not found in detected peaks.<br>"
+                f"Make sure the IS was detected and identified."
+            )
+            self.quantitation_frame.skipped_list.setVisible(False)
+            self.quantitation_frame.stale_label.setVisible(False)
+            # Clear stale numerals from any prior successful run
+            self.quantitation_frame.set_response_factor(None)
+            self.quantitation_frame.set_carbon_balance(None)
             return
 
-        # Surface zero-quantitated — modal when loud, panel-only when silent
+        # Surface zero-quantitated — modal popup when loud (transient), plus
+        # update_status in both paths (structured counts ARE informative here:
+        # the loop ran, peaks_skipped_no_metadata is populated).
         if summary.peaks_quantitated == 0:
             if not silent:
                 QMessageBox.warning(self, "Quantitation Warning",
                                     "No peaks could be quantitated.\n\n"
                                     "This may be because formula/MW information is not available "
                                     "in the MS library.")
-            else:
-                # Aborted-run rendering for silent path: render structured counts
-                # so the user sees what happened (e.g. assigned but no metadata)
-                self.quantitation_frame.update_status(summary)
+            self.quantitation_frame.update_status(summary)
+            # Clear stale RF/CB from any prior successful run
+            self.quantitation_frame.set_response_factor(None)
+            self.quantitation_frame.set_carbon_balance(None)
             return
 
         # Display RF + carbon balance in the GUI
