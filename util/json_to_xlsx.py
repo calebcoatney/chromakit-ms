@@ -223,7 +223,10 @@ class ProcessingThread(QThread):
             self.progress_update.emit("Starting processing...")
             success = self.process_json_to_excel(self.directory, self.output_file)
             if success:
-                self.finished.emit(True, f"Successfully created Excel file: {self.output_file}")
+                msg = f"Successfully created Excel file: {self.output_file}"
+                if self._skipped_count > 0:
+                    msg += f"\nSkipped {self._skipped_count} peaks based on filter settings."
+                self.finished.emit(True, msg)
             else:
                 self.finished.emit(False, "Processing completed but no JSON files were found.")
         except Exception as e:
@@ -663,7 +666,41 @@ class JsonToExcelConverter(QDialog):
         output_layout.addLayout(output_button_layout)
         
         layout.addWidget(output_group)
-        
+
+        # Filter peaks group (2026-06-22 RT-table workflow spec, Section 4)
+        filter_group = QGroupBox("Filter peaks")
+        filter_layout = QVBoxLayout(filter_group)
+
+        # Read persisted defaults from QSettings
+        skip_unident_default = self.settings.value(
+            "export/xlsx_skip_unidentified", True, type=bool
+        )
+        skip_unquant_default = self.settings.value(
+            "export/xlsx_skip_unquantitated", False, type=bool
+        )
+
+        self.skip_unidentified_cb = QCheckBox(
+            "Skip unidentified peaks (no compound assigned)"
+        )
+        self.skip_unidentified_cb.setChecked(skip_unident_default)
+        self.skip_unidentified_cb.setToolTip(
+            "Peaks with no compound_id, 'Unknown', or 'Unknown (RT)' placeholders\n"
+            "are excluded from the xlsx output. JSON files are not modified."
+        )
+        filter_layout.addWidget(self.skip_unidentified_cb)
+
+        self.skip_unquantitated_cb = QCheckBox(
+            "Also skip peaks missing quantitation results"
+        )
+        self.skip_unquantitated_cb.setChecked(skip_unquant_default)
+        self.skip_unquantitated_cb.setToolTip(
+            "When quantitation was run on a file, peaks without wt_percent (e.g. compound\n"
+            "name unknown to NIST library) are excluded. No-op for files that were never quantitated."
+        )
+        filter_layout.addWidget(self.skip_unquantitated_cb)
+
+        layout.addWidget(filter_group)
+
         # Process button
         self.process_btn = QPushButton("Convert to Excel")
         self.process_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }")
@@ -792,8 +829,21 @@ class JsonToExcelConverter(QDialog):
         self.processing_thread = ProcessingThread(
             self.input_directory,
             self.output_file,
-            self.get_current_format_config()
+            self.get_current_format_config(),
+            skip_unidentified=self.skip_unidentified_cb.isChecked(),
+            skip_unquantitated=self.skip_unquantitated_cb.isChecked(),
         )
+
+        # Persist filter selections
+        self.settings.setValue(
+            "export/xlsx_skip_unidentified",
+            self.skip_unidentified_cb.isChecked()
+        )
+        self.settings.setValue(
+            "export/xlsx_skip_unquantitated",
+            self.skip_unquantitated_cb.isChecked()
+        )
+
         self.processing_thread.progress_update.connect(self.update_progress)
         self.processing_thread.finished.connect(self.processing_finished)
         self.processing_thread.start()
