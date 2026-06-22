@@ -3460,10 +3460,12 @@ class ChromaKitApp(QMainWindow):
                                     f"Internal standard '{is_compound}' not found in detected peaks.\n\n"
                                     "Make sure the IS was detected and identified by MS search.")
             else:
-                # Aborted-run rendering: show banner in status panel since modal is silenced
+                # Aborted-run rendering: show banner in status panel since modal is silenced.
+                # Escape is_compound — it's user-controlled text rendered into rich-text HTML.
+                from html import escape as _html_escape
                 self.quantitation_frame.status_summary_label.setText(
                     f"<b>⚠ Run aborted:</b><br>"
-                    f"Internal standard <b>'{is_compound}'</b> not found in detected peaks.<br>"
+                    f"Internal standard <b>'{_html_escape(is_compound)}'</b> not found in detected peaks.<br>"
                     f"Make sure the IS was detected and identified."
                 )
                 self.quantitation_frame.skipped_list.setVisible(False)
