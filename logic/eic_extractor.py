@@ -35,11 +35,14 @@ def extract_eic_peaks(
 
     Returns:
         List of EICPeak objects. rt_array and intensity_array span the full
-        window so ADAP-GC has full chromatographic context. m/z values are
-        1-based integers stored as float (column j -> mz = float(j+1)).
+        window so ADAP-GC has full chromatographic context. m/z values come
+        from ``ms.ylabels`` (the m/z axis parsed by rainbow); on instruments
+        that scan a sub-range or store only above-threshold m/z bins, this
+        axis is sparse / non-contiguous and column index + 1 would be wrong.
     """
     xlabels = shifted_xlabels(ms, ms_time_offset)
     data = np.asarray(ms.data, dtype=float)
+    ylabels = np.asarray(ms.ylabels, dtype=float)
 
     # Slice to window
     mask = (xlabels >= t_start) & (xlabels <= t_end)
@@ -76,7 +79,7 @@ def extract_eic_peaks(
         except Exception:
             continue
 
-        mz = float(j + 1)
+        mz = float(ylabels[j])
 
         for k, apex_idx in enumerate(apex_indices):
             left_idx = int(np.floor(left_ips[k]))
