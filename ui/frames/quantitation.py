@@ -111,6 +111,20 @@ class QuantitationFrame(QWidget):
         # Sample density (optional)
         self.density_sample_edit = QLineEdit()
         self.density_sample_edit.setPlaceholderText("Optional")
+        self.density_sample_edit.setToolTip(
+            "Bulk density of the injected sample, in g/mL.\n"
+            "\n"
+            "Required only to compute carbon balance "
+            "(carbon balance = sum of quantitated analyte masses / sample mass injected).\n"
+            "\n"
+            "Per-compound densities are NOT needed — individual analyte masses are\n"
+            "derived from molecular weight + carbon count (the Polyarc method gives\n"
+            "you mass per peak directly from the FID response and the IS calibration).\n"
+            "\n"
+            "If you leave this blank, mol_C / mol / mass / mol% / wt% are still\n"
+            "computed per peak; only the recovery percentage (carbon balance) is\n"
+            "skipped."
+        )
         sample_layout.addRow("Sample Density (g/mL):", self.density_sample_edit)
         
         # Calculated sample mass (read-only)
