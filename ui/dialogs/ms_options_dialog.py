@@ -205,7 +205,13 @@ class MSOptionsDialog(QDialog):
         self.subtract_weight_spin = QDoubleSpinBox()
         self.subtract_weight_spin.setRange(0.01, 1.0)
         self.subtract_weight_spin.setSingleStep(0.01)
-        self.subtract_weight_spin.setValue(0.1)
+        self.subtract_weight_spin.setValue(1.0)
+        self.subtract_weight_spin.setToolTip(
+            "Fraction of the background spectrum to subtract (0.0 = none, "
+            "1.0 = full ChemStation-style subtraction). Lower this only if "
+            "you have evidence that the subtracted spectrum is being "
+            "over-corrected by co-eluting peaks."
+        )
         params_layout.addRow("Subtraction Weight:", self.subtract_weight_spin)
         
         # Add intensity threshold control
@@ -516,7 +522,7 @@ class MSOptionsDialog(QDialog):
         self.subtract_check.setChecked(self.settings.value("ms_search/subtract_enabled", True, bool))
         subtraction_method = self.settings.value("ms_search/subtraction_method", 2, int)
         self.subtraction_group.button(subtraction_method).setChecked(True)
-        self.subtract_weight_spin.setValue(self.settings.value("ms_search/subtract_weight", 0.1, float))
+        self.subtract_weight_spin.setValue(self.settings.value("ms_search/subtract_weight", 1.0, float))
         self.intensity_threshold_spin.setValue(self.settings.value("ms_search/intensity_threshold", 0.01, float))
         
         # Algorithm tab
@@ -654,7 +660,7 @@ class MSOptionsDialog(QDialog):
         # Subtraction tab
         self.subtract_check.setChecked(True)
         self.min_tic_radio.setChecked(True)
-        self.subtract_weight_spin.setValue(0.1)
+        self.subtract_weight_spin.setValue(1.0)
         self.intensity_threshold_spin.setValue(0.01)  # Reset to 1%
         
         # Algorithm tab
