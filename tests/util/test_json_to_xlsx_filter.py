@@ -151,3 +151,89 @@ class TestProcessingThreadFilter:
         )
         thread.process_json_to_excel(str(json_dir), str(output))
         assert thread._skipped_count == 0
+
+
+class TestIsInsideCDataSubtree:
+    """Tests for _is_inside_c_data_subtree — skips stale .D-located JSONs.
+
+    Before the .C-folder migration, ChromaKit wrote per-sample JSON results
+    inside the .D directory. After the migration, JSONs are written to
+    `<sample>.C/results/`. Stale .D-located JSONs may still exist inside
+    `<sample>.C/data/<sample>.D/` and would otherwise produce duplicate rows
+    in the xlsx output with subtly different sample_ids.
+    """
+    def test_root_at_results_dir_is_not_inside_c_data(self):
+        from util.json_to_xlsx import _is_inside_c_data_subtree
+        assert _is_inside_c_data_subtree(
+            "/data/2026-06-16/8260-114-01.C/results"
+        ) is False
+
+    def test_root_inside_c_data_subtree_is_detected(self):
+        from util.json_to_xlsx import _is_inside_c_data_subtree
+        assert _is_inside_c_data_subtree(
+            "/data/2026-06-16/8260-114-01.C/data/8260-114-01.D"
+        ) is True
+
+    def test_root_at_c_folder_itself_is_not_inside_c_data(self):
+        from util.json_to_xlsx import _is_inside_c_data_subtree
+        assert _is_inside_c_data_subtree("/data/2026-06-16/8260-114-01.C") is False
+
+    def test_plain_directory_is_not_inside_c_data(self):
+        from util.json_to_xlsx import _is_inside_c_data_subtree
+        assert _is_inside_c_data_subtree("/some/regular/path") is False
+
+    def test_d_folder_outside_c_is_not_inside_c_data(self):
+        """Bare .D directories (legacy, not inside a .C container) are NOT skipped."""
+        from util.json_to_xlsx import _is_inside_c_data_subtree
+        assert _is_inside_c_data_subtree("/data/2026-06-16/8260-114-01.D") is False
+
+
+class TestProcessingThreadSkipsStaleCData:
+    """Integration test: when a .C folder has both a new results/ JSON AND a
+    stale data/<sample>.D/ JSON, the converter writes ONLY the new one."""
+
+    def test_stale_d_json_inside_c_folder_is_skipped(self, tmp_path):
+        # Build the directory tree:
+        #   sample.C/
+        #     results/sample - FID1A.json   (new, sample_id='sample')
+        #     data/sample.D/sample - FID1A.json  (stale, sample_id='sample.D')
+        c_folder = tmp_path / "sample.C"
+        results_dir = c_folder / "results"
+        data_d_dir = c_folder / "data" / "sample.D"
+        results_dir.mkdir(parents=True)
+        data_d_dir.mkdir(parents=True)
+
+        _make_json_file(
+            str(results_dir / "sample - FID1A.json"),
+            peaks=[{"peak_number": 1, "retention_time": 2.0, "compound_id": "Decane",
+                    "area": 1000.0, "width": 0.1, "integrator": "BB",
+                    "start_time": 1.9, "end_time": 2.1}],
+            sample_id="sample",
+        )
+        _make_json_file(
+            str(data_d_dir / "sample - FID1A.json"),
+            peaks=[{"peak_number": 1, "retention_time": 2.0, "compound_id": "Hexane",
+                    "area": 999.0, "width": 0.1, "integrator": "BB",
+                    "start_time": 1.9, "end_time": 2.1}],
+            sample_id="sample.D",  # legacy sample_id
+        )
+
+        output = tmp_path / "out.xlsx"
+        thread = ProcessingThread(
+            directory=str(tmp_path),
+            output_file=str(output),
+            format_config=copy.deepcopy(DEFAULT_FORMAT_CONFIG),
+            skip_unidentified=False,
+        )
+        ok = thread.process_json_to_excel(str(tmp_path), str(output))
+        assert ok is True
+
+        wb = load_workbook(str(output))
+        ws = wb.active
+        all_values = [str(c.value) for row in ws.iter_rows() for c in row
+                      if c.value is not None]
+        # Only the new file should be present
+        assert "Decane" in all_values
+        assert "Hexane" not in all_values
+        assert "sample" in all_values
+        assert "sample.D" not in all_values

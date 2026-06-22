@@ -105,6 +105,24 @@ TIMESTAMP_FORMAT_OPTIONS = [
 _UNKNOWN_RT_PATTERN = re.compile(r"Unknown \(\d+\.\d+\)")
 
 
+def _is_inside_c_data_subtree(root_path: str) -> bool:
+    """Return True when *root_path* lives under any `<sample>.C/data/` subdirectory.
+
+    Before the .C-folder migration, ChromaKit wrote per-sample JSON results
+    inside the .D directory itself. After the migration, JSONs are written to
+    `<sample>.C/results/`. Old .D-located JSONs may still exist inside
+    `<sample>.C/data/<sample>.D/` from before the migration; reading them
+    produces stale duplicates with slightly different sample_ids (e.g. the
+    legacy file uses 'sample.D' while the new file uses 'sample'). This helper
+    lets the converter skip those legacy subtrees.
+    """
+    parts = root_path.split(os.sep)
+    for i, p in enumerate(parts):
+        if p.endswith('.C') and i + 1 < len(parts) and parts[i + 1] == 'data':
+            return True
+    return False
+
+
 def _is_unidentified(peak: dict) -> bool:
     """Return True when the peak has no real compound assignment.
 
@@ -313,8 +331,13 @@ class ProcessingThread(QThread):
 
         # Collect directories that contain JSON files, sorted chronologically
         # by the timestamp in the first JSON file of each directory.
+        # Skip any path inside `<sample>.C/data/` — those are stale .D-era JSONs
+        # from before the .C-folder migration and would duplicate the
+        # `<sample>.C/results/` JSONs.
         dir_file_pairs = []
         for root, _, files in os.walk(directory):
+            if _is_inside_c_data_subtree(root):
+                continue
             json_files = sorted(
                 f for f in files
                 if f.endswith('.json') and not f.startswith('._') and f != 'manifest.json'
