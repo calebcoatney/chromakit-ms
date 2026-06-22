@@ -207,11 +207,15 @@ class ProcessingThread(QThread):
     progress_update = Signal(str)  # Progress message
     finished = Signal(bool, str)   # Success, message
 
-    def __init__(self, directory, output_file, format_config=None):
+    def __init__(self, directory, output_file, format_config=None,
+                 skip_unidentified=True, skip_unquantitated=False):
         super().__init__()
         self.directory = directory
         self.output_file = output_file
         self.format_config = format_config or copy.deepcopy(DEFAULT_FORMAT_CONFIG)
+        self._skip_unidentified = skip_unidentified
+        self._skip_unquantitated = skip_unquantitated
+        self._skipped_count = 0
 
     def run(self):
         """Process JSON files to Excel in background thread."""
@@ -381,7 +385,14 @@ class ProcessingThread(QThread):
                     current_row += 1
 
                     # --- Peak rows ---
-                    for peak in json_data.get("peaks", []):
+                    all_peaks = json_data.get("peaks", [])
+                    for peak in all_peaks:
+                        if self._skip_unidentified and _is_unidentified(peak):
+                            self._skipped_count += 1
+                            continue
+                        if self._skip_unquantitated and _is_unquantitated(peak, all_peaks):
+                            self._skipped_count += 1
+                            continue
                         has_quality_issue = bool(self._get_peak_value(peak, 'quality_issues'))
                         for i, col_cfg in enumerate(enabled_columns):
                             value = self._get_peak_value(peak, col_cfg['key'])
