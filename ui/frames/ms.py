@@ -57,7 +57,7 @@ class MSFrame(QWidget):
             'tic_weight': True,
             'subtract_enabled': True,
             'subtraction_method': 'min_tic',
-            'subtract_weight': 0.1,
+            'subtract_weight': 1.0,
             'similarity': 'composite',
             'weighting': 'NIST_GC',
             'unmatched': 'keep_all',
@@ -598,7 +598,7 @@ class MSFrame(QWidget):
                         composite=(options['similarity'] == 'composite'),
                         weighting_scheme=options['weighting'],
                         unmatched_method=options['unmatched'],
-                        top_k_clusters=options.get('top_k_clusters', 1)  # This is included here
+                        top_k_clusters=options.get('top_k_clusters', 10)
                     )
                     w2v_results = []  # No W2V results if vector search is selected
                 elif options['search_method'] == 'hybrid':
@@ -611,7 +611,7 @@ class MSFrame(QWidget):
                         weighting_scheme=options['weighting'],
                         composite=(options['similarity'] == 'composite'),
                         unmatched_method=options['unmatched'],
-                        top_k_clusters=options.get('top_k_clusters', 1)
+                        top_k_clusters=options.get('top_k_clusters', 10)
                     )
                     # For hybrid, show results as one group
                     vector_results = hybrid_results
@@ -622,7 +622,7 @@ class MSFrame(QWidget):
                         query_spectrum, 
                         top_n=options['top_n'],
                         intensity_power=options['intensity_power'],
-                        top_k_clusters=options.get('top_k_clusters', 1)  # This is included here
+                        top_k_clusters=options.get('top_k_clusters', 10)
                     )
                     vector_results = []  # No vector results if W2V search is selected
                     
@@ -742,7 +742,7 @@ class MSFrame(QWidget):
             'tic_weight': s.value("ms_search/tic_weight", True, bool),
             'subtract_enabled': s.value("ms_search/subtract_enabled", True, bool),
             'subtraction_method': _idx("ms_search/subtraction_method", 2, subtraction_map),
-            'subtract_weight': s.value("ms_search/subtract_weight", 0.1, float),
+            'subtract_weight': s.value("ms_search/subtract_weight", 1.0, float),
             'similarity': _idx("ms_search/similarity", 1, similarity_map),
             'weighting': _idx("ms_search/weighting", 2, weighting_map),
             'unmatched': _idx("ms_search/unmatched", 0, unmatched_map),

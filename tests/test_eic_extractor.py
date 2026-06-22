@@ -8,9 +8,16 @@ from logic.spectral_deconvolution import EICPeak
 
 
 def _make_mock_ms(n_scans=60, n_mz=200, rt_start=1.0, rt_end=2.0):
-    """Mock rainbow DataFile object with .xlabels and .data."""
+    """Mock rainbow DataFile object with .xlabels, .ylabels and .data.
+
+    ``ylabels`` is built as a contiguous 1-based axis (1..n_mz) so the test
+    helper preserves the historical "column j → m/z j+1" invariant used by
+    these tests, even after the extractor was updated to read m/z values
+    from ms.ylabels rather than column indices.
+    """
     ms = MagicMock()
     ms.xlabels = np.linspace(rt_start, rt_end, n_scans)
+    ms.ylabels = np.arange(n_mz, dtype=float) + 1.0  # column j → m/z j+1
     ms.data = np.zeros((n_scans, n_mz), dtype=float)
     return ms
 
@@ -144,3 +151,32 @@ def test_default_prominence_is_zero():
         ms, t_start=1.0, t_end=2.0, min_intensity=100.0, min_prominence=0.0
     )
     assert len(peaks_default) == len(peaks_explicit)
+
+
+def test_sparse_non_contiguous_ylabels_reports_real_mz():
+    """When ms.ylabels is sparse / non-contiguous (e.g. Agilent threshold-
+    scan acquisition with low_mass=20), m/z values must come from ylabels,
+    not from ``column_index + 1``.
+    """
+    from logic.eic_extractor import extract_eic_peaks
+    # Simulated sparse axis like an Agilent threshold-scan run:
+    sparse_axis = np.array([24, 25, 26, 28, 32, 43, 60, 73, 74, 87], dtype=float)
+
+    ms = MagicMock()
+    ms.xlabels = np.linspace(1.0, 2.0, 60)
+    ms.ylabels = sparse_axis
+    ms.data = np.zeros((60, len(sparse_axis)), dtype=float)
+    # Signal at column 5 (m/z=43 in our sparse axis) — the propanoic-acid
+    # acylium ion that should NEVER be labelled as m/z=6.
+    ms.data[:, 5] = _gaussian(60, 30, 4, 1000.0)
+
+    peaks = extract_eic_peaks(ms, t_start=1.0, t_end=2.0, min_intensity=100.0)
+    mzs = {p.mz for p in peaks}
+
+    assert 43.0 in mzs, (
+        f"Sparse axis: column 5 should map to its real m/z (43.0), got {mzs}"
+    )
+    assert 6.0 not in mzs, (
+        f"Sparse axis: column 5 must NOT be labelled m/z=6 (broken col+1 "
+        f"behavior), got {mzs}"
+    )

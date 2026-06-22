@@ -829,10 +829,17 @@ class Integrator:
             y_peaks.append(y_peak)
             baseline_peaks.append(baseline_peak)
             
-            # Check if integration_signal is already baseline-corrected
-            # If integration_signal is 'corrected_y', it's already baseline-subtracted
-            # If integration_signal is 'original_y', we need to subtract baseline
-            if 'corrected_y' in processed_data and np.array_equal(integration_signal, processed_data['corrected_y']):
+            # Check if integration_signal is already baseline-corrected.
+            # We use `is` (identity) rather than np.array_equal because
+            # processed_data['corrected_y'] may contain NaN in MS-gated masked
+            # regions, and np.array_equal returns False for arrays with any
+            # NaN (NaN != NaN per IEEE 754). False here would incorrectly
+            # trigger the "subtract baseline" branch on already-corrected data,
+            # silently doubling the baseline subtraction. Identity check is
+            # both safe and semantically correct: when 'corrected_y' is in
+            # processed_data, integration_signal is set to that same object
+            # by `processed_data.get('corrected_y', y)` above.
+            if integration_signal is processed_data.get('corrected_y'):
                 # Signal is already baseline-corrected, use directly
                 y_peak_corrected = y_peak
             else:

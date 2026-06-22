@@ -27,6 +27,9 @@ class QuantitationFrame(QWidget):
         self.ms_toolkit = None  # Will be set by main app
         self._setup_ui()
         self._connect_signals()
+
+        # Stale-state tracking (2026-06-22 spec)
+        self._last_run_settings_hash = None
         
     def _setup_ui(self):
         """Set up the user interface."""
@@ -108,6 +111,20 @@ class QuantitationFrame(QWidget):
         # Sample density (optional)
         self.density_sample_edit = QLineEdit()
         self.density_sample_edit.setPlaceholderText("Optional")
+        self.density_sample_edit.setToolTip(
+            "Bulk density of the injected sample, in g/mL.\n"
+            "\n"
+            "Required only to compute carbon balance "
+            "(carbon balance = sum of quantitated analyte masses / sample mass injected).\n"
+            "\n"
+            "Per-compound densities are NOT needed — individual analyte masses are\n"
+            "derived from molecular weight + carbon count (the Polyarc method gives\n"
+            "you mass per peak directly from the FID response and the IS calibration).\n"
+            "\n"
+            "If you leave this blank, mol_C / mol / mass / mol% / wt% are still\n"
+            "computed per peak; only the recovery percentage (carbon balance) is\n"
+            "skipped."
+        )
         sample_layout.addRow("Sample Density (g/mL):", self.density_sample_edit)
         
         # Calculated sample mass (read-only)
@@ -134,7 +151,33 @@ class QuantitationFrame(QWidget):
         
         results_group.setLayout(results_layout)
         layout.addWidget(results_group)
-        
+
+        # Status group — shows summary of last quantitation run (2026-06-22 spec).
+        from PySide6.QtWidgets import QListWidget
+        status_group = QGroupBox("Quantitation Status")
+        status_layout = QVBoxLayout()
+
+        self.status_summary_label = QLabel("No quantitation run yet")
+        self.status_summary_label.setWordWrap(True)
+        self.status_summary_label.setTextFormat(Qt.RichText)
+        status_layout.addWidget(self.status_summary_label)
+
+        self.skipped_list = QListWidget()
+        self.skipped_list.setMaximumHeight(80)
+        self.skipped_list.setVisible(False)
+        status_layout.addWidget(self.skipped_list)
+
+        self.stale_label = QLabel(
+            "⚠ Settings changed since last quantitation. Re-Quantitate to refresh."
+        )
+        self.stale_label.setStyleSheet("color: #CC6600; font-weight: bold;")
+        self.stale_label.setWordWrap(True)
+        self.stale_label.setVisible(False)
+        status_layout.addWidget(self.stale_label)
+
+        status_group.setLayout(status_layout)
+        layout.addWidget(status_group)
+
         # Re-Quantitate button
         self.requantitate_btn = QPushButton("Re-Quantitate")
         self.requantitate_btn.setEnabled(False)
@@ -223,6 +266,9 @@ class QuantitationFrame(QWidget):
     def _on_inputs_changed(self):
         """Handle any input change."""
         self.quantitation_changed.emit()
+        # Update stale-state indicator
+        if hasattr(self, 'stale_label'):
+            self._check_stale_state()
         
     def _update_mol_c_is(self):
         """Update calculated mol C of internal standard."""
@@ -344,3 +390,79 @@ class QuantitationFrame(QWidget):
             self.formula_edit.setText(formula)
         if mw:
             self.mw_edit.setText(str(mw))
+
+    # --------------------------------------------------------------
+    # Quantitation status panel (2026-06-22 RT-table workflow spec)
+    # --------------------------------------------------------------
+
+    def clear_status(self):
+        """Reset the status panel to 'no run yet'. Called on new file load."""
+        self.status_summary_label.setText("No quantitation run yet")
+        self.skipped_list.clear()
+        self.skipped_list.setVisible(False)
+        self.stale_label.setVisible(False)
+        self._last_run_settings_hash = None
+
+    def update_status(self, summary):
+        """Populate the status panel from a QuantitationSummary.
+
+        Called after each successful quantitation run. Records the current
+        settings hash so we can detect when the user changes inputs (stale).
+        """
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S")
+
+        lines = [f"<b>Last run:</b> {ts}", ""]
+        lines.append(f"Total peaks integrated: <b>{summary.peaks_total}</b>")
+        lines.append(f"Assigned (RT/MS/manual): <b>{summary.peaks_assigned}</b>")
+        lines.append(f"Quantitated (excl. IS): <b>{summary.peaks_quantitated}</b>")
+
+        skipped_count = (
+            len(summary.peaks_skipped_no_metadata) +
+            len(summary.peaks_skipped_other)
+        )
+        if skipped_count > 0:
+            lines.append("")
+            lines.append(
+                f"<span style='color:#CC6600;'>⚠ {skipped_count} peak(s) "
+                "not quantitated</span>"
+            )
+
+        self.status_summary_label.setText("<br>".join(lines))
+
+        # Populate skipped list
+        self.skipped_list.clear()
+        for name in summary.peaks_skipped_no_metadata:
+            self.skipped_list.addItem(f"{name} — not in NIST library")
+        for name in summary.peaks_skipped_other:
+            self.skipped_list.addItem(f"{name} — calculation failed")
+        self.skipped_list.setVisible(skipped_count > 0)
+
+        # Update stale tracking — record current settings hash
+        self._last_run_settings_hash = self._compute_settings_hash()
+        self.stale_label.setVisible(False)
+
+    def _compute_settings_hash(self):
+        """Hash of the current quantitation inputs for stale detection."""
+        # Tuple of (compound, formula, mw, density, volume_is, volume_sample, density_sample)
+        # All as strings so empty/None compares cleanly.
+        return hash((
+            self.compound_edit.text().strip(),
+            self.formula_edit.text().strip(),
+            self.mw_edit.text().strip(),
+            self.density_edit.text().strip(),
+            self.volume_is_edit.text().strip(),
+            self.volume_sample_edit.text().strip(),
+            self.density_sample_edit.text().strip(),
+            self.enable_checkbox.isChecked(),
+        ))
+
+    def _check_stale_state(self):
+        """Compare current settings to last-run hash; show/hide stale warning."""
+        if not hasattr(self, '_last_run_settings_hash'):
+            self._last_run_settings_hash = None
+        if self._last_run_settings_hash is None:
+            self.stale_label.setVisible(False)
+            return
+        is_stale = self._compute_settings_hash() != self._last_run_settings_hash
+        self.stale_label.setVisible(is_stale)

@@ -49,6 +49,13 @@ class QuantitationSummary:
     carbon_balance_percent: Optional[float] = None
     warnings: list = field(default_factory=list)
 
+    # Structured per-run counts (new in 2026-06-22 RT-table workflow spec)
+    peaks_total: int = 0
+    peaks_assigned: int = 0
+    peaks_skipped_unassigned: int = 0
+    peaks_skipped_no_metadata: list = field(default_factory=list)
+    peaks_skipped_other: list = field(default_factory=list)
+
 
 def lookup_compound_metadata(ms_toolkit, compound_name: str) -> CompoundMetadata:
     """Resolve compound formula + MW from an MSToolkit's loaded library.
@@ -105,6 +112,7 @@ def run_quantitation(
         QuantitationSummary with IS peak index, RF, counts, totals, warnings.
     """
     summary = QuantitationSummary()
+    summary.peaks_total = len(peaks)
     calc = QuantitationCalculator()
 
     # 1. Find IS peak by compound name
@@ -153,7 +161,9 @@ def run_quantitation(
     for i, peak in enumerate(peaks):
         compound_id = _peak_compound_id(peak)
         if not compound_id:
+            summary.peaks_skipped_unassigned += 1
             continue
+        summary.peaks_assigned += 1
 
         is_internal = _is_match(compound_id, internal_standard.compound_name)
 
@@ -162,6 +172,7 @@ def run_quantitation(
             summary.warnings.append(
                 f"Skipping {compound_id}: missing formula or molecular weight."
             )
+            summary.peaks_skipped_no_metadata.append(compound_id)
             continue
 
         result = calc.quantitate_peak(
@@ -172,6 +183,7 @@ def run_quantitation(
         )
         if not result:
             summary.warnings.append(f"Skipping {compound_id}: calculator returned None.")
+            summary.peaks_skipped_other.append(compound_id)
             continue
 
         peak.mol_C = result['mol_C']

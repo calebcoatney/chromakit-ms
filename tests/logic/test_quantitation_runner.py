@@ -211,3 +211,65 @@ def test_duplicate_is_name_peaks_all_excluded_from_composition():
     assert summary.peaks_quantitated == 1
     # Benzene should have 100% of the analyte composition.
     assert benzene.mol_C_percent == pytest.approx(100.0, abs=0.01)
+
+
+def test_summary_includes_peaks_total():
+    """peaks_total counts all input peaks, even unassigned ones."""
+    peaks = [
+        _make_peak("Decane", area=1.0e6, rt=5.0, peak_number=1),
+        _make_peak("Benzene", area=5.0e5, rt=3.0, peak_number=2),
+        _make_peak(None, area=2.0e5, rt=2.0, peak_number=3),  # unassigned
+    ]
+    summary = run_quantitation(
+        peaks=peaks,
+        internal_standard=_is_spec(),
+        sample=SampleSpec(),
+        compound_lookup=_lookup,
+    )
+    assert summary.peaks_total == 3
+
+
+def test_summary_counts_assigned_and_unassigned():
+    """peaks_assigned counts non-None compound_ids; unassigned tracked separately."""
+    peaks = [
+        _make_peak("Decane", area=1.0e6, rt=5.0, peak_number=1),
+        _make_peak("Benzene", area=5.0e5, rt=3.0, peak_number=2),
+        _make_peak("", area=2.0e5, rt=2.0, peak_number=3),     # empty string
+        _make_peak(None, area=1.5e5, rt=1.5, peak_number=4),   # None
+    ]
+    summary = run_quantitation(
+        peaks=peaks,
+        internal_standard=_is_spec(),
+        sample=SampleSpec(),
+        compound_lookup=_lookup,
+    )
+    assert summary.peaks_total == 4
+    assert summary.peaks_assigned == 2  # Decane + Benzene
+    assert summary.peaks_skipped_unassigned == 2  # empty + None
+
+
+def test_summary_tracks_skipped_no_metadata():
+    """Peaks with assigned compound_id but no formula/MW lookup are tracked by name."""
+    def lookup_with_gaps(name):
+        if name == "Decane":
+            return CompoundMetadata(formula="C10H22", molecular_weight=142.28)
+        if name == "Benzene":
+            return CompoundMetadata(formula="C6H6", molecular_weight=78.11)
+        # Mysterium has no library entry
+        return CompoundMetadata(formula=None, molecular_weight=None)
+
+    peaks = [
+        _make_peak("Decane", area=1.0e6, rt=5.0, peak_number=1),
+        _make_peak("Benzene", area=5.0e5, rt=3.0, peak_number=2),
+        _make_peak("Mysterium", area=2.0e5, rt=2.0, peak_number=3),
+    ]
+    summary = run_quantitation(
+        peaks=peaks,
+        internal_standard=_is_spec(),
+        sample=SampleSpec(),
+        compound_lookup=lookup_with_gaps,
+    )
+    assert summary.peaks_assigned == 3
+    assert summary.peaks_quantitated == 1  # Benzene only (Decane is IS, Mysterium skipped)
+    assert "Mysterium" in summary.peaks_skipped_no_metadata
+    assert len(summary.peaks_skipped_no_metadata) == 1

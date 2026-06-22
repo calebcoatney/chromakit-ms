@@ -577,6 +577,14 @@ class ChromaKitApp(QMainWindow):
                 delattr(self, 'integrated_peaks')
             if hasattr(self, 'integration_results'):
                 delattr(self, 'integration_results')
+
+            # Clear stale quantitation status when a new file is loaded
+            # (spec §3e — without this, the panel keeps showing the prior file's
+            # RF / counts even though peaks have been cleared).
+            if hasattr(self, 'quantitation_frame'):
+                self.quantitation_frame.clear_status()
+                self.quantitation_frame.set_response_factor(None)
+                self.quantitation_frame.set_carbon_balance(None)
             
             # Disable batch search button until new peaks are integrated
             self.button_frame.batch_search_button.setEnabled(False)
@@ -898,6 +906,12 @@ class ChromaKitApp(QMainWindow):
         if hasattr(self, 'quantitation_frame') and hasattr(self.ms_frame, 'ms_toolkit'):
             self.quantitation_frame.ms_toolkit = self.ms_frame.ms_toolkit
             print("MS toolkit reference set in quantitation frame")
+        
+        # Push library names to RT table for load-time validation (2026-06-22 spec)
+        if hasattr(self, 'rt_table_frame') and hasattr(self.ms_frame, 'ms_toolkit'):
+            tk = self.ms_frame.ms_toolkit
+            if tk and hasattr(tk, 'library') and tk.library:
+                self.rt_table_frame.set_library_compounds(list(tk.library.keys()))
     
     def on_edit_assignment_requested(self, peak_index):
         """Handle request to edit peak compound assignment."""
@@ -1616,7 +1630,7 @@ class ChromaKitApp(QMainWindow):
                         spectrum,
                         top_n=1,
                         intensity_power=options.get('intensity_power', 0.6),
-                        top_k_clusters=options.get('top_k_clusters', 1),
+                        top_k_clusters=options.get('top_k_clusters', 10),
                     )
                 elif method == 'hybrid':
                     results = toolkit.search_hybrid(
@@ -1627,7 +1641,7 @@ class ChromaKitApp(QMainWindow):
                         weighting_scheme=options.get('weighting', 'NIST_GC'),
                         composite=(options.get('similarity') == 'composite'),
                         unmatched_method=options.get('unmatched', 'keep_all'),
-                        top_k_clusters=options.get('top_k_clusters', 1),
+                        top_k_clusters=options.get('top_k_clusters', 10),
                     )
                 else:  # 'vector' (default)
                     results = toolkit.search_vector(
@@ -1636,7 +1650,7 @@ class ChromaKitApp(QMainWindow):
                         composite=(options.get('similarity') == 'composite'),
                         weighting_scheme=options.get('weighting', 'NIST_GC'),
                         unmatched_method=options.get('unmatched', 'keep_all'),
-                        top_k_clusters=options.get('top_k_clusters', 1),
+                        top_k_clusters=options.get('top_k_clusters', 10),
                     )
                 if results:
                     peak.compound_name = results[0][0]
@@ -1981,6 +1995,51 @@ class ChromaKitApp(QMainWindow):
                 else:
                     # Mark that RT matching was available but not used
                     peak.rt_match_available = rt_compound
+
+        # Optional dedup: if "Allow duplicate matches" is OFF, keep only the
+        # peak closest to the table apex for any compound matched by 2+ peaks.
+        # Losers revert to 'Unknown (RT)'. This guarantees 1:1 mapping between
+        # RT-table entries and assigned peaks per sample. (2026-06-22 spec
+        # follow-up — addresses RT-window leakage when matching mode tolerates
+        # peaks slightly outside the table window.)
+        #
+        # NOTE: this block is mirrored in tests/ui/frames/test_rt_table_dialog.py
+        # (TestApplyRTMatchingDedup._run_dedup). Keep the two in sync.
+        if not rt_table_frame.allow_duplicates_checkbox.isChecked():
+            by_compound = {}  # compound_id -> list of (peak, distance_to_apex)
+            for peak in peaks:
+                if not getattr(peak, 'rt_assignment', False):
+                    continue
+                cid = getattr(peak, 'compound_id', None)
+                if not cid:
+                    continue
+                window = rt_table_frame.get_rt_window(cid)
+                if not window:
+                    continue
+                # window is (start, apex, end)
+                dist = abs(peak.retention_time - window[1])
+                by_compound.setdefault(cid, []).append((peak, dist))
+
+            for cid, candidates in by_compound.items():
+                if len(candidates) <= 1:
+                    continue
+                # Sort by distance-to-apex ascending; keep the first
+                candidates.sort(key=lambda x: x[1])
+                kept_peak, kept_dist = candidates[0]
+                for peak, dist in candidates[1:]:
+                    placeholder = f"Unknown ({peak.retention_time:.3f})"
+                    peak.compound_id = placeholder
+                    if hasattr(peak, 'Compound_ID'):
+                        peak.Compound_ID = placeholder
+                    peak.rt_assignment = False
+                    peak.rt_assignment_source = None
+                    peak.Qual = None
+                    print(
+                        f"RT dedup: Peak {peak.peak_number} at {peak.retention_time:.3f} "
+                        f"reverted to '{placeholder}' (further from '{cid}' apex than "
+                        f"Peak {kept_peak.peak_number} at {kept_peak.retention_time:.3f}, "
+                        f"d={dist:.3f} vs {kept_dist:.3f})"
+                    )
 
     def _show_integration_results(self, integration_results):
         """Show integration results in a dialog."""
@@ -2333,7 +2392,7 @@ class ChromaKitApp(QMainWindow):
                 'tic_weight': True,
                 'subtract_enabled': True,
                 'subtraction_method': 'min_tic',
-                'subtract_weight': 0.1,
+                'subtract_weight': 1.0,
                 'similarity': 'composite',
                 'weighting': 'NIST_GC',
                 'unmatched': 'keep_all',
@@ -2735,7 +2794,7 @@ class ChromaKitApp(QMainWindow):
                 'tic_weight': True,
                 'subtract_enabled': True,
                 'subtraction_method': 'min_tic',
-                'subtract_weight': 0.1,
+                'subtract_weight': 1.0,
                 'similarity': 'composite',
                 'weighting': 'NIST_GC',
                 'unmatched': 'keep_all',
@@ -3358,7 +3417,7 @@ class ChromaKitApp(QMainWindow):
                     query,
                     top_n=options.get('top_n', 5),
                     intensity_power=options.get('intensity_power', 0.6),
-                    top_k_clusters=options.get('top_k_clusters', 1),
+                    top_k_clusters=options.get('top_k_clusters', 10),
                 )
             elif options.get('search_method') == 'hybrid':
                 results = toolkit.search_hybrid(
@@ -3369,7 +3428,7 @@ class ChromaKitApp(QMainWindow):
                     weighting_scheme=options.get('weighting', 'NIST_GC'),
                     composite=(options.get('similarity') == 'composite'),
                     unmatched_method=options.get('unmatched', 'keep_all'),
-                    top_k_clusters=options.get('top_k_clusters', 1),
+                    top_k_clusters=options.get('top_k_clusters', 10),
                 )
             else:
                 results = toolkit.search_vector(
@@ -3378,7 +3437,7 @@ class ChromaKitApp(QMainWindow):
                     composite=(options.get('similarity') == 'composite'),
                     weighting_scheme=options.get('weighting', 'NIST_GC'),
                     unmatched_method=options.get('unmatched', 'keep_all'),
-                    top_k_clusters=options.get('top_k_clusters', 1),
+                    top_k_clusters=options.get('top_k_clusters', 10),
                 )
         except Exception as e:
             if self._deconv_inspector:
@@ -3389,8 +3448,14 @@ class ChromaKitApp(QMainWindow):
         if self._deconv_inspector:
             self._deconv_inspector.show_search_results(results, rt)
 
-    def _perform_quantitation(self):
-        """Perform quantitation using Polyarc + IS method (delegates to runner)."""
+    def _perform_quantitation(self, silent: bool = False):
+        """Perform quantitation using Polyarc + IS method (delegates to runner).
+
+        Args:
+            silent: When True, warnings (IS-not-found, zero-quantitated) are
+                routed to the quantitation status panel instead of modal dialogs.
+                Used by the auto-trigger after integration.
+        """
         from logic.quantitation_runner import (
             InternalStandardSpec, SampleSpec, run_quantitation, lookup_compound_metadata,
         )
@@ -3441,19 +3506,43 @@ class ChromaKitApp(QMainWindow):
             compound_lookup=compound_lookup,
         )
 
-        # Surface IS-not-found as a QMessageBox to match existing UX
+        # Surface IS-not-found — modal popup when loud (transient notification),
+        # plus a persistent banner in the status panel (both paths).
+        # The banner ensures the panel doesn't keep showing stale RF/counts
+        # from a previous successful run.
         if summary.internal_standard_peak_index < 0:
-            QMessageBox.warning(self, "Quantitation Error",
-                                f"Internal standard '{is_compound}' not found in detected peaks.\n\n"
-                                "Make sure the IS was detected and identified by MS search.")
+            if not silent:
+                QMessageBox.warning(self, "Quantitation Error",
+                                    f"Internal standard '{is_compound}' not found in detected peaks.\n\n"
+                                    "Make sure the IS was detected and identified by MS search.")
+            # Aborted-run banner (both paths). Escape is_compound — user-controlled text
+            # rendered into rich-text HTML.
+            from html import escape as _html_escape
+            self.quantitation_frame.status_summary_label.setText(
+                f"<b>⚠ Run aborted:</b><br>"
+                f"Internal standard <b>'{_html_escape(is_compound)}'</b> not found in detected peaks.<br>"
+                f"Make sure the IS was detected and identified."
+            )
+            self.quantitation_frame.skipped_list.setVisible(False)
+            self.quantitation_frame.stale_label.setVisible(False)
+            # Clear stale numerals from any prior successful run
+            self.quantitation_frame.set_response_factor(None)
+            self.quantitation_frame.set_carbon_balance(None)
             return
 
-        # Surface zero-quantitated as a QMessageBox
+        # Surface zero-quantitated — modal popup when loud (transient), plus
+        # update_status in both paths (structured counts ARE informative here:
+        # the loop ran, peaks_skipped_no_metadata is populated).
         if summary.peaks_quantitated == 0:
-            QMessageBox.warning(self, "Quantitation Warning",
-                                "No peaks could be quantitated.\n\n"
-                                "This may be because formula/MW information is not available "
-                                "in the MS library.")
+            if not silent:
+                QMessageBox.warning(self, "Quantitation Warning",
+                                    "No peaks could be quantitated.\n\n"
+                                    "This may be because formula/MW information is not available "
+                                    "in the MS library.")
+            self.quantitation_frame.update_status(summary)
+            # Clear stale RF/CB from any prior successful run
+            self.quantitation_frame.set_response_factor(None)
+            self.quantitation_frame.set_carbon_balance(None)
             return
 
         # Display RF + carbon balance in the GUI
@@ -3462,6 +3551,9 @@ class ChromaKitApp(QMainWindow):
 
         if summary.carbon_balance_percent is not None:
             self.quantitation_frame.set_carbon_balance(summary.carbon_balance_percent)
+
+        # Update structured status panel (2026-06-22 spec)
+        self.quantitation_frame.update_status(summary)
 
         # Console log (matches old print() statements for backward compatibility)
         print(f"\n=== Quantitation ===")
@@ -3540,8 +3632,12 @@ class ChromaKitApp(QMainWindow):
                 # Extract the spectrum at the given retention time
                 spectrum = ms.data[rt_index, :].astype(float)
                 
-                # Create mz array
-                mz_values = np.arange(len(spectrum)) + 1
+                # Get m/z values from the file's m/z axis (parsed by rainbow).
+                # ms.ylabels is the actual axis of m/z bins stored in data.ms — on
+                # instruments that scan a sub-range (e.g. low_mass=20) or store only
+                # above-threshold m/z bins, this axis is sparse and non-contiguous,
+                # so column index + 1 is the WRONG m/z label.
+                mz_values = np.asarray(ms.ylabels)
                 
                
                 
@@ -3568,14 +3664,24 @@ class ChromaKitApp(QMainWindow):
     def on_peaks_integrated(self, peaks):
         """Handle when peaks are integrated."""
         self.integrated_peaks = peaks
-        
+
+        # Clear stale quantitation status — we're about to re-quantitate (or not)
+        self.quantitation_frame.clear_status()
+
         # Update batch search button state based on peaks and library
-        has_library = (hasattr(self.ms_frame, 'library_loaded') and 
-                      
-                      self.ms_frame.library_loaded)
-        
+        has_library = (hasattr(self.ms_frame, 'library_loaded') and
+                       self.ms_frame.library_loaded)
+
         self.button_frame.batch_search_button.setEnabled(bool(peaks) and has_library)
         self.button_frame.deconvolve_ms_button.setEnabled(bool(peaks))
+
+        # Auto-quantitate if RT matching + quantitation are both enabled.
+        # This covers the RT-table-driven workflow where the user doesn't run
+        # MS search at all (2026-06-22 RT-table workflow spec, Section 2).
+        if (self.quantitation_frame.is_enabled() and
+                self.rt_table_frame.is_enabled() and
+                peaks):
+            self._perform_quantitation(silent=True)
 
         # Update other UI elements as needed
         self.update_results_view()

@@ -14,6 +14,7 @@ Updated on Aug  6, 2025 - Added bidirectional functionality for updating JSON fr
 """
 
 import os
+import re
 import sys
 import json
 import copy
@@ -99,6 +100,62 @@ TIMESTAMP_FORMAT_OPTIONS = [
 ]
 
 
+# Pattern for auto-generated placeholder compound IDs written by the integrator
+# when no MS assignment is available (e.g. "Unknown (5.234)").
+_UNKNOWN_RT_PATTERN = re.compile(r"Unknown \(\d+\.\d+\)")
+
+
+def _is_inside_c_data_subtree(root_path: str) -> bool:
+    """Return True when *root_path* lives under any `<sample>.C/data/` subdirectory.
+
+    Before the .C-folder migration, ChromaKit wrote per-sample JSON results
+    inside the .D directory itself. After the migration, JSONs are written to
+    `<sample>.C/results/`. Old .D-located JSONs may still exist inside
+    `<sample>.C/data/<sample>.D/` from before the migration; reading them
+    produces stale duplicates with slightly different sample_ids (e.g. the
+    legacy file uses 'sample.D' while the new file uses 'sample'). This helper
+    lets the converter skip those legacy subtrees.
+    """
+    parts = root_path.split(os.sep)
+    for i, p in enumerate(parts):
+        if p.endswith('.C') and i + 1 < len(parts) and parts[i + 1] == 'data':
+            return True
+    return False
+
+
+def _is_unidentified(peak: dict) -> bool:
+    """Return True when the peak has no real compound assignment.
+
+    A peak is unidentified when its compound_id (or "Compound ID") is None,
+    empty, "unknown" (any case), or matches the "Unknown (RT)" placeholder.
+    """
+    cid = peak.get('compound_id') or peak.get('Compound ID')
+    if not cid:
+        return True
+    cid_str = str(cid).strip()
+    if not cid_str or cid_str.lower() == "unknown":
+        return True
+    if _UNKNOWN_RT_PATTERN.fullmatch(cid_str):
+        return True
+    return False
+
+
+def _is_unquantitated(peak: dict, all_peaks: list) -> bool:
+    """Return True when this peak is missing quantitation results.
+
+    Only meaningful when quantitation was attempted on the file at all.
+    If no peak in *all_peaks* has wt_percent set, we treat the file as
+    not having been quantitated and return False (don't filter).
+    """
+    any_quantitated = any(
+        p.get('wt_percent') is not None
+        for p in all_peaks
+    )
+    if not any_quantitated:
+        return False
+    return peak.get('wt_percent') is None
+
+
 def _parse_timestamp(ts_string: str):
     """Try to parse *ts_string* using known Agilent patterns and common ISO patterns.
     Returns a :class:`datetime.datetime` on success, or ``None``."""
@@ -168,11 +225,15 @@ class ProcessingThread(QThread):
     progress_update = Signal(str)  # Progress message
     finished = Signal(bool, str)   # Success, message
 
-    def __init__(self, directory, output_file, format_config=None):
+    def __init__(self, directory, output_file, format_config=None,
+                 skip_unidentified=True, skip_unquantitated=False):
         super().__init__()
         self.directory = directory
         self.output_file = output_file
         self.format_config = format_config or copy.deepcopy(DEFAULT_FORMAT_CONFIG)
+        self._skip_unidentified = skip_unidentified
+        self._skip_unquantitated = skip_unquantitated
+        self._skipped_count = 0
 
     def run(self):
         """Process JSON files to Excel in background thread."""
@@ -180,7 +241,10 @@ class ProcessingThread(QThread):
             self.progress_update.emit("Starting processing...")
             success = self.process_json_to_excel(self.directory, self.output_file)
             if success:
-                self.finished.emit(True, f"Successfully created Excel file: {self.output_file}")
+                msg = f"Successfully created Excel file: {self.output_file}"
+                if self._skipped_count > 0:
+                    msg += f"\nSkipped {self._skipped_count} peaks based on filter settings."
+                self.finished.emit(True, msg)
             else:
                 self.finished.emit(False, "Processing completed but no JSON files were found.")
         except Exception as e:
@@ -267,8 +331,13 @@ class ProcessingThread(QThread):
 
         # Collect directories that contain JSON files, sorted chronologically
         # by the timestamp in the first JSON file of each directory.
+        # Skip any path inside `<sample>.C/data/` — those are stale .D-era JSONs
+        # from before the .C-folder migration and would duplicate the
+        # `<sample>.C/results/` JSONs.
         dir_file_pairs = []
         for root, _, files in os.walk(directory):
+            if _is_inside_c_data_subtree(root):
+                continue
             json_files = sorted(
                 f for f in files
                 if f.endswith('.json') and not f.startswith('._') and f != 'manifest.json'
@@ -342,7 +411,14 @@ class ProcessingThread(QThread):
                     current_row += 1
 
                     # --- Peak rows ---
-                    for peak in json_data.get("peaks", []):
+                    all_peaks = json_data.get("peaks", [])
+                    for peak in all_peaks:
+                        if self._skip_unidentified and _is_unidentified(peak):
+                            self._skipped_count += 1
+                            continue
+                        if self._skip_unquantitated and _is_unquantitated(peak, all_peaks):
+                            self._skipped_count += 1
+                            continue
                         has_quality_issue = bool(self._get_peak_value(peak, 'quality_issues'))
                         for i, col_cfg in enumerate(enabled_columns):
                             value = self._get_peak_value(peak, col_cfg['key'])
@@ -613,7 +689,41 @@ class JsonToExcelConverter(QDialog):
         output_layout.addLayout(output_button_layout)
         
         layout.addWidget(output_group)
-        
+
+        # Filter peaks group (2026-06-22 RT-table workflow spec, Section 4)
+        filter_group = QGroupBox("Filter peaks")
+        filter_layout = QVBoxLayout(filter_group)
+
+        # Read persisted defaults from QSettings
+        skip_unident_default = self.settings.value(
+            "export/xlsx_skip_unidentified", True, type=bool
+        )
+        skip_unquant_default = self.settings.value(
+            "export/xlsx_skip_unquantitated", False, type=bool
+        )
+
+        self.skip_unidentified_cb = QCheckBox(
+            "Skip unidentified peaks (no compound assigned)"
+        )
+        self.skip_unidentified_cb.setChecked(skip_unident_default)
+        self.skip_unidentified_cb.setToolTip(
+            "Peaks with no compound_id, 'Unknown', or 'Unknown (RT)' placeholders\n"
+            "are excluded from the xlsx output. JSON files are not modified."
+        )
+        filter_layout.addWidget(self.skip_unidentified_cb)
+
+        self.skip_unquantitated_cb = QCheckBox(
+            "Also skip peaks missing quantitation results"
+        )
+        self.skip_unquantitated_cb.setChecked(skip_unquant_default)
+        self.skip_unquantitated_cb.setToolTip(
+            "When quantitation was run on a file, peaks without wt_percent (e.g. compound\n"
+            "name unknown to NIST library) are excluded. No-op for files that were never quantitated."
+        )
+        filter_layout.addWidget(self.skip_unquantitated_cb)
+
+        layout.addWidget(filter_group)
+
         # Process button
         self.process_btn = QPushButton("Convert to Excel")
         self.process_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }")
@@ -742,8 +852,21 @@ class JsonToExcelConverter(QDialog):
         self.processing_thread = ProcessingThread(
             self.input_directory,
             self.output_file,
-            self.get_current_format_config()
+            self.get_current_format_config(),
+            skip_unidentified=self.skip_unidentified_cb.isChecked(),
+            skip_unquantitated=self.skip_unquantitated_cb.isChecked(),
         )
+
+        # Persist filter selections
+        self.settings.setValue(
+            "export/xlsx_skip_unidentified",
+            self.skip_unidentified_cb.isChecked()
+        )
+        self.settings.setValue(
+            "export/xlsx_skip_unquantitated",
+            self.skip_unquantitated_cb.isChecked()
+        )
+
         self.processing_thread.progress_update.connect(self.update_progress)
         self.processing_thread.finished.connect(self.processing_finished)
         self.processing_thread.start()
