@@ -14,6 +14,7 @@ Updated on Aug  6, 2025 - Added bidirectional functionality for updating JSON fr
 """
 
 import os
+import re
 import sys
 import json
 import copy
@@ -97,6 +98,44 @@ TIMESTAMP_FORMAT_OPTIONS = [
     ("D-MMM-YYYY",          "d-mmm-yyyy"),
     ("DD/MM/YYYY HH:MM",    "dd/mm/yyyy hh:mm"),
 ]
+
+
+# Pattern for auto-generated placeholder compound IDs written by the integrator
+# when no MS assignment is available (e.g. "Unknown (5.234)").
+_UNKNOWN_RT_PATTERN = re.compile(r"Unknown \(\d+\.\d+\)")
+
+
+def _is_unidentified(peak: dict) -> bool:
+    """Return True when the peak has no real compound assignment.
+
+    A peak is unidentified when its compound_id (or "Compound ID") is None,
+    empty, "unknown" (any case), or matches the "Unknown (RT)" placeholder.
+    """
+    cid = peak.get('compound_id') or peak.get('Compound ID')
+    if not cid:
+        return True
+    cid_str = str(cid).strip()
+    if not cid_str or cid_str.lower() == "unknown":
+        return True
+    if _UNKNOWN_RT_PATTERN.fullmatch(cid_str):
+        return True
+    return False
+
+
+def _is_unquantitated(peak: dict, all_peaks: list) -> bool:
+    """Return True when this peak is missing quantitation results.
+
+    Only meaningful when quantitation was attempted on the file at all.
+    If no peak in *all_peaks* has wt_percent set, we treat the file as
+    not having been quantitated and return False (don't filter).
+    """
+    any_quantitated = any(
+        p.get('wt_percent') is not None
+        for p in all_peaks
+    )
+    if not any_quantitated:
+        return False
+    return peak.get('wt_percent') is None
 
 
 def _parse_timestamp(ts_string: str):
