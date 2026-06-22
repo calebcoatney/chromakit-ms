@@ -61,7 +61,7 @@ def do_single_search(ms_toolkit, query_spectrum, options: dict) -> list:
             query_spectrum,
             top_n=options.get('top_n', 5),
             intensity_power=options.get('intensity_power', 0.6),
-            top_k_clusters=options.get('top_k_clusters', 1),
+            top_k_clusters=options.get('top_k_clusters', 10),
         )
     elif search_method == 'hybrid':
         return ms_toolkit.search_hybrid(
@@ -72,7 +72,7 @@ def do_single_search(ms_toolkit, query_spectrum, options: dict) -> list:
             weighting_scheme=options.get('weighting', 'NIST_GC'),
             composite=(options.get('similarity', 'composite') == 'composite'),
             unmatched_method=options.get('unmatched', 'keep_all'),
-            top_k_clusters=options.get('top_k_clusters', 1),
+            top_k_clusters=options.get('top_k_clusters', 10),
         )
     return ms_toolkit.search_vector(
         query_spectrum,
@@ -80,7 +80,7 @@ def do_single_search(ms_toolkit, query_spectrum, options: dict) -> list:
         composite=(options.get('similarity', 'composite') == 'composite'),
         weighting_scheme=options.get('weighting', 'NIST_GC'),
         unmatched_method=options.get('unmatched', 'keep_all'),
-        top_k_clusters=options.get('top_k_clusters', 1),
+        top_k_clusters=options.get('top_k_clusters', 10),
     )
 
 

@@ -324,7 +324,7 @@ class MSBatchSearchRequest(BaseModel):
         description=(
             "Full search options. Defaults to mimic GUI: "
             "{'search_method': 'vector', 'top_n': 5, 'similarity': 'composite', "
-            "'weighting': 'NIST_GC', 'unmatched': 'keep_all', 'top_k_clusters': 1, "
+            "'weighting': 'NIST_GC', 'unmatched': 'keep_all', 'top_k_clusters': 10, "
             "'extraction_method': 'apex', 'range_points': 5, 'range_time': 0.05, "
             "'tic_weight': True, 'subtract_enabled': True, 'subtraction_method': 'min_tic', "
             "'subtract_weight': 1.0, 'intensity_power': 0.6}. "

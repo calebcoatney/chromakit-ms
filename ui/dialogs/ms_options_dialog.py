@@ -365,9 +365,14 @@ class MSOptionsDialog(QDialog):
         
         # NEW: Number of clusters/components to consider
         self.top_k_clusters_spin = QSpinBox()
-        self.top_k_clusters_spin.setRange(1, 10)
-        self.top_k_clusters_spin.setValue(1)
-        self.top_k_clusters_spin.setToolTip("Number of clusters/components to consider during search (higher = more results, slower)")
+        self.top_k_clusters_spin.setRange(1, 100)
+        self.top_k_clusters_spin.setValue(10)
+        self.top_k_clusters_spin.setToolTip(
+            "Number of preselector clusters/components to consider during "
+            "search (higher = more candidates, slightly slower but more "
+            "robust against noisy or air-contaminated spectra; 1 = strictest, "
+            "100 = effectively no preselector filtering)"
+        )
         vector_layout.addRow("Clusters to Consider:", self.top_k_clusters_spin)
         
         layout.addWidget(vector_group)
@@ -534,7 +539,7 @@ class MSOptionsDialog(QDialog):
         
         # NEW: Load preselector settings
         self.preselector_combo.setCurrentIndex(self.settings.value("ms_search/preselector_type", 0, int))
-        self.top_k_clusters_spin.setValue(self.settings.value("ms_search/top_k_clusters", 1, int))
+        self.top_k_clusters_spin.setValue(self.settings.value("ms_search/top_k_clusters", 10, int))
         
         # Quality checks tab
         self.quality_checks_enabled.setChecked(self.settings.value("ms_search/quality_checks_enabled", False, bool))
@@ -672,7 +677,7 @@ class MSOptionsDialog(QDialog):
         
         # NEW: Restore preselector defaults
         self.preselector_combo.setCurrentIndex(0)  # K-means
-        self.top_k_clusters_spin.setValue(1)      # 1 cluster
+        self.top_k_clusters_spin.setValue(10)     # 10 clusters (matches 2026-06-12 audit; 98% preselector recall in measured datasets)
         
         # Quality checks tab
         self.quality_checks_enabled.setChecked(False)

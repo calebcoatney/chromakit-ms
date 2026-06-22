@@ -598,7 +598,7 @@ class MSFrame(QWidget):
                         composite=(options['similarity'] == 'composite'),
                         weighting_scheme=options['weighting'],
                         unmatched_method=options['unmatched'],
-                        top_k_clusters=options.get('top_k_clusters', 1)  # This is included here
+                        top_k_clusters=options.get('top_k_clusters', 10)
                     )
                     w2v_results = []  # No W2V results if vector search is selected
                 elif options['search_method'] == 'hybrid':
@@ -611,7 +611,7 @@ class MSFrame(QWidget):
                         weighting_scheme=options['weighting'],
                         composite=(options['similarity'] == 'composite'),
                         unmatched_method=options['unmatched'],
-                        top_k_clusters=options.get('top_k_clusters', 1)
+                        top_k_clusters=options.get('top_k_clusters', 10)
                     )
                     # For hybrid, show results as one group
                     vector_results = hybrid_results
@@ -622,7 +622,7 @@ class MSFrame(QWidget):
                         query_spectrum, 
                         top_n=options['top_n'],
                         intensity_power=options['intensity_power'],
-                        top_k_clusters=options.get('top_k_clusters', 1)  # This is included here
+                        top_k_clusters=options.get('top_k_clusters', 10)
                     )
                     vector_results = []  # No vector results if W2V search is selected
                     
