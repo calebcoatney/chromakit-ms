@@ -65,12 +65,15 @@ def quantitate_rf(
         quantitated.append((peak, raw))
 
     summary.peaks_quantitated = len(quantitated)
-    total = sum(raw for _, raw in quantitated)
+    total = float(sum(raw for _, raw in quantitated))
     summary.total_raw_amount = total
 
     if normalize:
         if total == 0:
-            summary.warnings.append("Total raw amount is zero; mol% set to 0 for all peaks.")
+            if quantitated:
+                summary.warnings.append(
+                    "Total raw amount is zero; mol% set to 0 for all peaks."
+                )
             for peak, _ in quantitated:
                 peak.mol_percent = 0.0
         else:

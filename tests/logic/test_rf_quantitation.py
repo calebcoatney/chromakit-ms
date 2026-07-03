@@ -58,6 +58,7 @@ def test_empty_inputs_clean_summary():
     summary = quantitate_rf([], _rf(), normalize=True)
     assert summary.peaks_quantitated == 0
     assert summary.peaks_total == 0
+    assert summary.warnings == []   # no spurious zero-total warning when nothing to normalize
 
 
 def test_zero_total_adds_warning_no_crash():
@@ -66,3 +67,22 @@ def test_zero_total_adds_warning_no_crash():
     summary = quantitate_rf(peaks, _rf(), normalize=True)
     assert peaks[0].mol_percent == pytest.approx(0.0)
     assert any("zero" in w.lower() for w in summary.warnings)
+
+
+def test_mixed_batch_unequal_amounts():
+    # H2 3000/100=30, CO 2000/200=10 → total 40 → 75/25; Argon (no RF) and
+    # Unknown (unassigned) are skipped and left unquantitated.
+    peaks = [
+        _peak("Hydrogen", 3000.0, 1),
+        _peak("Carbon monoxide", 2000.0, 2),
+        _peak("Argon", 500.0, 3),
+        _peak("Unknown (4.000)", 500.0, 4),
+    ]
+    summary = quantitate_rf(peaks, _rf(), normalize=True)
+    assert peaks[0].mol_percent == pytest.approx(75.0)
+    assert peaks[1].mol_percent == pytest.approx(25.0)
+    assert peaks[2].mol_percent is None and peaks[2].raw_amount is None
+    assert peaks[3].mol_percent is None and peaks[3].raw_amount is None
+    assert summary.peaks_quantitated == 2
+    assert len(summary.skipped_no_rf) == 1
+    assert len(summary.skipped_unassigned) == 1
