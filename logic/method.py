@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+import pandas as pd
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -104,6 +105,33 @@ class IntegrationSubParams(BaseModel):
     )
 
 
+class RTTableEntry(BaseModel):
+    compound: str
+    start: float          # RT window start (min)
+    apex: float           # expected apex (min)
+    end: float            # RT window end (min)
+
+
+class RFTableEntry(BaseModel):
+    compound: str
+    response_factor: float    # area per unit; mol% = area / RF
+
+
+class RTMatchingWeights(BaseModel):
+    start: float = 0.25
+    apex: float = 0.50
+    end: float = 0.25
+
+
+class RTMatchingParams(BaseModel):
+    matching_mode: int = 0          # 0=Simple Window, 1=Closest Apex, 2=Weighted Distance
+    tolerance: float = 0.1          # min; Closest Apex mode
+    window_expansion: float = 0.0   # min; Simple Window mode
+    weights: RTMatchingWeights = Field(default_factory=RTMatchingWeights)
+    allow_duplicates: bool = True
+    high_priority: bool = False
+
+
 # ── ChromaMethod ────────────────────────────────────────────────────────────────
 
 _METADATA_FIELDS = frozenset({
@@ -136,6 +164,14 @@ class ChromaMethod(BaseModel):
     negative_peaks: NegativePeakParams = Field(default_factory=NegativePeakParams)
     shoulders: ShoulderParams = Field(default_factory=ShoulderParams)
     integration: IntegrationSubParams = Field(default_factory=IntegrationSubParams)
+    rt_table: List[RTTableEntry] = Field(default_factory=list)
+    rf_table: List[RFTableEntry] = Field(default_factory=list)
+    rt_matching: RTMatchingParams = Field(default_factory=RTMatchingParams)
+    quant_strategy: Optional[str] = Field(
+        default=None,
+        description="Quantitation strategy: None | 'rf_table' | 'internal_standard'. "
+                    "Phase 1a implements 'rf_table' only.",
+    )
     chemstation_area_factor: float = Field(
         default=0.0784,
         description="Chemstation area conversion factor applied during integration",
@@ -170,6 +206,17 @@ class ChromaMethod(BaseModel):
         processor receives the expected key names.
         """
         return self.model_dump(by_alias=True, exclude=_METADATA_FIELDS)
+
+    def rt_table_as_dataframe(self) -> "pd.DataFrame":
+        """Return the embedded RT table as a DataFrame with the GUI's column
+        names (Compound, Start, Apex, End) that logic/rt_matching expects."""
+        cols = ["Compound", "Start", "Apex", "End"]
+        if not self.rt_table:
+            return pd.DataFrame(columns=cols)
+        return pd.DataFrame(
+            [[e.compound, e.start, e.apex, e.end] for e in self.rt_table],
+            columns=cols,
+        )
 
     @classmethod
     def from_gui_params(
