@@ -124,7 +124,10 @@ class RTMatchingWeights(BaseModel):
 
 
 class RTMatchingParams(BaseModel):
-    matching_mode: int = 0          # 0=Simple Window, 1=Closest Apex, 2=Weighted Distance
+    matching_mode: int = Field(
+        default=0, ge=0, le=2,
+        description="0=Simple Window, 1=Closest Apex, 2=Weighted Distance",
+    )
     tolerance: float = 0.1          # min; Closest Apex mode
     window_expansion: float = 0.0   # min; Simple Window mode
     weights: RTMatchingWeights = Field(default_factory=RTMatchingWeights)
@@ -209,13 +212,21 @@ class ChromaMethod(BaseModel):
 
     def rt_table_as_dataframe(self) -> "pd.DataFrame":
         """Return the embedded RT table as a DataFrame with the GUI's column
-        names (Compound, Start, Apex, End) that logic/rt_matching expects."""
-        cols = ["Compound", "Start", "Apex", "End"]
+        names (Compound, Start, Apex, End) that logic/rt_matching expects.
+
+        The empty frame is constructed with explicit dtypes so the numeric
+        columns are float64 on both the empty and populated paths (downstream
+        RT matching does float comparisons on Start/Apex/End)."""
         if not self.rt_table:
-            return pd.DataFrame(columns=cols)
+            return pd.DataFrame({
+                "Compound": pd.Series([], dtype="object"),
+                "Start": pd.Series([], dtype="float64"),
+                "Apex": pd.Series([], dtype="float64"),
+                "End": pd.Series([], dtype="float64"),
+            })
         return pd.DataFrame(
             [[e.compound, e.start, e.apex, e.end] for e in self.rt_table],
-            columns=cols,
+            columns=["Compound", "Start", "Apex", "End"],
         )
 
     @classmethod

@@ -153,6 +153,7 @@ def test_embedded_tables_round_trip():
     m.rt_matching.matching_mode = 1
     m.rt_matching.tolerance = 0.05
     m.rt_matching.high_priority = True
+    m.rt_matching.weights.apex = 0.2   # non-default nested-nested value
 
     with tempfile.NamedTemporaryFile(suffix=".chromethod", delete=False, mode="w") as f:
         path = f.name
@@ -168,6 +169,7 @@ def test_embedded_tables_round_trip():
         assert loaded.rt_matching.matching_mode == 1
         assert loaded.rt_matching.tolerance == 0.05
         assert loaded.rt_matching.high_priority is True
+        assert loaded.rt_matching.weights.apex == 0.2   # nested weights round-trip
     finally:
         os.unlink(path)
 
@@ -216,3 +218,18 @@ def test_rt_table_as_dataframe_empty():
     df = m.rt_table_as_dataframe()
     assert list(df.columns) == ["Compound", "Start", "Apex", "End"]
     assert len(df) == 0
+    # Numeric columns must be float64 on the empty path too (matches populated path),
+    # so downstream float comparisons in RT matching behave consistently.
+    assert str(df["Start"].dtype) == "float64"
+    assert str(df["Apex"].dtype) == "float64"
+    assert str(df["End"].dtype) == "float64"
+
+
+def test_matching_mode_rejects_out_of_range():
+    from logic.method import RTMatchingParams
+    from pydantic import ValidationError
+    RTMatchingParams(matching_mode=2)   # valid boundary
+    with pytest.raises(ValidationError):
+        RTMatchingParams(matching_mode=3)   # invalid
+    with pytest.raises(ValidationError):
+        RTMatchingParams(matching_mode=-1)  # invalid
