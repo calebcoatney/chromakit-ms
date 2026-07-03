@@ -77,6 +77,7 @@ class ChromatographicPeak(Feature):
         self.mass_mg = None  # Mass in milligrams
         self.mol_percent = None  # Mole percentage
         self.wt_percent = None  # Weight percentage
+        self.raw_amount = None  # Pre-normalization amount (area / RF); RF-table strategy
     
     @property
     def position(self) -> float:
@@ -156,6 +157,8 @@ class ChromatographicPeak(Feature):
             d['mol_percent'] = self.mol_percent
         if self.wt_percent is not None:
             d['wt_percent'] = self.wt_percent
+        if self.raw_amount is not None:
+            d['raw_amount'] = self.raw_amount
 
         return d
 
@@ -221,6 +224,8 @@ class ChromatographicPeak(Feature):
             peak.mol_percent = d['mol_percent']
         if 'wt_percent' in d:
             peak.wt_percent = d['wt_percent']
+        if 'raw_amount' in d:
+            peak.raw_amount = d['raw_amount']
         # Deconvolved spectrum (not emitted by as_dict but may be in API payloads)
         if 'deconvolved_spectrum' in d and d['deconvolved_spectrum'] is not None:
             spec = d['deconvolved_spectrum']

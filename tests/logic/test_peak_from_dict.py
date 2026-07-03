@@ -168,3 +168,25 @@ def test_from_dict_handles_compound_id_from_either_key():
     }
     peak = ChromatographicPeak.from_dict(d)
     assert peak.compound_id == 'Hexane'
+
+
+def test_raw_amount_round_trips():
+    from logic.integration import ChromatographicPeak
+    p = ChromatographicPeak(
+        compound_id="Carbon monoxide", peak_number=1, retention_time=2.0,
+        integrator="BB", width=0.1, area=209181.0, start_time=1.9, end_time=2.1,
+    )
+    assert p.raw_amount is None            # default
+    p.raw_amount = 1.5
+    d = p.as_dict()
+    assert d["raw_amount"] == 1.5
+    restored = ChromatographicPeak.from_dict(d)
+    assert restored.raw_amount == 1.5
+
+def test_raw_amount_absent_when_none():
+    from logic.integration import ChromatographicPeak
+    p = ChromatographicPeak(
+        compound_id="X", peak_number=1, retention_time=2.0,
+        integrator="BB", width=0.1, area=1.0, start_time=1.9, end_time=2.1,
+    )
+    assert "raw_amount" not in p.as_dict()   # omitted when None, like other quant fields
