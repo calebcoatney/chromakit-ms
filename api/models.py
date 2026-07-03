@@ -258,6 +258,16 @@ class RunRequest(BaseModel):
     )
 
 
+class RunQuantSummary(BaseModel):
+    """Compact quantitation summary attached to RunResponse (RF-table strategy)."""
+    strategy: Optional[str] = None
+    peaks_quantitated: int = 0
+    peaks_skipped_unassigned: int = 0
+    peaks_skipped_no_rf: int = 0
+    normalized: bool = True
+    warnings: List[str] = Field(default_factory=list)
+
+
 class RunResponse(BaseModel):
     """Response from POST /api/run."""
     status: str = Field(..., description="'complete' or 'error'")
@@ -269,6 +279,10 @@ class RunResponse(BaseModel):
     peaks: List[Dict[str, Any]]
     output_files: List[str] = Field(
         ..., description="Absolute paths of JSON files written to disk"
+    )
+    quantitation: Optional[RunQuantSummary] = Field(
+        default=None,
+        description="Quantitation summary; None when no quant strategy ran.",
     )
 
 

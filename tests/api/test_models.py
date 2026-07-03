@@ -137,3 +137,23 @@ def test_ms_batch_search_request_accepts_ms_time_offset_and_mz_shift():
     )
     assert req2.ms_time_offset == 0.123
     assert req2.mz_shift == 1
+
+
+def test_run_response_has_optional_quantitation():
+    from api.models import RunResponse, RunQuantSummary
+    # Back-compat: quantitation defaults to None and is omittable.
+    r = RunResponse(
+        status="complete", data_path="/x.D", method="M", version="1",
+        signal_type="gc", peak_count=0, peaks=[], output_files=[],
+    )
+    assert r.quantitation is None
+
+    q = RunQuantSummary(strategy="rf_table", peaks_quantitated=3)
+    r2 = RunResponse(
+        status="complete", data_path="/x.D", method="M", version="1",
+        signal_type="gc", peak_count=3, peaks=[], output_files=[], quantitation=q,
+    )
+    assert r2.quantitation.peaks_quantitated == 3
+    assert r2.quantitation.strategy == "rf_table"
+    assert r2.quantitation.normalized is True   # default
+    assert r2.quantitation.warnings == []       # default
