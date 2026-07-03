@@ -2,8 +2,9 @@
 import pandas as pd
 import pytest
 
-from logic.rt_matching import lookup_compound_by_rt
+from logic.rt_matching import lookup_compound_by_rt, apply_rt_matching
 from logic.method import RTMatchingParams, RTMatchingWeights
+from logic.integration import ChromatographicPeak
 
 
 def _df():
@@ -57,3 +58,49 @@ def test_weighted_distance_inside_window():
 def test_weighted_distance_far_outside_none():
     p = RTMatchingParams(matching_mode=2)
     assert lookup_compound_by_rt(50.0, _df(), p) is None
+
+
+# ---- apply_rt_matching (Task 4) ----
+def _peak(rt, compound_id="Unknown", peak_number=1):
+    return ChromatographicPeak(
+        compound_id=compound_id, peak_number=peak_number, retention_time=rt,
+        integrator="BB", width=0.1, area=1000.0, start_time=rt - 0.05, end_time=rt + 0.05,
+    )
+
+
+def test_apply_assigns_compound_id():
+    peaks = [_peak(2.1)]
+    apply_rt_matching(peaks, _df(), RTMatchingParams(matching_mode=0))
+    assert peaks[0].compound_id == "Carbon monoxide"
+    assert peaks[0].rt_assignment is True
+    assert peaks[0].rt_assignment_source == "RT"
+
+
+def test_high_priority_overrides_existing():
+    peaks = [_peak(2.1, compound_id="SomeMSHit")]
+    p = RTMatchingParams(matching_mode=0, high_priority=True)
+    apply_rt_matching(peaks, _df(), p)
+    assert peaks[0].compound_id == "Carbon monoxide"
+    assert peaks[0].rt_assignment_source == "RT (priority)"
+
+
+def test_low_priority_preserves_existing_nonunknown():
+    peaks = [_peak(2.1, compound_id="SomeMSHit")]
+    p = RTMatchingParams(matching_mode=0, high_priority=False)
+    apply_rt_matching(peaks, _df(), p)
+    assert peaks[0].compound_id == "SomeMSHit"   # not overridden
+    assert getattr(peaks[0], "rt_match_available", None) == "Carbon monoxide"
+
+
+def test_low_priority_fills_unknown():
+    peaks = [_peak(2.1, compound_id="Unknown")]
+    p = RTMatchingParams(matching_mode=0, high_priority=False)
+    apply_rt_matching(peaks, _df(), p)
+    assert peaks[0].compound_id == "Carbon monoxide"
+
+
+def test_no_match_leaves_peak_untouched():
+    peaks = [_peak(9.9, compound_id="Unknown")]   # far outside table
+    apply_rt_matching(peaks, _df(), RTMatchingParams(matching_mode=0))
+    assert peaks[0].compound_id == "Unknown"
+    assert getattr(peaks[0], "rt_assignment", False) is False

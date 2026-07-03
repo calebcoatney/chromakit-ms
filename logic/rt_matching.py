@@ -86,3 +86,51 @@ def _lookup_weighted_distance(retention_time, rt_table, weights):
     if dist_from_window <= max_dist_from_window:
         return best["Compound"]
     return None
+
+
+def apply_rt_matching(
+    peaks: list,
+    rt_table: pd.DataFrame,
+    params: RTMatchingParams,
+) -> None:
+    """Assign peak.compound_id (and peak.Compound_ID when present) in place.
+
+    Mirrors ui/app.py::_apply_rt_matching_to_peaks verbatim: high-priority
+    overrides any existing assignment; low-priority fills only Unknown/None;
+    sets rt_assignment / rt_assignment_source, clears Qual/casno/CAS_Number;
+    matched-but-not-applied peaks record rt_match_available. No dedup — the GUI
+    method performs none, and allow_duplicates is not consumed by matching.
+    """
+    if rt_table is None or len(rt_table) == 0:
+        return
+
+    for peak in peaks:
+        rt_compound = lookup_compound_by_rt(peak.retention_time, rt_table, params)
+        if not rt_compound:
+            continue
+
+        should_apply = False
+        assignment_source = None
+        if params.high_priority:
+            should_apply = True
+            assignment_source = "RT (priority)"
+        else:
+            current = getattr(peak, "compound_id", "Unknown")
+            unknown_str = f"Unknown ({peak.retention_time:.3f})"
+            if current in ("Unknown", unknown_str, None):
+                should_apply = True
+                assignment_source = "RT"
+
+        if should_apply:
+            peak.compound_id = rt_compound
+            if hasattr(peak, "Compound_ID"):
+                peak.Compound_ID = rt_compound
+            peak.rt_assignment = True
+            peak.rt_assignment_source = assignment_source
+            peak.Qual = None
+            if hasattr(peak, "casno"):
+                peak.casno = None
+            if hasattr(peak, "CAS_Number"):
+                peak.CAS_Number = None
+        else:
+            peak.rt_match_available = rt_compound
