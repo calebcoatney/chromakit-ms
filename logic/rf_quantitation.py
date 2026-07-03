@@ -68,6 +68,14 @@ def quantitate_rf(
     total = float(sum(raw for _, raw in quantitated))
     summary.total_raw_amount = total
 
+    # Loud, alarmable signal when nothing was quantitated but peaks were present
+    # (real-time feeds want a flagged-empty result, not a silent zero — spec §3e).
+    if not quantitated and (summary.skipped_unassigned or summary.skipped_no_rf):
+        summary.warnings.append(
+            f"No peaks quantitated: {len(summary.skipped_unassigned)} unassigned, "
+            f"{len(summary.skipped_no_rf)} without an RF-table entry."
+        )
+
     if normalize:
         if total == 0:
             if quantitated:

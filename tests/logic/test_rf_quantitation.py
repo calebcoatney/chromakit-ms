@@ -54,6 +54,16 @@ def test_unassigned_peak_is_flagged():
     assert len(summary.skipped_unassigned) == 1
 
 
+def test_nothing_quantitated_emits_loud_warning():
+    # All peaks skipped (one no-RF, one unassigned) → a warning must be present
+    # so a real-time feed can alarm on it (spec §3e).
+    peaks = [_peak("Argon", 500.0, 1), _peak("Unknown (2.000)", 500.0, 2)]
+    summary = quantitate_rf(peaks, _rf(), normalize=True)
+    assert summary.peaks_quantitated == 0
+    assert len(summary.warnings) >= 1
+    assert any("no peaks quantitated" in w.lower() for w in summary.warnings)
+
+
 def test_empty_inputs_clean_summary():
     summary = quantitate_rf([], _rf(), normalize=True)
     assert summary.peaks_quantitated == 0

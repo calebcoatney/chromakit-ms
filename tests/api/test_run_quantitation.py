@@ -77,3 +77,28 @@ def test_run_legacy_method_no_quant_block(client, tmp_path):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["quantitation"] is None       # backward-compat: no quant ran
+
+
+def test_run_nothing_quantitated_returns_200_with_warnings(client, tmp_path):
+    # RF strategy is on, but the RT table windows don't cover the fake peaks'
+    # RTs (1.1, 2.1), so nothing gets assigned/quantitated. Spec §3e: return 200
+    # with a loud warning, not an error.
+    m = ChromaMethod(name="RAPIDS", signal_type="gc", quant_strategy="rf_table")
+    m.rt_table = [RTTableEntry(compound="Methane", start=8.0, apex=8.1, end=8.2)]
+    m.rf_table = [RFTableEntry(compound="Methane", response_factor=100.0)]
+    method_path = str(tmp_path / "m.chromethod")
+    m.to_file(method_path)
+
+    with patch("api.main.data_handler.load_data_directory", return_value=_fake_data()), \
+         patch("api.main.data_handler.current_detector", "FID1A", create=True), \
+         patch("api.main.processor.process", return_value={}), \
+         patch("api.main.processor.integrate_peaks",
+               return_value={"peaks": _fake_peaks()}):
+        resp = client.post("/api/run", json={
+            "data_path": "/fake.D", "method_path": method_path, "write_output": False,
+        })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["quantitation"] is not None
+    assert body["quantitation"]["peaks_quantitated"] == 0
+    assert len(body["quantitation"]["warnings"]) >= 1

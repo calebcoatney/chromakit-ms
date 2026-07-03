@@ -78,10 +78,12 @@ def test_apply_assigns_compound_id():
 
 def test_high_priority_overrides_existing():
     peaks = [_peak(2.1, compound_id="SomeMSHit")]
+    peaks[0].Qual = 88.0   # simulate a prior MS-search match score
     p = RTMatchingParams(matching_mode=0, high_priority=True)
     apply_rt_matching(peaks, _df(), p)
     assert peaks[0].compound_id == "Carbon monoxide"
     assert peaks[0].rt_assignment_source == "RT (priority)"
+    assert peaks[0].Qual is None   # MS match score cleared on RT override
 
 
 def test_low_priority_preserves_existing_nonunknown():
