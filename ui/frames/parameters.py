@@ -1781,59 +1781,6 @@ class ParametersFrame(QWidget):
         self.current_params = method.to_gui_params()
         self._reinitialize_controls()
 
-    def _on_save_method(self):
-        """Serialize current widget state to a .chromethod file."""
-        from PySide6.QtWidgets import QFileDialog, QInputDialog
-        from logic.method import ChromaMethod
-
-        name, ok = QInputDialog.getText(self, "Save Method", "Method name:")
-        if not ok or not name.strip():
-            return
-
-        signal_type, ok = QInputDialog.getItem(
-            self, "Save Method", "Signal type:",
-            ["gc", "gcms", "ftir", "uvvis"], 0, False,
-        )
-        if not ok:
-            return
-
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Method", f"{name.strip()}.chromethod",
-            "ChromaKit Method (*.chromethod)",
-        )
-        if not path:
-            return
-
-        try:
-            method = ChromaMethod.from_gui_params(
-                self.current_params, name=name.strip(), signal_type=signal_type,
-            )
-            method.to_file(path)
-        except Exception as e:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Save Method Failed", str(e))
-
-    def _on_load_method(self):
-        """Load a .chromethod file and apply it to the parameter widgets."""
-        from PySide6.QtWidgets import QFileDialog, QMessageBox
-        from logic.method import ChromaMethod
-
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load Method", "", "ChromaKit Method (*.chromethod)",
-        )
-        if not path:
-            return
-
-        try:
-            method = ChromaMethod.from_file(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Load Method Failed", str(e))
-            return
-
-        self.current_params = method.to_gui_params()
-        self._reinitialize_controls()
-        self.parameters_changed.emit(self.current_params)
-
     def _reinitialize_controls(self):
         """Rebuild all parameter widgets from self.current_params.
 

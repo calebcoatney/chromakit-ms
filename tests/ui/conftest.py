@@ -20,3 +20,21 @@ def _no_ms_autoload(monkeypatch):
     """
     from ui.frames.ms import MSFrame
     monkeypatch.setattr(MSFrame, "_try_autoload_library", lambda self: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_close_prompt(monkeypatch):
+    """Neutralize the document dirty-save prompt during teardown.
+
+    ChromaKitApp.closeEvent calls _maybe_prompt_save(), which pops a modal
+    QMessageBox.question when the method is dirty. Tests routinely leave a
+    window dirty (e.g. mark_dirty checks), and pytest-qt closes every managed
+    widget at teardown -- headlessly the modal blocks forever and hangs the
+    run. Stub the prompt to "proceed" (return True) for every ui/ test.
+
+    Tests that need to exercise a specific prompt outcome override
+    _maybe_prompt_save on the instance themselves (this class-level default is
+    compatible with such per-instance monkeypatches).
+    """
+    from ui.app import ChromaKitApp
+    monkeypatch.setattr(ChromaKitApp, "_maybe_prompt_save", lambda self: True)

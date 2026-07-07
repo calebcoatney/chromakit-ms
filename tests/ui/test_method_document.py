@@ -89,3 +89,43 @@ def test_strategy_change_writes_back(qtbot):
     app.quantitation_frame.select_strategy("rf_table")
     assert app.current_method.quant_strategy == "rf_table"
     assert app._method_dirty is True
+
+
+def test_save_as_writes_and_clears_dirty(qtbot, tmp_path, monkeypatch):
+    app = _make(qtbot)
+    app._mark_dirty(True)
+    out = tmp_path / "mymethod.chromethod"
+    monkeypatch.setattr(
+        "ui.app.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), "ChromaKit Method (*.chromethod)"),
+    )
+    app.save_method_as()
+    assert out.exists()
+    assert app.current_method_path == out or str(app.current_method_path) == str(out)
+    assert app.current_method.name == "mymethod"
+    assert app._method_dirty is False
+
+
+def test_load_repopulates_and_clears_dirty(qtbot, tmp_path, monkeypatch):
+    from logic.method import ChromaMethod, RFTableEntry
+    src = tmp_path / "loaded.chromethod"
+    ChromaMethod(
+        name="loaded", signal_type="gc", quant_strategy="rf_table",
+        rf_table=[RFTableEntry(compound="Hydrogen", response_factor=402304.0)],
+    ).to_file(src)
+
+    app = _make(qtbot)
+    app._mark_dirty(True)
+    monkeypatch.setattr(
+        "ui.app.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(src), "ChromaKit Method (*.chromethod)"),
+    )
+    # Avoid the dirty prompt blocking the test:
+    monkeypatch.setattr(app, "_maybe_prompt_save", lambda: True)
+    app.load_method()
+    assert app.current_method.name == "loaded"
+    assert app.current_method.quant_strategy == "rf_table"
+    assert app._method_dirty is False
+    # Frames were repopulated:
+    assert app.quantitation_frame.current_strategy() == "rf_table"
+    assert any(e.compound == "Hydrogen" for e in app.current_method.rf_table)

@@ -287,12 +287,74 @@ class ChromaKitApp(QMainWindow):
         self.setWindowTitle(title)
 
     def save_method(self):
-        # Implemented in Task 13.
-        pass
+        from pathlib import Path
+        if self.current_method_path is None:
+            return self.save_method_as()
+        try:
+            self.current_method.to_file(self.current_method_path)
+            self._mark_dirty(False)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Method Failed", str(e))
+
+    def save_method_as(self):
+        from pathlib import Path
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Method", f"{self.current_method.name}.chromethod",
+            "ChromaKit Method (*.chromethod)",
+        )
+        if not path:
+            return
+        try:
+            self.current_method.name = Path(path).stem
+            self.current_method.to_file(path)
+            self.current_method_path = Path(path)
+            self._mark_dirty(False)
+            self._update_window_title()
+        except Exception as e:
+            QMessageBox.critical(self, "Save Method Failed", str(e))
 
     def load_method(self):
-        # Implemented in Task 13.
-        pass
+        from pathlib import Path
+        from logic.method import ChromaMethod
+        if not self._maybe_prompt_save():
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Method", "", "ChromaKit Method (*.chromethod)",
+        )
+        if not path:
+            return
+        try:
+            method = ChromaMethod.from_file(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Load Method Failed", str(e))
+            return
+        self.current_method = method
+        self.current_method_path = Path(path)
+        self._apply_method_to_frames()
+        self._mark_dirty(False)
+        self._update_window_title()
+
+    def _maybe_prompt_save(self) -> bool:
+        if not self._method_dirty:
+            return True
+        resp = QMessageBox.question(
+            self, "Unsaved Changes",
+            f"Save changes to '{self.current_method.name}'?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if resp == QMessageBox.Cancel:
+            return False
+        if resp == QMessageBox.Save:
+            self.save_method()
+            return not self._method_dirty  # False if save was cancelled at the file dialog
+        return True  # Discard
+
+    def closeEvent(self, event):
+        if not self._maybe_prompt_save():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _on_params_writeback(self, params):
         """Pull the processing-params slice back into current_method when the
