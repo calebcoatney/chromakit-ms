@@ -1195,7 +1195,12 @@ class ChromaKitApp(QMainWindow):
         peak = self.integrated_peaks[peak_index]
         
         # Look up compound from RT table
-        rt_compound = self.rt_table_frame.lookup_compound_by_rt(peak.retention_time)
+        import logic.rt_matching as rt_matching
+        rt_compound = rt_matching.lookup_compound_by_rt(
+            peak.retention_time,
+            self.current_method.rt_table_as_dataframe(),
+            self.current_method.rt_matching,
+        )
         
         if not rt_compound:
             self.status_bar.showMessage(f"No compound found in RT table for retention time {peak.retention_time:.3f} min")
@@ -2107,57 +2112,17 @@ class ChromaKitApp(QMainWindow):
             return None
 
     def _apply_rt_matching_to_peaks(self, peaks):
-        """Apply RT table matching to integrated peaks."""
-        rt_table_frame = self.rt_table_frame
-        # Use the frame's live state as the authoritative source so this works
-        # even when rt_settings was never emitted (e.g. app restarted with RT
-        # table already loaded but checkbox not toggled again this session).
-        if not rt_table_frame.is_enabled():
+        """Apply RT table matching to integrated peaks via shared logic."""
+        import logic.rt_matching as rt_matching
+        # is_enabled() is the runtime on/off toggle (checkbox + data present);
+        # it is NOT persisted in the method, so it stays a frame call.
+        if not self.rt_table_frame.is_enabled():
             return
-        high_priority = rt_table_frame.high_priority_checkbox.isChecked()
-        
-        for peak in peaks:
-            # Look up compound by retention time
-            rt_compound = rt_table_frame.lookup_compound_by_rt(peak.retention_time)
-
-            if rt_compound:
-                # Check if we should apply the RT assignment
-                should_apply = False
-
-                if high_priority:
-                    # High priority: always override
-                    should_apply = True
-                    assignment_source = "RT (priority)"
-                else:
-                    # Low priority: only assign if no existing assignment or unknown
-                    current_compound = getattr(peak, 'compound_id', 'Unknown')
-                    if current_compound in ['Unknown', f"Unknown ({peak.retention_time:.3f})", None]:
-                        should_apply = True
-                        assignment_source = "RT"
-                    else:
-                        assignment_source = None
-
-                if should_apply:
-                    # Apply RT assignment
-                    peak.compound_id = rt_compound
-                    if hasattr(peak, 'Compound_ID'):
-                        peak.Compound_ID = rt_compound
-
-                    # Mark as RT assignment and clear MS search info
-                    peak.rt_assignment = True
-                    peak.rt_assignment_source = assignment_source
-                    peak.Qual = None  # Clear MS match score
-
-                    # Clear MS-related fields since this is an RT assignment
-                    if hasattr(peak, 'casno'):
-                        peak.casno = None
-                    if hasattr(peak, 'CAS_Number'):
-                        peak.CAS_Number = None
-
-                    print(f"RT matching: Peak {peak.peak_number} at {peak.retention_time:.3f} min assigned to '{rt_compound}' ({assignment_source})")
-                else:
-                    # Mark that RT matching was available but not used
-                    peak.rt_match_available = rt_compound
+        params = self.current_method.rt_matching
+        df = self.current_method.rt_table_as_dataframe()
+        if df.empty:
+            return
+        rt_matching.apply_rt_matching(peaks, df, params)
 
     def _show_integration_results(self, integration_results):
         """Show integration results in a dialog."""

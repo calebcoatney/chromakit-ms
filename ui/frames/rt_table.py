@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 import pandas as pd
-import numpy as np
 import json
 
 from logic.method import ChromaMethod, RTTableEntry, RTMatchingParams, RTMatchingWeights
@@ -733,130 +732,6 @@ class RTTableFrame(QWidget):
         }
         
         self.rt_table_changed.emit(settings)
-    
-    def lookup_compound_by_rt(self, retention_time):
-        """Look up compound name by retention time using the selected matching strategy."""
-        if self.rt_table_data is None or not self.enable_checkbox.isChecked():
-            return None
-        
-        mode = self.matching_mode_combo.currentIndex()
-        
-        if mode == 0:  # Simple Window Matching (legacy mode)
-            return self._lookup_simple_window(retention_time)
-        elif mode == 1:  # Closest Apex RT Matching
-            return self._lookup_closest_apex(retention_time)
-        elif mode == 2:  # Weighted Distance Matching
-            return self._lookup_weighted_distance(retention_time)
-        
-        return None
-    
-    def _lookup_simple_window(self, retention_time):
-        """Simple window matching (legacy method)."""
-        # Add window expansion if specified
-        expansion = self.window_expansion_spin.value()
-        
-        # Find compounds where retention time falls within the window
-        matches = self.rt_table_data[
-            (self.rt_table_data['Start'] - expansion <= retention_time) &
-            (retention_time <= self.rt_table_data['End'] + expansion)
-        ]
-        
-        if len(matches) == 0:
-            return None
-        elif len(matches) == 1:
-            return matches.iloc[0]['Compound']
-        else:
-            # Multiple matches - choose the one with the narrowest window
-            matches['window_size'] = matches['End'] - matches['Start']
-            best_match = matches.loc[matches['window_size'].idxmin()]
-            return best_match['Compound']
-    
-    def _lookup_closest_apex(self, retention_time):
-        """Closest apex RT matching with tolerance."""
-        tolerance = self.tolerance_spin.value()
-        
-        # Calculate distance from each apex RT
-        distances = np.abs(self.rt_table_data['Apex'] - retention_time)
-        
-        # Find matches within tolerance
-        within_tolerance = distances <= tolerance
-        
-        if not within_tolerance.any():
-            return None
-        
-        # Get the closest match within tolerance
-        closest_idx = distances[within_tolerance].idxmin()
-        return self.rt_table_data.loc[closest_idx, 'Compound']
-    
-    def _lookup_weighted_distance(self, retention_time):
-        """Weighted distance-based matching using start, apex, and end RTs with boundary validation."""
-        if not hasattr(self, 'normalized_weights'):
-            # Fallback to default weights if not initialized
-            self.normalized_weights = {'start': 0.25, 'apex': 0.50, 'end': 0.25}
-        
-        weights = self.normalized_weights
-        
-        # First, do a reasonable boundary check to prevent obviously bad matches
-        rt_range = self.rt_table_data['End'].max() - self.rt_table_data['Start'].min()
-        table_left_bound = self.rt_table_data['Start'].min()
-        table_right_bound = self.rt_table_data['End'].max()
-        
-        # Calculate window analysis for more reasonable boundary checking
-        compound_windows = self.rt_table_data['End'] - self.rt_table_data['Start']
-        avg_window_width = compound_windows.mean()
-        
-        # More reasonable boundary tolerance - prevent peaks way outside the table
-        # Use larger of: average window width or 5% of total range, but cap at 1.0 min
-        boundary_tolerance = min(
-            max(avg_window_width, rt_range * 0.05),  # Reasonable extension
-            1.0                                       # But not more than 1 minute
-        )
-        
-        # Only reject peaks that are way outside the reasonable range
-        if (retention_time < (table_left_bound - boundary_tolerance) or 
-            retention_time > (table_right_bound + boundary_tolerance)):
-            return None  # Peak is way outside the RT table range
-        
-        # Calculate weighted distances for each compound
-        distances = []
-        for _, row in self.rt_table_data.iterrows():
-            start_dist = abs(row['Start'] - retention_time)
-            apex_dist = abs(row['Apex'] - retention_time)
-            end_dist = abs(row['End'] - retention_time)
-            
-            # Weighted distance calculation
-            weighted_dist = (weights['start'] * start_dist + 
-                           weights['apex'] * apex_dist + 
-                           weights['end'] * end_dist)
-            distances.append(weighted_dist)
-        
-        # Find the compound with minimum weighted distance
-        min_dist_idx = np.argmin(distances)
-        min_distance = distances[min_dist_idx]
-        best_match = self.rt_table_data.iloc[min_dist_idx]
-        
-        # More reasonable final threshold - based on compound's own characteristics
-        compound_window_width = best_match['End'] - best_match['Start']
-        
-        # Check if peak is at least close to the compound's RT range
-        # Allow some reasonable distance outside the compound window
-        max_distance_from_window = compound_window_width * 0.75  # 75% of window width
-        
-        # Calculate distance from the compound's RT window
-        distance_from_window = 0
-        if retention_time < best_match['Start']:
-            distance_from_window = best_match['Start'] - retention_time
-        elif retention_time > best_match['End']:
-            distance_from_window = retention_time - best_match['End']
-        # If inside the window, distance_from_window remains 0
-        
-        # Accept the match if:
-        # 1. The peak is inside the compound window, OR
-        # 2. The peak is close enough outside the window (within 75% of window width)
-        if distance_from_window <= max_distance_from_window:
-            return best_match['Compound']
-        
-        return None
     
     def add_peak_to_rt_table(self, peak_data):
         """Add a peak to the RT table with user input for compound name."""
