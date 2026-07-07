@@ -87,6 +87,13 @@ class EditableTableWidget(QWidget):
             return pd.DataFrame({c.key: [] for c in self._columns})
         return pd.DataFrame(rows, columns=[c.key for c in self._columns])
 
+    def set_column_header(self, key: str, text: str) -> None:
+        """Retitle the visible header of the column identified by ColumnSpec.key."""
+        for idx, col in enumerate(self._columns):
+            if col.key == key:
+                self.table.setHorizontalHeaderItem(idx, QTableWidgetItem(text))
+                return
+
     # internals
     def _coerce(self, text: str, col: ColumnSpec):
         if col.dtype == "float":

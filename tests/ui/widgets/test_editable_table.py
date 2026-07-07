@@ -89,3 +89,15 @@ def test_bad_float_coerces_on_read(qtbot):
     w.table.item(0, 1).setText("not-a-number")
     rows = w.get_rows()
     assert rows[0]["response_factor"] == 0.0  # default fallback, no crash
+
+
+def test_set_column_header_retitles(qtbot):
+    w = _make(qtbot)
+    w.set_column_header("response_factor", "Response Factor (area/wt%)")
+    hdr = w.table.horizontalHeaderItem(1).text()
+    assert hdr == "Response Factor (area/wt%)"
+
+
+def test_set_column_header_unknown_key_is_noop(qtbot):
+    w = _make(qtbot)
+    w.set_column_header("nonexistent", "X")  # must not raise
