@@ -863,6 +863,8 @@ class RTTableFrame(QWidget):
     
     def _on_settings_changed(self):
         """Handle changes to RT matching settings."""
+        if getattr(self, "_applying", False):
+            return
         enabled = self.enable_checkbox.isChecked() and self.rt_table_data is not None
         
         # Update dependent controls

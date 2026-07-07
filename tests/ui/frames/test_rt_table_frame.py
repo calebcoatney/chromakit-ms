@@ -53,3 +53,11 @@ def test_get_rt_entries_and_matching_params(qtbot):
     params = frame.get_matching_params()
     assert params.matching_mode == 1
     assert params.high_priority is True
+
+
+def test_apply_method_does_not_emit_rt_table_changed(qtbot):
+    frame = _make(qtbot)
+    fired = []
+    frame.rt_table_changed.connect(lambda *a: fired.append(True))
+    frame.apply_method(_method_with_rt())
+    assert fired == []  # programmatic load must be silent (no feedback-loop trigger)
