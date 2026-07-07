@@ -7,9 +7,12 @@ get_rf_entries() into current_method.rf_table.
 from __future__ import annotations
 from typing import List
 
+import csv
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QFileDialog, QMessageBox,
 )
 
 from logic.method import ChromaMethod, RFTableEntry
@@ -24,6 +27,9 @@ RF_COLUMNS = [
 
 class RFTableFrame(QWidget):
     rf_table_changed = Signal()
+
+    _COMPOUND_KEYS = ("Compound", "compound", "name", "Name")
+    _RF_KEYS = ("Response Factor", "response_factor", "RF", "rf")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,12 +53,52 @@ class RFTableFrame(QWidget):
         layout.addLayout(file_bar)
         layout.addStretch()
 
+        self.import_btn.clicked.connect(self._on_import)
+        self.export_btn.clicked.connect(self._on_export)
+
     def apply_method(self, method: ChromaMethod) -> None:
         rows = [
             {"Compound": e.compound, "response_factor": e.response_factor}
             for e in method.rf_table
         ]
         self.table.set_rows(rows)   # guarded — no emit
+
+    def _on_import(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import RF Table", "", "CSV Files (*.csv);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            rows = []
+            with open(path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for raw in reader:
+                    name = next((raw[k] for k in self._COMPOUND_KEYS if k in raw and raw[k]), None)
+                    rf = next((raw[k] for k in self._RF_KEYS if k in raw and raw[k] not in (None, "")), None)
+                    if name is None or rf is None:
+                        continue
+                    rows.append({"Compound": str(name).strip(), "response_factor": float(rf)})
+        except Exception as e:
+            QMessageBox.critical(self, "Import RF Table Failed", str(e))
+            return
+        self.table.set_rows(rows)   # replace
+        self.rf_table_changed.emit()
+
+    def _on_export(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export RF Table", "rf_table.csv", "CSV Files (*.csv);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Compound", "Response Factor"])
+                for e in self.get_rf_entries():
+                    writer.writerow([e.compound, e.response_factor])
+        except Exception as e:
+            QMessageBox.critical(self, "Export RF Table Failed", str(e))
 
     def add_entry(self, compound: str, response_factor: float) -> None:
         rows = self.table.get_rows()

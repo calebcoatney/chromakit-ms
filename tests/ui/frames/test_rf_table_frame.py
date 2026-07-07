@@ -66,3 +66,35 @@ def test_get_rf_entries_returns_models(qtbot):
     assert all(isinstance(e, RFTableEntry) for e in entries)
     assert entries[0].compound == "Hydrogen"
     assert entries[0].response_factor == 402304.0
+
+
+def test_export_csv_writes_rows(qtbot, tmp_path, monkeypatch):
+    frame = _make(qtbot)
+    frame.apply_method(_method_with_rf())
+    out = tmp_path / "rf.csv"
+    monkeypatch.setattr(
+        "ui.frames.rf_table.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), "CSV Files (*.csv)"),
+    )
+    frame.export_btn.click()
+    text = out.read_text()
+    assert "Hydrogen" in text and "402304" in text
+    assert "Carbon monoxide" in text
+
+
+def test_import_csv_replaces_and_accepts_spellings(qtbot, tmp_path, monkeypatch):
+    frame = _make(qtbot)
+    frame.apply_method(_method_with_rf())  # start with 2 rows
+    src = tmp_path / "in.csv"
+    src.write_text("compound,RF\nMethane,1000\nEthane,2000\n")
+    monkeypatch.setattr(
+        "ui.frames.rf_table.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(src), "CSV Files (*.csv)"),
+    )
+    fired = []
+    frame.rf_table_changed.connect(lambda: fired.append(True))
+    frame.import_btn.click()
+    entries = frame.get_rf_entries()
+    assert [e.compound for e in entries] == ["Methane", "Ethane"]  # replaced
+    assert entries[0].response_factor == 1000.0
+    assert fired == [True]
