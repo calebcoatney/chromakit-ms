@@ -1,7 +1,7 @@
 """Tests for logic/rf_quantitation.py — RF-table external-standard quant."""
 import pytest
 
-from logic.rf_quantitation import quantitate_rf, RFQuantSummary
+from logic.rf_quantitation import quantitate_rf, RFQuantSummary, RF_UNITS
 from logic.method import RFTableEntry
 from logic.integration import ChromatographicPeak
 
@@ -96,3 +96,68 @@ def test_mixed_batch_unequal_amounts():
     assert summary.peaks_quantitated == 2
     assert len(summary.skipped_no_rf) == 1
     assert len(summary.skipped_unassigned) == 1
+
+
+# --- RF unit / composition basis (Task 1) --------------------------------
+# Reuse the module's real-class factories: _peak() -> ChromatographicPeak,
+# _rf() -> [RFTableEntry(Hydrogen, RF=100), RFTableEntry(CO, RF=200)].
+# H2 1000/100 = 10 raw, CO 2000/200 = 10 raw -> total 20 -> 50/50.
+def _peaks():
+    return [_peak("Hydrogen", 1000.0, 1), _peak("Carbon monoxide", 2000.0, 2)]
+
+
+def test_mol_basis_sets_both_fields():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="area_per_mol")
+    assert abs(peaks[0].composition_percent - 50.0) < 1e-9
+    assert abs(peaks[0].mol_percent - 50.0) < 1e-9
+    assert s.composition_basis == "mol%"
+    assert s.rf_unit == "area_per_mol"
+    assert not s.warnings
+
+
+def test_mol_pct_basis_also_mol():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="area_per_mol_pct")
+    assert peaks[0].mol_percent is not None
+    assert s.composition_basis == "mol%"
+
+
+def test_wt_basis_sets_composition_not_mol():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="area_per_wt_pct")
+    assert abs(peaks[0].composition_percent - 50.0) < 1e-9
+    assert peaks[0].mol_percent is None
+    assert s.composition_basis == "wt%"
+    assert not s.warnings
+
+
+def test_molC_basis():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="area_per_molC_pct")
+    assert peaks[0].composition_percent is not None
+    assert peaks[0].mol_percent is None
+    assert s.composition_basis == "molC%"
+
+
+def test_unspecified_warns_and_writes_mol_percent_legacy():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="unspecified")
+    assert peaks[0].composition_percent is not None
+    assert peaks[0].mol_percent is not None
+    assert s.composition_basis is None
+    assert any("unspecified" in w.lower() for w in s.warnings)
+
+
+def test_default_rf_unit_is_unspecified():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf())
+    assert s.rf_unit == "unspecified"
+    assert peaks[0].mol_percent is not None
+    assert peaks[0].composition_percent is not None
+
+
+def test_rf_units_mapping_shape():
+    assert RF_UNITS["area_per_mol"] == "mol%"
+    assert RF_UNITS["area_per_wt_pct"] == "wt%"
+    assert RF_UNITS["unspecified"] is None

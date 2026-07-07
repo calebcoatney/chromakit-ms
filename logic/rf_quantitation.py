@@ -16,6 +16,26 @@ from typing import List, Optional
 import re
 
 
+# RF denominator code → normalized-composition output label (None = unspecified/unknown).
+RF_UNITS = {
+    "area_per_mol":      "mol%",
+    "area_per_mol_pct":  "mol%",
+    "area_per_molC_pct": "molC%",
+    "area_per_wt_pct":   "wt%",
+    "unspecified":       None,
+}
+# Human-readable labels for the GUI dropdown (code → display text).
+RF_UNIT_LABELS = {
+    "area_per_mol":      "area/mol",
+    "area_per_mol_pct":  "area/mol%",
+    "area_per_molC_pct": "area/molC%",
+    "area_per_wt_pct":   "area/wt%",
+    "unspecified":       "unspecified",
+}
+# Codes for which mol_percent is written (backward compat).
+_MOL_BASIS = {"area_per_mol", "area_per_mol_pct"}
+
+
 @dataclass
 class RFQuantSummary:
     strategy: str = "rf_table"
@@ -26,6 +46,8 @@ class RFQuantSummary:
     skipped_unassigned: list = field(default_factory=list)   # peak RT / index strings
     skipped_no_rf: list = field(default_factory=list)         # "compound — reason" strings
     warnings: list = field(default_factory=list)
+    rf_unit: str = "unspecified"
+    composition_basis: Optional[str] = None
 
 
 _UNKNOWN_RT = re.compile(r"Unknown \(\d+\.\d+\)")
@@ -45,9 +67,13 @@ def _is_unassigned(compound_id) -> bool:
 def quantitate_rf(
     peaks: list,
     rf_table: "List",                 # list[RFTableEntry]
+    rf_unit: str = "unspecified",
     normalize: bool = True,
 ) -> RFQuantSummary:
     summary = RFQuantSummary(normalized=normalize, peaks_total=len(peaks))
+    summary.rf_unit = rf_unit
+    summary.composition_basis = RF_UNITS.get(rf_unit)
+    write_mol_percent = (rf_unit in _MOL_BASIS) or (rf_unit == "unspecified")
     rf_lookup = {e.compound: e.response_factor for e in rf_table}
 
     quantitated = []  # (peak, raw_amount)
@@ -68,6 +94,11 @@ def quantitate_rf(
     total = float(sum(raw for _, raw in quantitated))
     summary.total_raw_amount = total
 
+    if rf_unit == "unspecified" and summary.peaks_quantitated > 0:
+        summary.warnings.append(
+            "RF unit unspecified — composition basis unknown; set an RF unit for a labeled result."
+        )
+
     # Loud, alarmable signal when nothing was quantitated but peaks were present
     # (real-time feeds want a flagged-empty result, not a silent zero — spec §3e).
     if not quantitated and (summary.skipped_unassigned or summary.skipped_no_rf):
@@ -83,9 +114,14 @@ def quantitate_rf(
                     "Total raw amount is zero; mol% set to 0 for all peaks."
                 )
             for peak, _ in quantitated:
-                peak.mol_percent = 0.0
+                peak.composition_percent = 0.0
+                if write_mol_percent:
+                    peak.mol_percent = 0.0
         else:
             for peak, raw in quantitated:
-                peak.mol_percent = 100.0 * raw / total
+                pct = 100.0 * raw / total
+                peak.composition_percent = pct
+                if write_mol_percent:
+                    peak.mol_percent = pct
 
     return summary
