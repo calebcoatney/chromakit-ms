@@ -57,3 +57,35 @@ def test_param_edit_preserves_method_metadata(qtbot):
     assert app.current_method.name == "Loaded"          # identity preserved
     assert app.current_method.signal_type == "gc"
     assert app._method_dirty is True                     # edit still marks dirty
+
+
+def test_rf_tab_present(qtbot):
+    app = _make(qtbot)
+    assert app.rf_table_frame is not None
+    titles = [app.right_tabs.tabText(i) for i in range(app.right_tabs.count())]
+    assert "RF Table" in titles
+
+
+def test_rt_edit_writes_back_and_dirties(qtbot):
+    app = _make(qtbot)
+    app._method_dirty = False
+    app.rt_table_frame.rt_table.set_rows([
+        {"Compound": "Methane", "Start": 1.0, "Apex": 1.1, "End": 1.2},
+    ])
+    app.rt_table_frame.rt_table.table_edited.emit()  # simulate a user edit notification
+    assert any(e.compound == "Methane" for e in app.current_method.rt_table)
+    assert app._method_dirty is True
+
+
+def test_rf_edit_writes_back(qtbot):
+    app = _make(qtbot)
+    app.rf_table_frame.add_entry("Hydrogen", 402304.0)
+    assert any(e.compound == "Hydrogen" for e in app.current_method.rf_table)
+    assert app._method_dirty is True
+
+
+def test_strategy_change_writes_back(qtbot):
+    app = _make(qtbot)
+    app.quantitation_frame.select_strategy("rf_table")
+    assert app.current_method.quant_strategy == "rf_table"
+    assert app._method_dirty is True

@@ -124,3 +124,31 @@ def test_import_csv_skips_blank_compound_rows(qtbot, tmp_path, monkeypatch):
     entries = frame.get_rt_entries()
     assert [e.compound for e in entries] == ["Benzene"]  # blank-name row dropped
     assert not (frame.rt_table_data["Compound"].astype(str).str.strip() == "").any()
+
+
+def test_apply_method_enables_controls_when_rt_table_present(qtbot):
+    frame = _make(qtbot)
+    frame.apply_method(_method_with_rt())   # _method_with_rt has 2 RT entries
+    # After loading a method carrying an RT table, the frame must be in the same
+    # enabled state as after a file import: the enable checkbox is usable (the
+    # gate is no longer stuck disabled) and the ancillary file controls are on.
+    assert frame.enable_checkbox.isEnabled() is True
+    assert frame.export_button.isEnabled() is True
+    assert frame.clear_button.isEnabled() is True
+
+
+def test_apply_method_with_empty_rt_table_leaves_controls_disabled(qtbot):
+    frame = _make(qtbot)
+    from logic.method import ChromaMethod
+    frame.apply_method(ChromaMethod(name="M", signal_type="gc"))  # no RT entries
+    # No data → controls stay disabled, mirroring the boot / clear state.
+    assert frame.enable_checkbox.isEnabled() is False
+    assert frame.export_button.isEnabled() is False
+
+
+def test_apply_method_does_not_emit_when_enabling_controls(qtbot):
+    frame = _make(qtbot)
+    fired = []
+    frame.rt_table_changed.connect(lambda *a: fired.append(True))
+    frame.apply_method(_method_with_rt())  # enabling controls must stay silent
+    assert fired == []

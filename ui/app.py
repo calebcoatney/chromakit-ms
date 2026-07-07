@@ -13,6 +13,7 @@ from ui.frames.parameters import ParametersFrame
 from ui.frames.ms import MSFrame
 from ui.frames.rt_table import RTTableFrame
 from ui.frames.quantitation import QuantitationFrame
+from ui.frames.rf_table import RFTableFrame
 from ui.frames.buttons import ButtonFrame
 from ui.dialogs.automation_dialog import AutomationDialog
 from ui.dialogs.export_settings_dialog import ExportSettingsDialog
@@ -105,6 +106,9 @@ class ChromaKitApp(QMainWindow):
         # Create RT Table frame
         self.rt_table_frame = RTTableFrame()
         
+        # Create RF Table frame
+        self.rf_table_frame = RFTableFrame()
+        
         # Create Quantitation frame
         self.quantitation_frame = QuantitationFrame()
         
@@ -113,6 +117,7 @@ class ChromaKitApp(QMainWindow):
         self.right_tabs.addTab(self.parameters_frame, "Parameters")
         self.right_tabs.addTab(self.ms_frame, "Mass Spectrometry")
         self.right_tabs.addTab(self.rt_table_frame, "RT Table")
+        self.right_tabs.addTab(self.rf_table_frame, "RF Table")
         self.right_tabs.addTab(self.quantitation_frame, "Quantitation")
         self.right_tabs.setMinimumWidth(350) # Ensure the tab widget has a reasonable minimum width
         
@@ -133,7 +138,6 @@ class ChromaKitApp(QMainWindow):
         self.current_method_path = None
         self._method_dirty = False
         self._loading_method = False
-        self.rf_table_frame = None  # created in Task 12
         # ──────────────────────────────────────────────────────────────────────
 
         # Connect signals - only connecting those signals that currently exist
@@ -159,9 +163,14 @@ class ChromaKitApp(QMainWindow):
 
         # Connect RT table signals
         self.rt_table_frame.rt_table_changed.connect(self.on_rt_table_changed)
+        self.rt_table_frame.rt_table_changed.connect(self._on_rt_writeback)
+        
+        # Connect RF table signals
+        self.rf_table_frame.rf_table_changed.connect(self._on_rf_writeback)
         
         # Connect quantitation signals
         self.quantitation_frame.quantitation_changed.connect(self.on_quantitation_changed)
+        self.quantitation_frame.quantitation_changed.connect(self._on_quant_writeback)
         self.quantitation_frame.requantitate_requested.connect(self._perform_quantitation)
         
         # Add this new connection for MS spectrum viewing
@@ -306,6 +315,34 @@ class ChromaKitApp(QMainWindow):
         updated.created_at = self.current_method.created_at
         updated.version = self.current_method.version
         self.current_method = updated
+        self._mark_dirty(True)
+
+    def _on_rt_writeback(self, *args):
+        """Pull the RT table + matching params back into current_method when the
+        user edits the RT grid or matching settings. Guarded during loads."""
+        if self._loading_method:
+            return
+        self.current_method.rt_table = self.rt_table_frame.get_rt_entries()
+        self.current_method.rt_matching = self.rt_table_frame.get_matching_params()
+        self._mark_dirty(True)
+
+    def _on_rf_writeback(self, *args):
+        """Pull the RF table back into current_method on any RF-grid edit.
+        Guarded during programmatic loads."""
+        if self._loading_method:
+            return
+        self.current_method.rf_table = self.rf_table_frame.get_rf_entries()
+        self._mark_dirty(True)
+
+    def _on_quant_writeback(self, *args):
+        """Pull the selected quant strategy back into current_method and reflect
+        it on the RF frame's active badge. Guarded during loads."""
+        if self._loading_method:
+            return
+        strat = self.quantitation_frame.current_strategy()
+        self.current_method.quant_strategy = strat
+        if self.rf_table_frame is not None:
+            self.rf_table_frame.set_active(strat == "rf_table")
         self._mark_dirty(True)
 
     def apply_stylesheet(self, theme):
@@ -580,10 +617,12 @@ class ChromaKitApp(QMainWindow):
         ms_idx = self.right_tabs.indexOf(self.ms_frame)
         quant_idx = self.right_tabs.indexOf(self.quantitation_frame)
         rt_idx = self.right_tabs.indexOf(self.rt_table_frame)
+        rf_idx = self.right_tabs.indexOf(self.rf_table_frame)
 
         self.right_tabs.setTabVisible(ms_idx, is_chrom or is_gcxgc)
         self.right_tabs.setTabVisible(quant_idx, is_chrom)
         self.right_tabs.setTabVisible(rt_idx, is_chrom)
+        self.right_tabs.setTabVisible(rf_idx, is_chrom)
 
         if is_gcxgc:
             self.right_tabs.setCurrentIndex(ms_idx)

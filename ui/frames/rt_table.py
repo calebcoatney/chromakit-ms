@@ -999,6 +999,15 @@ class RTTableFrame(QWidget):
             self.normalized_weights = {
                 "start": p.weights.start, "apex": p.weights.apex, "end": p.weights.end,
             }
+            # Refresh control-enable state to match the file-import path: when the
+            # method carries an RT table, the enable checkbox + file controls become
+            # usable; with no data they stay disabled (boot/clear state). These are
+            # pure setEnabled() calls (no signals), so no rt_table_changed is emitted.
+            has_data = self.rt_table_data is not None and len(self.rt_table_data) > 0
+            self._set_settings_enabled(has_data)
+            self.clear_button.setEnabled(has_data)
+            self.export_button.setEnabled(has_data)
+            self._update_file_info()
         finally:
             self._applying = False
 
