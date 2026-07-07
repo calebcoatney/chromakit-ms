@@ -302,6 +302,9 @@ class ChromaKitApp(QMainWindow):
         updated.rf_table = self.current_method.rf_table
         updated.rt_matching = self.current_method.rt_matching
         updated.quant_strategy = self.current_method.quant_strategy
+        # Preserve provenance/metadata that from_gui_params would otherwise reset
+        updated.created_at = self.current_method.created_at
+        updated.version = self.current_method.version
         self.current_method = updated
         self._mark_dirty(True)
 

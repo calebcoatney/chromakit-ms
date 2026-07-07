@@ -38,3 +38,22 @@ def test_apply_method_to_frames_guards_writeback(qtbot):
     app._method_dirty = False
     app._apply_method_to_frames()
     assert app._method_dirty is False
+
+
+def test_param_edit_preserves_method_metadata(qtbot):
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    original = ChromaMethod(name="Loaded", signal_type="gc", version="9")
+    fixed_created = original.created_at  # capture the (fresh) creation time
+    app.current_method = original
+    app.current_method_path = None
+    app._method_dirty = False
+    # Simulate a user parameter edit: drive the write-back slot directly with
+    # the frame's current params (this is what parameters_changed carries).
+    app._loading_method = False
+    app._on_params_writeback(app.parameters_frame.current_params)
+    assert app.current_method.version == "9"
+    assert app.current_method.created_at == fixed_created
+    assert app.current_method.name == "Loaded"          # identity preserved
+    assert app.current_method.signal_type == "gc"
+    assert app._method_dirty is True                     # edit still marks dirty
