@@ -2,20 +2,6 @@ import pytest
 pytest.importorskip('pytestqt')
 
 from ui.app import ChromaKitApp
-from ui.frames.ms import MSFrame
-
-
-@pytest.fixture(autouse=True)
-def _no_ms_autoload(monkeypatch):
-    """Neutralize MSFrame's background NIST library loader thread.
-
-    ChromaKitApp constructs an MSFrame, which schedules a QThread that
-    deserializes the full NIST14 library via ms-toolkit. Under pytest-qt
-    (event loop pumped between tests + GC), that native load races and
-    segfaults the interpreter. The document-model tests don't need the
-    library, so we stub the auto-load to a no-op.
-    """
-    monkeypatch.setattr(MSFrame, "_try_autoload_library", lambda self: None)
 
 
 def _make(qtbot):
