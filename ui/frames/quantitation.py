@@ -21,10 +21,14 @@ class QuantitationFrame(QWidget):
     # Signal emitted when user requests re-quantitation
     requantitate_requested = Signal()
     
+    _STRATEGY_BY_INDEX = {0: None, 1: "internal_standard", 2: "rf_table"}
+    _INDEX_BY_STRATEGY = {None: 0, "internal_standard": 1, "rf_table": 2}
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.calculator = QuantitationCalculator()
         self.ms_toolkit = None  # Will be set by main app
+        self._applying = False
         self._setup_ui()
         self._connect_signals()
         
@@ -44,18 +48,17 @@ class QuantitationFrame(QWidget):
         self.overwrite_checkbox.setChecked(False)
         layout.addWidget(self.overwrite_checkbox)
         
-        # Method selection
+        # Strategy selection
         method_layout = QHBoxLayout()
-        method_layout.addWidget(QLabel("Method:"))
+        method_layout.addWidget(QLabel("Strategy:"))
         self.method_combo = QComboBox()
-        self.method_combo.addItem("Polyarc + Internal Standard")
-        self.method_combo.setEnabled(False)  # Only one method for now
+        self.method_combo.addItems(["None", "Internal Standard (Polyarc)", "RF Table"])
         method_layout.addWidget(self.method_combo)
         method_layout.addStretch()
         layout.addLayout(method_layout)
         
         # Internal Standard group
-        is_group = QGroupBox("Internal Standard Information")
+        self.is_group = QGroupBox("Internal Standard Information")
         is_layout = QFormLayout()
         
         # Compound name with search button
@@ -93,11 +96,11 @@ class QuantitationFrame(QWidget):
         self.mol_c_is_label.setStyleSheet("color: #0066cc; font-weight: bold;")
         is_layout.addRow("mol C of IS:", self.mol_c_is_label)
         
-        is_group.setLayout(is_layout)
-        layout.addWidget(is_group)
+        self.is_group.setLayout(is_layout)
+        layout.addWidget(self.is_group)
         
         # Sample Preparation group
-        sample_group = QGroupBox("Sample Preparation")
+        self.sample_group = QGroupBox("Sample Preparation")
         sample_layout = QFormLayout()
         
         # Sample volume
@@ -115,8 +118,8 @@ class QuantitationFrame(QWidget):
         self.mass_sample_label.setStyleSheet("color: #0066cc; font-weight: bold;")
         sample_layout.addRow("Sample Mass (mg):", self.mass_sample_label)
         
-        sample_group.setLayout(sample_layout)
-        layout.addWidget(sample_group)
+        self.sample_group.setLayout(sample_layout)
+        layout.addWidget(self.sample_group)
         
         # Results group (shown after quantitation)
         results_group = QGroupBox("Quantitation Results")
@@ -146,10 +149,14 @@ class QuantitationFrame(QWidget):
         
         # Initially disable all inputs
         self._set_inputs_enabled(False)
+
+        # Apply strategy-based visibility (default "None" hides IS groups)
+        self._update_strategy_visibility()
         
     def _connect_signals(self):
         """Connect signals to slots."""
         self.enable_checkbox.toggled.connect(self._on_enable_toggled)
+        self.method_combo.currentIndexChanged.connect(self._on_strategy_changed)
         self.search_library_btn.clicked.connect(self._on_search_library)
         self.requantitate_btn.clicked.connect(self._on_requantitate)
         
@@ -183,6 +190,35 @@ class QuantitationFrame(QWidget):
     def _on_requantitate(self):
         """Handle re-quantitate button click."""
         self.requantitate_requested.emit()
+
+    def current_strategy(self):
+        """Return the currently selected quant strategy value."""
+        return self._STRATEGY_BY_INDEX.get(self.method_combo.currentIndex())
+
+    def select_strategy(self, strategy):
+        """Select the combo item matching a quant strategy value."""
+        self.method_combo.setCurrentIndex(self._INDEX_BY_STRATEGY.get(strategy, 0))
+
+    def apply_method(self, method):
+        """Apply a ChromaMethod's quant strategy to the combo (no change signal)."""
+        self._applying = True
+        try:
+            self.select_strategy(method.quant_strategy)
+            self._update_strategy_visibility()
+        finally:
+            self._applying = False
+
+    def _on_strategy_changed(self, _index):
+        """Handle strategy combo selection change."""
+        self._update_strategy_visibility()
+        if not getattr(self, "_applying", False):
+            self.quantitation_changed.emit()
+
+    def _update_strategy_visibility(self):
+        """Show/hide the IS/Polyarc groups based on selected strategy."""
+        is_selected = self.current_strategy() == "internal_standard"
+        self.is_group.setVisible(is_selected)
+        self.sample_group.setVisible(is_selected)
         
     def _on_search_library(self):
         """Search MS library for compound and autofill formula/MW."""
