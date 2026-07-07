@@ -127,6 +127,15 @@ class ChromaKitApp(QMainWindow):
         self._deconvolve_ms_run = False
         self._deconv_inspector = None
 
+        # ── Document model: current_method is the always-present atom ──────────
+        from logic.method import ChromaMethod
+        self.current_method = ChromaMethod(name="Untitled", signal_type="gc")
+        self.current_method_path = None
+        self._method_dirty = False
+        self._loading_method = False
+        self.rf_table_frame = None  # created in Task 12
+        # ──────────────────────────────────────────────────────────────────────
+
         # Connect signals - only connecting those signals that currently exist
         self.file_tree.file_selected.connect(self.on_file_selected)
         self.file_tree.d_folder_opened.connect(self.on_file_selected)
@@ -134,6 +143,9 @@ class ChromaKitApp(QMainWindow):
         self.plot_frame.point_selected.connect(self.on_point_selected)
         self.plot_frame.peak_selected.connect(self._on_gcxgc_peak_selected)
         self.parameters_frame.parameters_changed.connect(self.on_parameters_changed)
+        self.parameters_frame.parameters_changed.connect(self._on_params_writeback)
+        self.parameters_frame.save_method_requested.connect(self.save_method)
+        self.parameters_frame.load_method_requested.connect(self.load_method)
         self.parameters_frame.gcxgc_params_changed.connect(self._on_gcxgc_params_changed)
         
         # Connect button frame signals
@@ -233,6 +245,65 @@ class ChromaKitApp(QMainWindow):
         # Add theme toggle to Settings menu
         self.theme_action = settings_menu.addAction("Toggle Dark/Light Mode")
         self.theme_action.triggered.connect(self.toggle_theme)
+
+        # Push the (Untitled) document into every frame and set the title.
+        self._apply_method_to_frames()
+        self._update_window_title()
+
+    def _apply_method_to_frames(self):
+        """Push current_method into each frame, guarded so frame change
+        signals (wired to write-back slots) do not feed back during a load."""
+        self._loading_method = True
+        try:
+            self.parameters_frame.apply_method(self.current_method)
+            self.rt_table_frame.apply_method(self.current_method)
+            if self.rf_table_frame is not None:
+                self.rf_table_frame.apply_method(self.current_method)
+            self.quantitation_frame.apply_method(self.current_method)
+        finally:
+            self._loading_method = False
+
+    def _mark_dirty(self, dirty=True):
+        """Set the document dirty flag and refresh the window title."""
+        self._method_dirty = dirty
+        self._update_window_title()
+
+    def _update_window_title(self):
+        """Title is document-driven: 'Name* — ChromaKit [— Profile]'."""
+        name = self.current_method.name if self.current_method else "Untitled"
+        star = "*" if self._method_dirty else ""
+        title = f"{name}{star}  \u2014  ChromaKit"
+        if getattr(self, "current_profile", None) is not None:
+            title += f"  \u2014  {self.current_profile.display_name}"
+        self.setWindowTitle(title)
+
+    def save_method(self):
+        # Implemented in Task 13.
+        pass
+
+    def load_method(self):
+        # Implemented in Task 13.
+        pass
+
+    def _on_params_writeback(self, params):
+        """Pull the processing-params slice back into current_method when the
+        user edits parameters. Guarded during programmatic loads."""
+        if self._loading_method:
+            return
+        from logic.method import ChromaMethod
+        # Rebuild the processing-params slice into current_method, preserving identity fields.
+        updated = ChromaMethod.from_gui_params(
+            params,
+            name=self.current_method.name,
+            signal_type=self.current_method.signal_type,
+            chemstation_area_factor=self.current_method.chemstation_area_factor,
+        )
+        updated.rt_table = self.current_method.rt_table
+        updated.rf_table = self.current_method.rf_table
+        updated.rt_matching = self.current_method.rt_matching
+        updated.quant_strategy = self.current_method.quant_strategy
+        self.current_method = updated
+        self._mark_dirty(True)
 
     def apply_stylesheet(self, theme):
         """Apply the QSS stylesheet with the selected theme."""
@@ -521,8 +592,10 @@ class ChromaKitApp(QMainWindow):
         if hasattr(self.ms_frame, 'spectrum_toggle_btn'):
             self.ms_frame.spectrum_toggle_btn.setVisible(not is_gcxgc)
         
-        # 4. Update window title
-        self.setWindowTitle(f"ChromaKit - {profile.display_name}")
+        # 4. Sync signal_type while untitled; refresh document-driven title
+        if self.current_method_path is None:
+            self.current_method.signal_type = profile.name
+        self._update_window_title()
         
         # 5. Forward ui_mode to ParametersFrame for widget visibility
         if hasattr(self.parameters_frame, 'set_mode'):
