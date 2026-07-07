@@ -10,6 +10,9 @@ import numpy as np
 import os
 import json
 
+from logic.method import ChromaMethod, RTTableEntry, RTMatchingParams, RTMatchingWeights
+from ui.widgets.editable_table import EditableTableWidget, ColumnSpec
+
 
 GCXGC_COLUMN_HEADERS = [
     'Peak #', '1D RT (min)', '2D RT (s)', 'Volume',
@@ -156,6 +159,9 @@ class RTTableFrame(QWidget):
         super().__init__(parent)
         self.setMinimumWidth(350)
         
+        # Guard against re-entrant settings emits while apply_method syncs widgets
+        self._applying = False
+        
         # RT table data
         self.rt_table_data = None
         self.rt_table_file = None
@@ -217,41 +223,66 @@ class RTTableFrame(QWidget):
         self.layout.addWidget(file_group)
     
     def _init_table_widget(self):
-        """Initialize the table widget for displaying RT data."""
+        """Initialize the table widgets for displaying RT data.
+
+        Two widgets share this group box:
+          * ``self.rt_table`` — an editable RT grid (Compound/Start/Apex/End)
+            that mirrors ``self.rt_table_data`` and is the normal RT view.
+          * ``self.table_widget`` — a plain ``QTableWidget`` used ONLY for the
+            transient 9-column GCxGC results view (populate_gcxgc). It is hidden
+            in the normal RT workflow so the two views never corrupt each other.
+        """
         table_group = QGroupBox("RT Table Contents")
         table_layout = QVBoxLayout(table_group)
-        
+
+        # Editable RT grid — the normal RT view; kept consistent with rt_table_data.
+        RT_COLUMNS = [
+            ColumnSpec(key="Compound", header="Compound", dtype="str", default=""),
+            ColumnSpec(key="Start", header="Start RT", dtype="float", default=0.0),
+            ColumnSpec(key="Apex", header="Apex RT", dtype="float", default=0.0),
+            ColumnSpec(key="End", header="End RT", dtype="float", default=0.0),
+        ]
+        self.rt_table = EditableTableWidget(RT_COLUMNS)
+        self.rt_table.setMaximumHeight(240)
+        self.rt_table.table_edited.connect(self._on_table_edited)
+
+        # Configure the inner table's header sizing (Compound stretches).
+        rt_header = self.rt_table.table.horizontalHeader()
+        rt_header.setStretchLastSection(False)
+        rt_header.setSectionResizeMode(0, QHeaderView.Stretch)              # Compound
+        rt_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)     # Start RT
+        rt_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)     # Apex RT
+        rt_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)     # End RT
+
+        table_layout.addWidget(self.rt_table)
+
+        # Transient GCxGC results view — dedicated QTableWidget, hidden by default.
         self.table_widget = QTableWidget()
         self.table_widget.setMaximumHeight(200)
         self.table_widget.setAlternatingRowColors(True)
-        
-        # Set headers - now includes Apex RT column
-        self.table_widget.setColumnCount(4)
-        self.table_widget.setHorizontalHeaderLabels(["Compound", "Start RT", "Apex RT", "End RT"])
-        
-        # Configure table
-        header = self.table_widget.horizontalHeader()
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QHeaderView.Stretch)  # Compound column stretches
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Start RT
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Apex RT
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # End RT
-        
+        self.table_widget.setColumnCount(len(GCXGC_COLUMN_HEADERS))
+        self.table_widget.setHorizontalHeaderLabels(GCXGC_COLUMN_HEADERS)
+        self.table_widget.hide()
+
         table_layout.addWidget(self.table_widget)
         self.layout.addWidget(table_group)
     
     def set_column_labels(self, position_label: str) -> None:
         """Update table headers to match the active signal profile (e.g., 'Wavenumber')."""
         labels = ["Compound", f"Start {position_label}", f"Apex {position_label}", f"End {position_label}"]
-        self.table_widget.setHorizontalHeaderLabels(labels)
+        self.rt_table.table.setHorizontalHeaderLabels(labels)
     
     def populate_gcxgc(self, peaks: list) -> None:
         """Display GCxGC2DPeak results in the table.
 
-        Replaces whatever is currently shown with a flat peak results table.
-        Does not modify rt_table_data or affect compound matching.
+        Swaps the normal editable RT grid out for a dedicated flat peak results
+        table. Does not modify rt_table_data or affect compound matching.
         """
         from logic.gcxgc_peak import GCxGC2DPeak
+
+        # Swap views: hide the editable RT grid, show the GCxGC results widget.
+        self.rt_table.hide()
+        self.table_widget.show()
 
         self.table_widget.clearContents()
         self.table_widget.setColumnCount(len(GCXGC_COLUMN_HEADERS))
@@ -651,6 +682,9 @@ class RTTableFrame(QWidget):
         
         # Clear UI
         self.table_widget.setRowCount(0)
+        self.table_widget.hide()
+        self.rt_table.set_rows([])   # guarded — no emit
+        self.rt_table.show()
         self.file_info_label.setText("No RT table loaded")
         self.status_label.setText("RT matching disabled")
         
@@ -788,81 +822,21 @@ class RTTableFrame(QWidget):
         self._update_file_info()
     
     def _populate_table(self):
-        """Populate the table widget with RT data."""
+        """Populate the editable RT grid from ``self.rt_table_data``.
+
+        Keeps the editable widget (``self.rt_table``) in sync with the backing
+        DataFrame (``self.rt_table_data``), which remains the source of truth for
+        compound lookups. Swaps back from any transient GCxGC view.
+        """
         if self.rt_table_data is None:
             return
-        
-        df = self.rt_table_data
-        self.table_widget.setRowCount(len(df))
-        
-        for i, row in df.iterrows():
-            # Check if this row is new (not in original data)
-            is_new_row = False
-            if self.original_data is not None:
-                # Check if this compound exists in original data with same RT values
-                original_matches = self.original_data[self.original_data['Compound'] == row['Compound']]
-                if original_matches.empty:
-                    is_new_row = True
-                else:
-                    # Check if RT values have changed
-                    original_row = original_matches.iloc[0]
-                    if (abs(original_row['Start'] - row['Start']) > 0.001 or 
-                        abs(original_row['Apex'] - row['Apex']) > 0.001 or 
-                        abs(original_row['End'] - row['End']) > 0.001):
-                        is_new_row = True
-            
-            # Create styling for modified items
-            from PySide6.QtGui import QBrush, QColor, QFont
-            modified_brush = QBrush(QColor("#CC6600"))  # Orange color
-            normal_brush = QBrush(QColor("#000000"))    # Black color
-            
-            # Font for modified items
-            modified_font = QFont()
-            modified_font.setBold(True)
-            normal_font = QFont()
-            
-            # Compound name
-            compound_item = QTableWidgetItem(str(row['Compound']))
-            if is_new_row:
-                compound_item.setForeground(modified_brush)
-                compound_item.setFont(modified_font)
-            else:
-                compound_item.setForeground(normal_brush)
-                compound_item.setFont(normal_font)
-            self.table_widget.setItem(i, 0, compound_item)
-            
-            # Start RT
-            start_item = QTableWidgetItem(f"{row['Start']:.3f}")
-            start_item.setTextAlignment(Qt.AlignCenter)
-            if is_new_row:
-                start_item.setForeground(modified_brush)
-                start_item.setFont(modified_font)
-            else:
-                start_item.setForeground(normal_brush)
-                start_item.setFont(normal_font)
-            self.table_widget.setItem(i, 1, start_item)
-            
-            # Apex RT
-            apex_item = QTableWidgetItem(f"{row['Apex']:.3f}")
-            apex_item.setTextAlignment(Qt.AlignCenter)
-            if is_new_row:
-                apex_item.setForeground(modified_brush)
-                apex_item.setFont(modified_font)
-            else:
-                apex_item.setForeground(normal_brush)
-                apex_item.setFont(normal_font)
-            self.table_widget.setItem(i, 2, apex_item)
-            
-            # End RT
-            end_item = QTableWidgetItem(f"{row['End']:.3f}")
-            end_item.setTextAlignment(Qt.AlignCenter)
-            if is_new_row:
-                end_item.setForeground(modified_brush)
-                end_item.setFont(modified_font)
-            else:
-                end_item.setForeground(normal_brush)
-                end_item.setFont(normal_font)
-            self.table_widget.setItem(i, 3, end_item)
+
+        # Ensure the normal RT view is shown (in case a GCxGC view was active).
+        self.table_widget.hide()
+        self.rt_table.show()
+
+        # set_dataframe is guarded internally (no table_edited emit).
+        self.rt_table.set_dataframe(self.rt_table_data)
     
     def _update_file_info(self):
         """Update the file info label with current status."""
@@ -1168,3 +1142,62 @@ class RTTableFrame(QWidget):
             'rt_table': self.rt_table_data,
             'file_path': self.rt_table_file
         }
+
+    # ── Method sync surface (Phase 1b) ──────────────────────────────────────────
+
+    def apply_method(self, method: ChromaMethod) -> None:
+        """Populate the RT grid and matching widgets from a ChromaMethod.
+
+        Guarded by ``self._applying`` so the widget updates below do not emit
+        settings-changed churn while syncing.
+        """
+        self._applying = True
+        try:
+            rows = [
+                {"Compound": e.compound, "Start": e.start, "Apex": e.apex, "End": e.end}
+                for e in method.rt_table
+            ]
+            self.rt_table.set_rows(rows)          # guarded — no emit
+            self.rt_table_data = self.rt_table.get_dataframe()
+            p = method.rt_matching
+            self.matching_mode_combo.setCurrentIndex(p.matching_mode)
+            self.tolerance_spin.setValue(p.tolerance)
+            self.window_expansion_spin.setValue(p.window_expansion)
+            self.high_priority_checkbox.setChecked(p.high_priority)
+            self.normalized_weights = {
+                "start": p.weights.start, "apex": p.weights.apex, "end": p.weights.end,
+            }
+        finally:
+            self._applying = False
+
+    def get_rt_entries(self):
+        """Read the editable RT grid back as a list of RTTableEntry models."""
+        entries = []
+        for row in self.rt_table.get_rows():
+            name = str(row.get("Compound", "")).strip()
+            if not name:
+                continue
+            entries.append(RTTableEntry(
+                compound=name,
+                start=float(row.get("Start", 0.0)),
+                apex=float(row.get("Apex", 0.0)),
+                end=float(row.get("End", 0.0)),
+            ))
+        return entries
+
+    def get_matching_params(self) -> RTMatchingParams:
+        """Read the matching widgets back as an RTMatchingParams model."""
+        w = getattr(self, "normalized_weights", {"start": 0.25, "apex": 0.50, "end": 0.25})
+        return RTMatchingParams(
+            matching_mode=self.matching_mode_combo.currentIndex(),
+            tolerance=self.tolerance_spin.value(),
+            window_expansion=self.window_expansion_spin.value(),
+            weights=RTMatchingWeights(**w),
+            high_priority=self.high_priority_checkbox.isChecked(),
+        )
+
+    def _on_table_edited(self):
+        """Keep ``rt_table_data`` in sync when the user edits the grid."""
+        self.rt_table_data = self.rt_table.get_dataframe()
+        if not getattr(self, "_applying", False):
+            self._on_settings_changed()
