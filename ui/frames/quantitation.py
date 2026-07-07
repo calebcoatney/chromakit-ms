@@ -146,12 +146,14 @@ class QuantitationFrame(QWidget):
         self.rf_quantitated_label = QLabel("—")
         self.rf_skipped_unassigned_label = QLabel("—")
         self.rf_skipped_no_rf_label = QLabel("—")
+        self.rf_basis_label = QLabel("—")
         self.rf_warnings_label = QLabel("")
         self.rf_warnings_label.setStyleSheet("color: #b00000;")
         self.rf_warnings_label.setWordWrap(True)
         rf_layout.addRow("Peaks quantitated:", self.rf_quantitated_label)
         rf_layout.addRow("Skipped (unassigned):", self.rf_skipped_unassigned_label)
         rf_layout.addRow("Skipped (no RF):", self.rf_skipped_no_rf_label)
+        rf_layout.addRow("Composition basis:", self.rf_basis_label)
         rf_layout.addRow("Warnings:", self.rf_warnings_label)
         self.rf_results_group.setLayout(rf_layout)
         layout.addWidget(self.rf_results_group)
@@ -399,6 +401,8 @@ class QuantitationFrame(QWidget):
         self.rf_skipped_unassigned_label.setText(str(len(summary.skipped_unassigned)))
         self.rf_skipped_no_rf_label.setText(str(len(summary.skipped_no_rf)))
         self.rf_warnings_label.setText("\n".join(summary.warnings))
+        basis = getattr(summary, "composition_basis", None)
+        self.rf_basis_label.setText(basis if basis else "unspecified")
             
     def autofill_from_library(self, compound_name, formula, mw):
         """Autofill formula and MW from MS library."""

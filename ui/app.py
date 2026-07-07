@@ -394,6 +394,7 @@ class ChromaKitApp(QMainWindow):
         if self._loading_method:
             return
         self.current_method.rf_table = self.rf_table_frame.get_rf_entries()
+        self.current_method.rf_unit = self.rf_table_frame.get_rf_unit()
         self._mark_dirty(True)
 
     def _on_quant_writeback(self, *args):

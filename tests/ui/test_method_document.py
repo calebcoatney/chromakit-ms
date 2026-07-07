@@ -213,3 +213,11 @@ def test_none_strategy_is_noop(qtbot):
     app.integrated_peaks = [_FakePeak("Hydrogen", 1.0, 1.0)]
     app.run_quantitation_for_current_strategy()  # must not raise
     assert app.integrated_peaks[0].mol_percent is None
+
+
+def test_rf_unit_writes_back_and_dirties(qtbot):
+    app = _make(qtbot)
+    app._method_dirty = False
+    app.rf_table_frame.select_rf_unit("area_per_wt_pct")
+    assert app.current_method.rf_unit == "area_per_wt_pct"
+    assert app._method_dirty is True

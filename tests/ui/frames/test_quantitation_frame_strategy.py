@@ -74,3 +74,21 @@ def test_rf_results_hidden_for_is(qtbot):
     frame = _make(qtbot)
     frame.select_strategy("internal_standard")
     assert frame.rf_results_group.isVisible() is False
+
+
+def test_update_rf_status_shows_basis(qtbot):
+    from logic.rf_quantitation import RFQuantSummary
+    frame = _make(qtbot)
+    frame.select_strategy("rf_table")
+    s = RFQuantSummary(peaks_total=2, peaks_quantitated=2, composition_basis="wt%")
+    frame.update_rf_status(s)
+    assert "wt%" in frame.rf_basis_label.text()
+
+
+def test_update_rf_status_unspecified_basis(qtbot):
+    from logic.rf_quantitation import RFQuantSummary
+    frame = _make(qtbot)
+    frame.select_strategy("rf_table")
+    s = RFQuantSummary(peaks_total=1, peaks_quantitated=1, composition_basis=None)
+    frame.update_rf_status(s)
+    assert "unspecified" in frame.rf_basis_label.text().lower()
