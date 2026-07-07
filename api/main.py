@@ -735,7 +735,7 @@ async def run_pipeline(request: RunRequest):
         # 4c. Quantitate — RF-table strategy only (Phase 1a).
         run_quant_summary = None
         if method.quant_strategy == "rf_table" and method.rf_table:
-            rf_summary = quantitate_rf(peaks, method.rf_table, normalize=True)
+            rf_summary = quantitate_rf(peaks, method.rf_table, rf_unit=method.rf_unit, normalize=True)
             run_quant_summary = RunQuantSummary(
                 strategy=rf_summary.strategy,
                 peaks_quantitated=rf_summary.peaks_quantitated,
@@ -743,6 +743,8 @@ async def run_pipeline(request: RunRequest):
                 peaks_skipped_no_rf=len(rf_summary.skipped_no_rf),
                 normalized=rf_summary.normalized,
                 warnings=list(rf_summary.warnings),
+                rf_unit=rf_summary.rf_unit,
+                composition_basis=rf_summary.composition_basis,
             )
 
         # 5. Export JSON (writes alongside data file, same as GUI behavior).

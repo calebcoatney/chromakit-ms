@@ -266,6 +266,8 @@ class RunQuantSummary(BaseModel):
     peaks_skipped_no_rf: int = 0
     normalized: bool = True
     warnings: List[str] = Field(default_factory=list)
+    rf_unit: Optional[str] = None
+    composition_basis: Optional[str] = None
 
 
 class RunResponse(BaseModel):
