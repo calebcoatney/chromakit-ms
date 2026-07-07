@@ -171,7 +171,7 @@ class ChromaKitApp(QMainWindow):
         # Connect quantitation signals
         self.quantitation_frame.quantitation_changed.connect(self.on_quantitation_changed)
         self.quantitation_frame.quantitation_changed.connect(self._on_quant_writeback)
-        self.quantitation_frame.requantitate_requested.connect(self._perform_quantitation)
+        self.quantitation_frame.requantitate_requested.connect(self.run_quantitation_for_current_strategy)
         
         # Add this new connection for MS spectrum viewing
         self.plot_frame.ms_spectrum_requested.connect(self.on_ms_spectrum_requested)
@@ -3031,9 +3031,9 @@ class ChromaKitApp(QMainWindow):
         else:
             self.status_bar.showMessage(f"Batch MS search completed: {match_count}/{total_peaks} peaks identified")
         
-        # Perform quantitation if enabled
-        if self.quantitation_frame.is_enabled() and match_count > 0:
-            self._perform_quantitation()
+        # Perform quantitation if a strategy is selected
+        if self.current_method.quant_strategy and match_count > 0:
+            self.run_quantitation_for_current_strategy()
         
         # Update results view
         self.update_results_view()
@@ -3536,6 +3536,31 @@ class ChromaKitApp(QMainWindow):
 
         if self._deconv_inspector:
             self._deconv_inspector.show_search_results(results, rt)
+
+    def run_quantitation_for_current_strategy(self):
+        """Dispatch quantitation based on the current method's quant strategy.
+
+        'rf_table' -> RF-table external-standard quant (quantitate_rf),
+        'internal_standard' -> Polyarc + IS quant (_perform_quantitation),
+        None -> no-op.
+        """
+        strategy = self.current_method.quant_strategy
+        if strategy == "rf_table":
+            self._perform_rf_quantitation()
+        elif strategy == "internal_standard":
+            self._perform_quantitation()
+        # None -> no-op
+
+    def _perform_rf_quantitation(self):
+        """Run RF-table quantitation over integrated peaks and show the summary."""
+        import logic.rf_quantitation as rf_quant
+        peaks = getattr(self, "integrated_peaks", None)
+        if not peaks:
+            return
+        summary = rf_quant.quantitate_rf(peaks, self.current_method.rf_table)
+        self.quantitation_frame.update_rf_status(summary)
+        if hasattr(self, "update_results_view"):
+            self.update_results_view()
 
     def _perform_quantitation(self):
         """Perform quantitation using Polyarc + IS method (delegates to runner)."""

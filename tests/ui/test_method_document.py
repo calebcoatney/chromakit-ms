@@ -178,3 +178,38 @@ def test_manual_assign_gate_uses_frame_is_enabled(qtbot, monkeypatch):
     assert called["exec"] is False
     assert peak.compound_id == "Unknown"
     assert "not enabled" in app.status_bar.currentMessage()
+
+
+class _FakePeak:
+    def __init__(self, compound_id, area, rt):
+        self.compound_id = compound_id
+        self.area = area
+        self.retention_time = rt
+        self.mol_percent = None
+        self.raw_amount = None
+
+
+def test_rf_dispatch_runs_and_updates_summary(qtbot):
+    from logic.method import RFTableEntry
+    app = _make(qtbot)
+    app.current_method.quant_strategy = "rf_table"
+    app.current_method.rf_table = [
+        RFTableEntry(compound="Hydrogen", response_factor=1000.0),
+        RFTableEntry(compound="Carbon monoxide", response_factor=2000.0),
+    ]
+    app.integrated_peaks = [
+        _FakePeak("Hydrogen", 1000.0, 1.0),
+        _FakePeak("Carbon monoxide", 2000.0, 2.0),
+    ]
+    app.run_quantitation_for_current_strategy()
+    # 1000/1000 = 1.0 ; 2000/2000 = 1.0 ; each normalized to 50%
+    assert abs(app.integrated_peaks[0].mol_percent - 50.0) < 1e-6
+    assert "2 / 2" in app.quantitation_frame.rf_quantitated_label.text()
+
+
+def test_none_strategy_is_noop(qtbot):
+    app = _make(qtbot)
+    app.current_method.quant_strategy = None
+    app.integrated_peaks = [_FakePeak("Hydrogen", 1.0, 1.0)]
+    app.run_quantitation_for_current_strategy()  # must not raise
+    assert app.integrated_peaks[0].mol_percent is None
