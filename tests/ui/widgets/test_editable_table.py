@@ -44,3 +44,48 @@ def test_set_dataframe_populates(qtbot):
     df = pd.DataFrame({"Compound": ["Ethane"], "response_factor": [2000.0]})
     w.set_dataframe(df)
     assert w.get_rows() == [{"Compound": "Ethane", "response_factor": 2000.0}]
+
+
+def test_add_row_emits(qtbot):
+    w = _make(qtbot)
+    fired = []
+    w.table_edited.connect(lambda: fired.append(True))
+    w.add_btn.click()
+    assert fired == [True]
+    assert w.table.rowCount() == 1
+
+
+def test_delete_row_emits(qtbot):
+    w = _make(qtbot)
+    w.set_rows([{"Compound": "A", "response_factor": 1.0}])
+    fired = []
+    w.table_edited.connect(lambda: fired.append(True))
+    w.table.selectRow(0)
+    w.delete_btn.click()
+    assert fired == [True]
+    assert w.table.rowCount() == 0
+
+
+def test_set_rows_does_not_emit(qtbot):
+    w = _make(qtbot)
+    fired = []
+    w.table_edited.connect(lambda: fired.append(True))
+    w.set_rows([{"Compound": "A", "response_factor": 1.0}])
+    assert fired == []
+
+
+def test_edit_cell_emits(qtbot):
+    w = _make(qtbot)
+    w.set_rows([{"Compound": "A", "response_factor": 1.0}])
+    fired = []
+    w.table_edited.connect(lambda: fired.append(True))
+    w.table.item(0, 0).setText("Benzene")
+    assert fired == [True]
+
+
+def test_bad_float_coerces_on_read(qtbot):
+    w = _make(qtbot)
+    w.set_rows([{"Compound": "A", "response_factor": 1.0}])
+    w.table.item(0, 1).setText("not-a-number")
+    rows = w.get_rows()
+    assert rows[0]["response_factor"] == 0.0  # default fallback, no crash
