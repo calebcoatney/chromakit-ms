@@ -129,3 +129,52 @@ def test_load_repopulates_and_clears_dirty(qtbot, tmp_path, monkeypatch):
     # Frames were repopulated:
     assert app.quantitation_frame.current_strategy() == "rf_table"
     assert any(e.compound == "Hydrogen" for e in app.current_method.rf_table)
+
+
+def test_manual_assign_gate_uses_frame_is_enabled(qtbot, monkeypatch):
+    """Manual RT-assign must gate on rt_table_frame.is_enabled(), not rt_settings.
+
+    Fail-first trick: seed rt_settings={'enabled': True} so the OLD gate would
+    PROCEED to the confirmation modal. With is_enabled()==False, the NEW gate
+    must BAIL before any dialog. lookup is stubbed to return a compound so the
+    OLD path would otherwise reach the modal (it wouldn't bail on empty lookup).
+    """
+    app = _make(qtbot)
+
+    class _Peak:
+        retention_time = 1.1
+        compound_id = "Unknown"
+        peak_number = 1
+
+    peak = _Peak()
+    app.integrated_peaks = [peak]
+
+    # OLD gate would have proceeded on this; prove the NEW gate is what stops us.
+    app.rt_settings = {"enabled": True, "rt_table": None}
+
+    # Frame reports NOT enabled → manual assign must bail before any dialog.
+    monkeypatch.setattr(app.rt_table_frame, "is_enabled", lambda: False)
+
+    # Guarantee the OLD path would reach the modal (non-None lookup result).
+    monkeypatch.setattr(
+        "logic.rt_matching.lookup_compound_by_rt",
+        lambda *a, **k: "Methane",
+    )
+
+    # If the gate fails to bail, exec() is called → flip the flag (and don't
+    # actually pop a modal, which would hang the headless test).
+    called = {"exec": False}
+    from PySide6.QtWidgets import QMessageBox
+
+    def _fake_exec(self):
+        called["exec"] = True
+        return QMessageBox.Cancel
+
+    monkeypatch.setattr(QMessageBox, "exec", _fake_exec)
+
+    app.on_rt_assignment_requested(0)
+
+    # New gate bailed: no confirmation modal, peak unchanged, status shown.
+    assert called["exec"] is False
+    assert peak.compound_id == "Unknown"
+    assert "not enabled" in app.status_bar.currentMessage()

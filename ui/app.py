@@ -1186,8 +1186,12 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage("No peak available at this position")
             return
         
-        # Check if RT table is available and enabled
-        if not hasattr(self, 'rt_settings') or not self.rt_settings.get('enabled', False):
+        # Check if RT table is available and enabled.
+        # Use the frame's runtime on/off toggle (checkbox + data present) — the
+        # same robust check the batch path uses (_apply_rt_matching_to_peaks) —
+        # rather than the fragile rt_settings dict, which is only populated when
+        # the rt_table_changed signal last fired and may be stale on restart.
+        if not self.rt_table_frame.is_enabled():
             self.status_bar.showMessage("RT Table is not enabled. Please load an RT table first.")
             return
         
@@ -1211,7 +1215,9 @@ class ChromaKitApp(QMainWindow):
         msg = QMessageBox(self)
         msg.setWindowTitle("RT Table Assignment")
         msg.setText(f"Assign peak at {peak.retention_time:.3f} min to:")
-        msg.setInformativeText(f"Compound: {rt_compound}\n(from RT table using strict window matching)")
+        mode_names = {0: "Simple Window", 1: "Closest Apex", 2: "Weighted Distance"}
+        mode_label = mode_names.get(self.current_method.rt_matching.matching_mode, "RT")
+        msg.setInformativeText(f"Compound: {rt_compound}\n(from RT table using {mode_label} matching)")
         msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
         msg.setDefaultButton(QMessageBox.Ok)
         
