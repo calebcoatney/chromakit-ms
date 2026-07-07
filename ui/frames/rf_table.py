@@ -12,10 +12,11 @@ import csv
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QMessageBox,
+    QComboBox, QFileDialog, QMessageBox,
 )
 
 from logic.method import ChromaMethod, RFTableEntry
+from logic.rf_quantitation import RF_UNIT_LABELS
 from ui.widgets.editable_table import EditableTableWidget, ColumnSpec
 
 
@@ -33,12 +34,24 @@ class RFTableFrame(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._applying = False
         layout = QVBoxLayout(self)
 
         self.active_badge = QLabel("Active quant strategy")
         self.active_badge.setStyleSheet("color: #0a7d00; font-weight: bold;")
         self.active_badge.setVisible(False)
         layout.addWidget(self.active_badge)
+
+        unit_row = QHBoxLayout()
+        unit_row.addWidget(QLabel("RF unit:"))
+        self.unit_combo = QComboBox()
+        for code in ("area_per_mol", "area_per_mol_pct", "area_per_molC_pct",
+                     "area_per_wt_pct", "unspecified"):
+            self.unit_combo.addItem(RF_UNIT_LABELS[code], code)   # text, data=code
+        self.unit_combo.currentIndexChanged.connect(self._on_unit_changed)
+        unit_row.addWidget(self.unit_combo)
+        unit_row.addStretch()
+        layout.addLayout(unit_row)
 
         self.table = EditableTableWidget(RF_COLUMNS)
         self.table.table_edited.connect(self.rf_table_changed.emit)
@@ -56,12 +69,50 @@ class RFTableFrame(QWidget):
         self.import_btn.clicked.connect(self._on_import)
         self.export_btn.clicked.connect(self._on_export)
 
+        # Initial state: default to the method default ("unspecified") with a
+        # plain header. Guard the selection so the combo's currentIndexChanged
+        # cannot emit rf_table_changed during construction.
+        self._applying = True
+        try:
+            self.select_rf_unit("unspecified")
+        finally:
+            self._applying = False
+        self._update_rf_header()
+
     def apply_method(self, method: ChromaMethod) -> None:
-        rows = [
-            {"Compound": e.compound, "response_factor": e.response_factor}
-            for e in method.rf_table
-        ]
-        self.table.set_rows(rows)   # guarded — no emit
+        self._applying = True
+        try:
+            rows = [
+                {"Compound": e.compound, "response_factor": e.response_factor}
+                for e in method.rf_table
+            ]
+            self.table.set_rows(rows)   # guarded — no emit
+            self.select_rf_unit(method.rf_unit)
+            self._update_rf_header()
+        finally:
+            self._applying = False
+
+    def get_rf_unit(self) -> str:
+        return self.unit_combo.currentData()
+
+    def select_rf_unit(self, code: str) -> None:
+        idx = self.unit_combo.findData(code)
+        if idx >= 0:
+            self.unit_combo.setCurrentIndex(idx)
+
+    def _on_unit_changed(self, _idx):
+        self._update_rf_header()
+        if not self._applying:
+            self.rf_table_changed.emit()
+
+    def _update_rf_header(self):
+        code = self.get_rf_unit()
+        if code == "unspecified":
+            self.table.set_column_header("response_factor", "Response Factor")
+        else:
+            self.table.set_column_header(
+                "response_factor", f"Response Factor ({RF_UNIT_LABELS[code]})"
+            )
 
     def _on_import(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

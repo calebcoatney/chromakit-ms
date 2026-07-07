@@ -98,3 +98,48 @@ def test_import_csv_replaces_and_accepts_spellings(qtbot, tmp_path, monkeypatch)
     assert [e.compound for e in entries] == ["Methane", "Ethane"]  # replaced
     assert entries[0].response_factor == 1000.0
     assert fired == [True]
+
+
+def test_unit_dropdown_has_all_codes(qtbot):
+    frame = _make(qtbot)
+    codes = [frame.unit_combo.itemData(i) for i in range(frame.unit_combo.count())]
+    assert set(codes) == {"area_per_mol", "area_per_mol_pct", "area_per_molC_pct",
+                          "area_per_wt_pct", "unspecified"}
+
+
+def test_apply_method_sets_unit(qtbot):
+    frame = _make(qtbot)
+    frame.apply_method(ChromaMethod(name="M", signal_type="gc", rf_unit="area_per_wt_pct"))
+    assert frame.get_rf_unit() == "area_per_wt_pct"
+
+
+def test_apply_method_unit_does_not_emit(qtbot):
+    frame = _make(qtbot)
+    fired = []
+    frame.rf_table_changed.connect(lambda: fired.append(True))
+    frame.apply_method(ChromaMethod(name="M", signal_type="gc", rf_unit="area_per_wt_pct"))
+    assert fired == []
+
+
+def test_changing_unit_emits(qtbot):
+    frame = _make(qtbot)
+    frame.apply_method(ChromaMethod(name="M", signal_type="gc", rf_unit="unspecified"))
+    fired = []
+    frame.rf_table_changed.connect(lambda: fired.append(True))
+    frame.select_rf_unit("area_per_wt_pct")
+    assert fired == [True]
+    assert frame.get_rf_unit() == "area_per_wt_pct"
+
+
+def test_header_reflects_unit(qtbot):
+    frame = _make(qtbot)
+    frame.select_rf_unit("area_per_wt_pct")
+    hdr = frame.table.table.horizontalHeaderItem(1).text()
+    assert "area/wt%" in hdr
+
+
+def test_header_plain_when_unspecified(qtbot):
+    frame = _make(qtbot)
+    frame.select_rf_unit("unspecified")
+    hdr = frame.table.table.horizontalHeaderItem(1).text()
+    assert hdr == "Response Factor"
