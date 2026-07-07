@@ -92,3 +92,35 @@ def test_legacy_3col_csv_synthesizes_apex(qtbot, tmp_path, monkeypatch):
     entries = frame.get_rt_entries()
     assert entries[0].compound == "Toluene"
     assert abs(entries[0].apex - 5.2) < 1e-9   # (5.0 + 5.4) / 2
+
+
+def test_import_json_skips_blank_compound_rows(qtbot, tmp_path, monkeypatch):
+    import json
+    frame = _make(qtbot)
+    src = tmp_path / "rt.json"
+    src.write_text(json.dumps({"compounds": [
+        {"name": "Benzene", "start": 4.0, "apex": 4.1, "end": 4.2},
+        {"start": 5.0, "apex": 5.1, "end": 5.2},  # missing name/compound -> must be skipped
+    ]}))
+    monkeypatch.setattr(
+        "ui.frames.rt_table.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(src), "JSON Files (*.json)"),
+    )
+    frame.import_button.click()
+    entries = frame.get_rt_entries()
+    assert [e.compound for e in entries] == ["Benzene"]  # blank-name row dropped
+    assert not (frame.rt_table_data["Compound"].astype(str).str.strip() == "").any()
+
+
+def test_import_csv_skips_blank_compound_rows(qtbot, tmp_path, monkeypatch):
+    frame = _make(qtbot)
+    src = tmp_path / "rt.csv"
+    src.write_text("Compound,Start,Apex,End\nBenzene,4.0,4.1,4.2\n,5.0,5.1,5.2\n")
+    monkeypatch.setattr(
+        "ui.frames.rt_table.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(src), "CSV Files (*.csv)"),
+    )
+    frame.import_button.click()
+    entries = frame.get_rt_entries()
+    assert [e.compound for e in entries] == ["Benzene"]  # blank-name row dropped
+    assert not (frame.rt_table_data["Compound"].astype(str).str.strip() == "").any()

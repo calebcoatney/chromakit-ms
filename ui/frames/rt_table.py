@@ -504,6 +504,7 @@ class RTTableFrame(QWidget):
         self.clear_button.setEnabled(True)
         self.export_button.setEnabled(True)
 
+        self._update_file_info()      # refresh "(N compounds)" label
         self._on_settings_changed()   # emits rt_table_changed
 
     def _parse_csv(self, file_path):
@@ -524,6 +525,9 @@ class RTTableFrame(QWidget):
                 f"Found columns: {', '.join(df.columns)}"
             )
         self._validate_rt_data(df, legacy)
+        # Drop rows with no compound name (NaN/blank) so blank identities never
+        # reach rt_table_data (and thus the matcher). Mirrors _parse_json.
+        df = df[df["Compound"].notna() & (df["Compound"].astype(str).str.strip() != "")]
         return df
 
     def _parse_json(self, file_path):
@@ -543,6 +547,8 @@ class RTTableFrame(QWidget):
             apex = c.get("apex_rt", c.get("apex"))
             if apex is None and start is not None and end is not None:
                 apex = (start + end) / 2.0
+            if name is None or str(name).strip() == "":
+                continue
             rows.append({"Compound": name, "Start": start, "Apex": apex, "End": end})
         df = pd.DataFrame(rows, columns=["Compound", "Start", "Apex", "End"])
         self._validate_rt_data(df, False)
