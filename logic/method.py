@@ -16,6 +16,8 @@ from typing import List, Optional
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
 
+from logic.rf_quantitation import RF_UNITS
+
 
 # ── Processing Parameter Sub-Models ────────────────────────────────────────────
 # These are the canonical definitions. api/models.py imports from here.
@@ -114,7 +116,7 @@ class RTTableEntry(BaseModel):
 
 class RFTableEntry(BaseModel):
     compound: str
-    response_factor: float    # area per unit; mol% = area / RF
+    response_factor: float    # response factor; output basis is set by the method's rf_unit
 
 
 class RTMatchingWeights(BaseModel):
@@ -175,6 +177,10 @@ class ChromaMethod(BaseModel):
         description="Quantitation strategy: None | 'rf_table' | 'internal_standard'. "
                     "Phase 1a implements 'rf_table' only.",
     )
+    rf_unit: str = Field(
+        default="unspecified",
+        description="RF response-factor unit code (see logic.rf_quantitation.RF_UNITS)",
+    )
     chemstation_area_factor: float = Field(
         default=0.0784,
         description="Chemstation area conversion factor applied during integration",
@@ -188,6 +194,13 @@ class ChromaMethod(BaseModel):
             SignalProfileRegistry.get(v)
         except KeyError as exc:
             raise ValueError(str(exc)) from exc
+        return v
+
+    @field_validator("rf_unit")
+    @classmethod
+    def _validate_rf_unit(cls, v: str) -> str:
+        if v not in RF_UNITS:
+            raise ValueError(f"Unknown rf_unit '{v}'; expected one of {sorted(RF_UNITS)}")
         return v
 
     @classmethod

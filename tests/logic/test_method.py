@@ -233,3 +233,36 @@ def test_matching_mode_rejects_out_of_range():
         RTMatchingParams(matching_mode=3)   # invalid
     with pytest.raises(ValidationError):
         RTMatchingParams(matching_mode=-1)  # invalid
+
+
+def test_rf_unit_defaults_unspecified():
+    from logic.method import ChromaMethod
+    m = ChromaMethod(name="M", signal_type="gc")
+    assert m.rf_unit == "unspecified"
+
+
+def test_rf_unit_roundtrips(tmp_path):
+    from logic.method import ChromaMethod
+    p = tmp_path / "m.chromethod"
+    ChromaMethod(name="M", signal_type="gc", rf_unit="area_per_wt_pct").to_file(p)
+    loaded = ChromaMethod.from_file(p)
+    assert loaded.rf_unit == "area_per_wt_pct"
+
+
+def test_rf_unit_rejects_invalid():
+    import pytest
+    from pydantic import ValidationError
+    from logic.method import ChromaMethod
+    with pytest.raises(ValidationError):
+        ChromaMethod(name="M", signal_type="gc", rf_unit="area/wt%")
+
+
+def test_legacy_method_json_loads_with_unspecified(tmp_path):
+    from logic.method import ChromaMethod
+    p = tmp_path / "legacy.chromethod"
+    p.write_text(
+        '{"name": "Legacy", "signal_type": "gc", "quant_strategy": "rf_table", '
+        '"rf_table": [{"compound": "Hydrogen", "response_factor": 1000.0}]}'
+    )
+    loaded = ChromaMethod.from_file(p)
+    assert loaded.rf_unit == "unspecified"
