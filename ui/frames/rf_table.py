@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import List
 
 import csv
+import io
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from logic.method import ChromaMethod, RFTableEntry
-from logic.rf_quantitation import RF_UNIT_LABELS
+from logic.rf_quantitation import RF_UNITS, RF_UNIT_LABELS
 from ui.widgets.editable_table import EditableTableWidget, ColumnSpec
 
 
@@ -121,19 +122,31 @@ class RFTableFrame(QWidget):
         if not path:
             return
         try:
+            raw_text = open(path, newline="", encoding="utf-8").read()
+            lines = raw_text.splitlines()
+            unit_code = None
+            if lines and lines[0].strip().lower().startswith("# rf_unit:"):
+                unit_code = lines[0].split(":", 1)[1].strip()
+                lines = lines[1:]
             rows = []
-            with open(path, newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for raw in reader:
-                    name = next((raw[k] for k in self._COMPOUND_KEYS if k in raw and raw[k]), None)
-                    rf = next((raw[k] for k in self._RF_KEYS if k in raw and raw[k] not in (None, "")), None)
-                    if name is None or rf is None:
-                        continue
-                    rows.append({"Compound": str(name).strip(), "response_factor": float(rf)})
+            reader = csv.DictReader(io.StringIO("\n".join(lines)))
+            for raw in reader:
+                name = next((raw[k] for k in self._COMPOUND_KEYS if k in raw and raw[k]), None)
+                rf = next((raw[k] for k in self._RF_KEYS if k in raw and raw[k] not in (None, "")), None)
+                if name is None or rf is None:
+                    continue
+                rows.append({"Compound": str(name).strip(), "response_factor": float(rf)})
         except Exception as e:
             QMessageBox.critical(self, "Import RF Table Failed", str(e))
             return
         self.table.set_rows(rows)   # replace
+        if unit_code is not None and unit_code in RF_UNITS:
+            self._applying = True
+            try:
+                self.select_rf_unit(unit_code)
+                self._update_rf_header()
+            finally:
+                self._applying = False
         self.rf_table_changed.emit()
 
     def _on_export(self) -> None:
@@ -144,6 +157,7 @@ class RFTableFrame(QWidget):
             return
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
+                f.write(f"# rf_unit: {self.get_rf_unit()}\n")
                 writer = csv.writer(f)
                 writer.writerow(["Compound", "Response Factor"])
                 for e in self.get_rf_entries():

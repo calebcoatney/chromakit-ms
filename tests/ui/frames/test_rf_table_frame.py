@@ -143,3 +143,40 @@ def test_header_plain_when_unspecified(qtbot):
     frame.select_rf_unit("unspecified")
     hdr = frame.table.table.horizontalHeaderItem(1).text()
     assert hdr == "Response Factor"
+
+
+def test_export_writes_unit_line(qtbot, tmp_path, monkeypatch):
+    frame = _make(qtbot)
+    frame.apply_method(_method_with_rf())
+    frame.select_rf_unit("area_per_wt_pct")
+    out = tmp_path / "rf.csv"
+    monkeypatch.setattr("ui.frames.rf_table.QFileDialog.getSaveFileName",
+                        lambda *a, **k: (str(out), "CSV Files (*.csv)"))
+    frame.export_btn.click()
+    text = out.read_text()
+    assert "# rf_unit: area_per_wt_pct" in text
+    assert "Hydrogen" in text
+
+
+def test_import_reads_unit_line(qtbot, tmp_path, monkeypatch):
+    frame = _make(qtbot)
+    frame.select_rf_unit("unspecified")
+    src = tmp_path / "in.csv"
+    src.write_text("# rf_unit: area_per_wt_pct\nCompound,Response Factor\nMethane,1000\n")
+    monkeypatch.setattr("ui.frames.rf_table.QFileDialog.getOpenFileName",
+                        lambda *a, **k: (str(src), "CSV Files (*.csv)"))
+    frame.import_btn.click()
+    assert frame.get_rf_unit() == "area_per_wt_pct"
+    assert [e.compound for e in frame.get_rf_entries()] == ["Methane"]
+
+
+def test_import_without_unit_line_keeps_current_unit(qtbot, tmp_path, monkeypatch):
+    frame = _make(qtbot)
+    frame.select_rf_unit("area_per_mol")
+    src = tmp_path / "in.csv"
+    src.write_text("Compound,Response Factor\nMethane,1000\n")
+    monkeypatch.setattr("ui.frames.rf_table.QFileDialog.getOpenFileName",
+                        lambda *a, **k: (str(src), "CSV Files (*.csv)"))
+    frame.import_btn.click()
+    assert frame.get_rf_unit() == "area_per_mol"
+    assert [e.compound for e in frame.get_rf_entries()] == ["Methane"]
