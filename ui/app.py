@@ -13,6 +13,7 @@ from ui.frames.parameters import ParametersFrame
 from ui.frames.ms import MSFrame
 from ui.frames.rt_table import RTTableFrame
 from ui.frames.quantitation import QuantitationFrame
+from ui.frames.rf_table import RFTableFrame
 from ui.frames.buttons import ButtonFrame
 from ui.dialogs.automation_dialog import AutomationDialog
 from ui.dialogs.export_settings_dialog import ExportSettingsDialog
@@ -105,6 +106,9 @@ class ChromaKitApp(QMainWindow):
         # Create RT Table frame
         self.rt_table_frame = RTTableFrame()
         
+        # Create RF Table frame
+        self.rf_table_frame = RFTableFrame()
+        
         # Create Quantitation frame
         self.quantitation_frame = QuantitationFrame()
         
@@ -113,6 +117,7 @@ class ChromaKitApp(QMainWindow):
         self.right_tabs.addTab(self.parameters_frame, "Parameters")
         self.right_tabs.addTab(self.ms_frame, "Mass Spectrometry")
         self.right_tabs.addTab(self.rt_table_frame, "RT Table")
+        self.right_tabs.addTab(self.rf_table_frame, "RF Table")
         self.right_tabs.addTab(self.quantitation_frame, "Quantitation")
         self.right_tabs.setMinimumWidth(350) # Ensure the tab widget has a reasonable minimum width
         
@@ -127,6 +132,14 @@ class ChromaKitApp(QMainWindow):
         self._deconvolve_ms_run = False
         self._deconv_inspector = None
 
+        # ── Document model: current_method is the always-present atom ──────────
+        from logic.method import ChromaMethod
+        self.current_method = ChromaMethod(name="Untitled", signal_type="gc")
+        self.current_method_path = None
+        self._method_dirty = False
+        self._loading_method = False
+        # ──────────────────────────────────────────────────────────────────────
+
         # Connect signals - only connecting those signals that currently exist
         self.file_tree.file_selected.connect(self.on_file_selected)
         self.file_tree.d_folder_opened.connect(self.on_file_selected)
@@ -134,6 +147,9 @@ class ChromaKitApp(QMainWindow):
         self.plot_frame.point_selected.connect(self.on_point_selected)
         self.plot_frame.peak_selected.connect(self._on_gcxgc_peak_selected)
         self.parameters_frame.parameters_changed.connect(self.on_parameters_changed)
+        self.parameters_frame.parameters_changed.connect(self._on_params_writeback)
+        self.parameters_frame.save_method_requested.connect(self.save_method)
+        self.parameters_frame.load_method_requested.connect(self.load_method)
         self.parameters_frame.gcxgc_params_changed.connect(self._on_gcxgc_params_changed)
         
         # Connect button frame signals
@@ -147,10 +163,15 @@ class ChromaKitApp(QMainWindow):
 
         # Connect RT table signals
         self.rt_table_frame.rt_table_changed.connect(self.on_rt_table_changed)
+        self.rt_table_frame.rt_table_changed.connect(self._on_rt_writeback)
+        
+        # Connect RF table signals
+        self.rf_table_frame.rf_table_changed.connect(self._on_rf_writeback)
         
         # Connect quantitation signals
         self.quantitation_frame.quantitation_changed.connect(self.on_quantitation_changed)
-        self.quantitation_frame.requantitate_requested.connect(self._perform_quantitation)
+        self.quantitation_frame.quantitation_changed.connect(self._on_quant_writeback)
+        self.quantitation_frame.requantitate_requested.connect(self.run_quantitation_for_current_strategy)
         
         # Add this new connection for MS spectrum viewing
         self.plot_frame.ms_spectrum_requested.connect(self.on_ms_spectrum_requested)
@@ -233,6 +254,159 @@ class ChromaKitApp(QMainWindow):
         # Add theme toggle to Settings menu
         self.theme_action = settings_menu.addAction("Toggle Dark/Light Mode")
         self.theme_action.triggered.connect(self.toggle_theme)
+
+        # Push the (Untitled) document into every frame and set the title.
+        self._apply_method_to_frames()
+        self._update_window_title()
+
+    def _apply_method_to_frames(self):
+        """Push current_method into each frame, guarded so frame change
+        signals (wired to write-back slots) do not feed back during a load."""
+        self._loading_method = True
+        try:
+            self.parameters_frame.apply_method(self.current_method)
+            self.rt_table_frame.apply_method(self.current_method)
+            if self.rf_table_frame is not None:
+                self.rf_table_frame.apply_method(self.current_method)
+            self.quantitation_frame.apply_method(self.current_method)
+        finally:
+            self._loading_method = False
+
+    def _mark_dirty(self, dirty=True):
+        """Set the document dirty flag and refresh the window title."""
+        self._method_dirty = dirty
+        self._update_window_title()
+
+    def _update_window_title(self):
+        """Title is document-driven: 'Name* — ChromaKit [— Profile]'."""
+        name = self.current_method.name if self.current_method else "Untitled"
+        star = "*" if self._method_dirty else ""
+        title = f"{name}{star}  \u2014  ChromaKit"
+        if getattr(self, "current_profile", None) is not None:
+            title += f"  \u2014  {self.current_profile.display_name}"
+        self.setWindowTitle(title)
+
+    def save_method(self):
+        from pathlib import Path
+        if self.current_method_path is None:
+            return self.save_method_as()
+        try:
+            self.current_method.to_file(self.current_method_path)
+            self._mark_dirty(False)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Method Failed", str(e))
+
+    def save_method_as(self):
+        from pathlib import Path
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Method", f"{self.current_method.name}.chromethod",
+            "ChromaKit Method (*.chromethod)",
+        )
+        if not path:
+            return
+        try:
+            self.current_method.name = Path(path).stem
+            self.current_method.to_file(path)
+            self.current_method_path = Path(path)
+            self._mark_dirty(False)
+            self._update_window_title()
+        except Exception as e:
+            QMessageBox.critical(self, "Save Method Failed", str(e))
+
+    def load_method(self):
+        from pathlib import Path
+        from logic.method import ChromaMethod
+        if not self._maybe_prompt_save():
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Method", "", "ChromaKit Method (*.chromethod)",
+        )
+        if not path:
+            return
+        try:
+            method = ChromaMethod.from_file(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Load Method Failed", str(e))
+            return
+        self.current_method = method
+        self.current_method_path = Path(path)
+        self._apply_method_to_frames()
+        self._mark_dirty(False)
+        self._update_window_title()
+
+    def _maybe_prompt_save(self) -> bool:
+        if not self._method_dirty:
+            return True
+        resp = QMessageBox.question(
+            self, "Unsaved Changes",
+            f"Save changes to '{self.current_method.name}'?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if resp == QMessageBox.Cancel:
+            return False
+        if resp == QMessageBox.Save:
+            self.save_method()
+            return not self._method_dirty  # False if save was cancelled at the file dialog
+        return True  # Discard
+
+    def closeEvent(self, event):
+        if not self._maybe_prompt_save():
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def _on_params_writeback(self, params):
+        """Pull the processing-params slice back into current_method when the
+        user edits parameters. Guarded during programmatic loads."""
+        if self._loading_method:
+            return
+        from logic.method import ChromaMethod
+        # Rebuild the processing-params slice into current_method, preserving identity fields.
+        updated = ChromaMethod.from_gui_params(
+            params,
+            name=self.current_method.name,
+            signal_type=self.current_method.signal_type,
+            chemstation_area_factor=self.current_method.chemstation_area_factor,
+        )
+        updated.rt_table = self.current_method.rt_table
+        updated.rf_table = self.current_method.rf_table
+        updated.rt_matching = self.current_method.rt_matching
+        updated.quant_strategy = self.current_method.quant_strategy
+        # Preserve provenance/metadata that from_gui_params would otherwise reset
+        updated.created_at = self.current_method.created_at
+        updated.version = self.current_method.version
+        self.current_method = updated
+        self._mark_dirty(True)
+
+    def _on_rt_writeback(self, *args):
+        """Pull the RT table + matching params back into current_method when the
+        user edits the RT grid or matching settings. Guarded during loads."""
+        if self._loading_method:
+            return
+        self.current_method.rt_table = self.rt_table_frame.get_rt_entries()
+        self.current_method.rt_matching = self.rt_table_frame.get_matching_params()
+        self._mark_dirty(True)
+
+    def _on_rf_writeback(self, *args):
+        """Pull the RF table back into current_method on any RF-grid edit.
+        Guarded during programmatic loads."""
+        if self._loading_method:
+            return
+        self.current_method.rf_table = self.rf_table_frame.get_rf_entries()
+        self.current_method.rf_unit = self.rf_table_frame.get_rf_unit()
+        self._mark_dirty(True)
+
+    def _on_quant_writeback(self, *args):
+        """Pull the selected quant strategy back into current_method and reflect
+        it on the RF frame's active badge. Guarded during loads."""
+        if self._loading_method:
+            return
+        strat = self.quantitation_frame.current_strategy()
+        self.current_method.quant_strategy = strat
+        if self.rf_table_frame is not None:
+            self.rf_table_frame.set_active(strat == "rf_table")
+        self._mark_dirty(True)
 
     def apply_stylesheet(self, theme):
         """Apply the QSS stylesheet with the selected theme."""
@@ -506,10 +680,12 @@ class ChromaKitApp(QMainWindow):
         ms_idx = self.right_tabs.indexOf(self.ms_frame)
         quant_idx = self.right_tabs.indexOf(self.quantitation_frame)
         rt_idx = self.right_tabs.indexOf(self.rt_table_frame)
+        rf_idx = self.right_tabs.indexOf(self.rf_table_frame)
 
         self.right_tabs.setTabVisible(ms_idx, is_chrom or is_gcxgc)
         self.right_tabs.setTabVisible(quant_idx, is_chrom)
         self.right_tabs.setTabVisible(rt_idx, is_chrom)
+        self.right_tabs.setTabVisible(rf_idx, is_chrom)
 
         if is_gcxgc:
             self.right_tabs.setCurrentIndex(ms_idx)
@@ -521,8 +697,10 @@ class ChromaKitApp(QMainWindow):
         if hasattr(self.ms_frame, 'spectrum_toggle_btn'):
             self.ms_frame.spectrum_toggle_btn.setVisible(not is_gcxgc)
         
-        # 4. Update window title
-        self.setWindowTitle(f"ChromaKit - {profile.display_name}")
+        # 4. Sync signal_type while untitled; refresh document-driven title
+        if self.current_method_path is None:
+            self.current_method.signal_type = profile.name
+        self._update_window_title()
         
         # 5. Forward ui_mode to ParametersFrame for widget visibility
         if hasattr(self.parameters_frame, 'set_mode'):
@@ -1009,8 +1187,12 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage("No peak available at this position")
             return
         
-        # Check if RT table is available and enabled
-        if not hasattr(self, 'rt_settings') or not self.rt_settings.get('enabled', False):
+        # Check if RT table is available and enabled.
+        # Use the frame's runtime on/off toggle (checkbox + data present) — the
+        # same robust check the batch path uses (_apply_rt_matching_to_peaks) —
+        # rather than the fragile rt_settings dict, which is only populated when
+        # the rt_table_changed signal last fired and may be stale on restart.
+        if not self.rt_table_frame.is_enabled():
             self.status_bar.showMessage("RT Table is not enabled. Please load an RT table first.")
             return
         
@@ -1018,7 +1200,12 @@ class ChromaKitApp(QMainWindow):
         peak = self.integrated_peaks[peak_index]
         
         # Look up compound from RT table
-        rt_compound = self.rt_table_frame.lookup_compound_by_rt(peak.retention_time)
+        import logic.rt_matching as rt_matching
+        rt_compound = rt_matching.lookup_compound_by_rt(
+            peak.retention_time,
+            self.current_method.rt_table_as_dataframe(),
+            self.current_method.rt_matching,
+        )
         
         if not rt_compound:
             self.status_bar.showMessage(f"No compound found in RT table for retention time {peak.retention_time:.3f} min")
@@ -1029,7 +1216,9 @@ class ChromaKitApp(QMainWindow):
         msg = QMessageBox(self)
         msg.setWindowTitle("RT Table Assignment")
         msg.setText(f"Assign peak at {peak.retention_time:.3f} min to:")
-        msg.setInformativeText(f"Compound: {rt_compound}\n(from RT table using strict window matching)")
+        mode_names = {0: "Simple Window", 1: "Closest Apex", 2: "Weighted Distance"}
+        mode_label = mode_names.get(self.current_method.rt_matching.matching_mode, "RT")
+        msg.setInformativeText(f"Compound: {rt_compound}\n(from RT table using {mode_label} matching)")
         msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
         msg.setDefaultButton(QMessageBox.Ok)
         
@@ -1930,57 +2119,17 @@ class ChromaKitApp(QMainWindow):
             return None
 
     def _apply_rt_matching_to_peaks(self, peaks):
-        """Apply RT table matching to integrated peaks."""
-        rt_table_frame = self.rt_table_frame
-        # Use the frame's live state as the authoritative source so this works
-        # even when rt_settings was never emitted (e.g. app restarted with RT
-        # table already loaded but checkbox not toggled again this session).
-        if not rt_table_frame.is_enabled():
+        """Apply RT table matching to integrated peaks via shared logic."""
+        import logic.rt_matching as rt_matching
+        # is_enabled() is the runtime on/off toggle (checkbox + data present);
+        # it is NOT persisted in the method, so it stays a frame call.
+        if not self.rt_table_frame.is_enabled():
             return
-        high_priority = rt_table_frame.high_priority_checkbox.isChecked()
-        
-        for peak in peaks:
-            # Look up compound by retention time
-            rt_compound = rt_table_frame.lookup_compound_by_rt(peak.retention_time)
-
-            if rt_compound:
-                # Check if we should apply the RT assignment
-                should_apply = False
-
-                if high_priority:
-                    # High priority: always override
-                    should_apply = True
-                    assignment_source = "RT (priority)"
-                else:
-                    # Low priority: only assign if no existing assignment or unknown
-                    current_compound = getattr(peak, 'compound_id', 'Unknown')
-                    if current_compound in ['Unknown', f"Unknown ({peak.retention_time:.3f})", None]:
-                        should_apply = True
-                        assignment_source = "RT"
-                    else:
-                        assignment_source = None
-
-                if should_apply:
-                    # Apply RT assignment
-                    peak.compound_id = rt_compound
-                    if hasattr(peak, 'Compound_ID'):
-                        peak.Compound_ID = rt_compound
-
-                    # Mark as RT assignment and clear MS search info
-                    peak.rt_assignment = True
-                    peak.rt_assignment_source = assignment_source
-                    peak.Qual = None  # Clear MS match score
-
-                    # Clear MS-related fields since this is an RT assignment
-                    if hasattr(peak, 'casno'):
-                        peak.casno = None
-                    if hasattr(peak, 'CAS_Number'):
-                        peak.CAS_Number = None
-
-                    print(f"RT matching: Peak {peak.peak_number} at {peak.retention_time:.3f} min assigned to '{rt_compound}' ({assignment_source})")
-                else:
-                    # Mark that RT matching was available but not used
-                    peak.rt_match_available = rt_compound
+        params = self.current_method.rt_matching
+        df = self.current_method.rt_table_as_dataframe()
+        if df.empty:
+            return
+        rt_matching.apply_rt_matching(peaks, df, params)
 
     def _show_integration_results(self, integration_results):
         """Show integration results in a dialog."""
@@ -2883,9 +3032,9 @@ class ChromaKitApp(QMainWindow):
         else:
             self.status_bar.showMessage(f"Batch MS search completed: {match_count}/{total_peaks} peaks identified")
         
-        # Perform quantitation if enabled
-        if self.quantitation_frame.is_enabled() and match_count > 0:
-            self._perform_quantitation()
+        # Perform quantitation if a strategy is selected
+        if self.current_method.quant_strategy and match_count > 0:
+            self.run_quantitation_for_current_strategy()
         
         # Update results view
         self.update_results_view()
@@ -3388,6 +3537,31 @@ class ChromaKitApp(QMainWindow):
 
         if self._deconv_inspector:
             self._deconv_inspector.show_search_results(results, rt)
+
+    def run_quantitation_for_current_strategy(self):
+        """Dispatch quantitation based on the current method's quant strategy.
+
+        'rf_table' -> RF-table external-standard quant (quantitate_rf),
+        'internal_standard' -> Polyarc + IS quant (_perform_quantitation),
+        None -> no-op.
+        """
+        strategy = self.current_method.quant_strategy
+        if strategy == "rf_table":
+            self._perform_rf_quantitation()
+        elif strategy == "internal_standard":
+            self._perform_quantitation()
+        # None -> no-op
+
+    def _perform_rf_quantitation(self):
+        """Run RF-table quantitation over integrated peaks and show the summary."""
+        import logic.rf_quantitation as rf_quant
+        peaks = getattr(self, "integrated_peaks", None)
+        if not peaks:
+            return
+        summary = rf_quant.quantitate_rf(peaks, self.current_method.rf_table)
+        self.quantitation_frame.update_rf_status(summary)
+        if hasattr(self, "update_results_view"):
+            self.update_results_view()
 
     def _perform_quantitation(self):
         """Perform quantitation using Polyarc + IS method (delegates to runner)."""

@@ -37,6 +37,8 @@ from logic.quantitation_runner import (
     run_quantitation, lookup_compound_metadata,
     InternalStandardSpec, SampleSpec,
 )
+from logic.rt_matching import apply_rt_matching
+from logic.rf_quantitation import quantitate_rf
 from functools import partial
 from api.models import (
     BrowseResponse, FileEntry,
@@ -47,7 +49,7 @@ from api.models import (
     AssignmentRequest, ScalingFactorsRequest,
     NavigationResponse,
     ExportRequest,
-    RunRequest, RunResponse,
+    RunRequest, RunResponse, RunQuantSummary,
     LibraryLoadRequest, LibraryLoadResponse,
     SpectralDeconvolutionRequest, SpectralDeconvolutionResponse,
     MSBatchSearchRequest, MSBatchSearchResponse,
@@ -725,6 +727,26 @@ async def run_pipeline(request: RunRequest):
         )
         peaks = integrated.get("peaks", [])
 
+        # 4b. RT-assign — populate compound_id from the method's embedded RT table.
+        if method.rt_table:
+            rt_df = method.rt_table_as_dataframe()
+            apply_rt_matching(peaks, rt_df, method.rt_matching)
+
+        # 4c. Quantitate — RF-table strategy only (Phase 1a).
+        run_quant_summary = None
+        if method.quant_strategy == "rf_table" and method.rf_table:
+            rf_summary = quantitate_rf(peaks, method.rf_table, rf_unit=method.rf_unit, normalize=True)
+            run_quant_summary = RunQuantSummary(
+                strategy=rf_summary.strategy,
+                peaks_quantitated=rf_summary.peaks_quantitated,
+                peaks_skipped_unassigned=len(rf_summary.skipped_unassigned),
+                peaks_skipped_no_rf=len(rf_summary.skipped_no_rf),
+                normalized=rf_summary.normalized,
+                warnings=list(rf_summary.warnings),
+                rf_unit=rf_summary.rf_unit,
+                composition_basis=rf_summary.composition_basis,
+            )
+
         # 5. Export JSON (writes alongside data file, same as GUI behavior).
         # Skipped when write_output=False so sweep iterations don't spam disk.
         if request.write_output:
@@ -757,6 +779,7 @@ async def run_pipeline(request: RunRequest):
             peak_count=len(peaks_dicts),
             peaks=peaks_dicts,
             output_files=output_files,
+            quantitation=run_quant_summary,
         )
 
     except HTTPException:

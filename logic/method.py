@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+import pandas as pd
 from pydantic import BaseModel, Field, field_validator
+
+from logic.rf_quantitation import RF_UNITS
 
 
 # ── Processing Parameter Sub-Models ────────────────────────────────────────────
@@ -104,6 +107,36 @@ class IntegrationSubParams(BaseModel):
     )
 
 
+class RTTableEntry(BaseModel):
+    compound: str
+    start: float          # RT window start (min)
+    apex: float           # expected apex (min)
+    end: float            # RT window end (min)
+
+
+class RFTableEntry(BaseModel):
+    compound: str
+    response_factor: float    # response factor; output basis is set by the method's rf_unit
+
+
+class RTMatchingWeights(BaseModel):
+    start: float = 0.25
+    apex: float = 0.50
+    end: float = 0.25
+
+
+class RTMatchingParams(BaseModel):
+    matching_mode: int = Field(
+        default=0, ge=0, le=2,
+        description="0=Simple Window, 1=Closest Apex, 2=Weighted Distance",
+    )
+    tolerance: float = 0.1          # min; Closest Apex mode
+    window_expansion: float = 0.0   # min; Simple Window mode
+    weights: RTMatchingWeights = Field(default_factory=RTMatchingWeights)
+    allow_duplicates: bool = True
+    high_priority: bool = False
+
+
 # ── ChromaMethod ────────────────────────────────────────────────────────────────
 
 _METADATA_FIELDS = frozenset({
@@ -136,6 +169,18 @@ class ChromaMethod(BaseModel):
     negative_peaks: NegativePeakParams = Field(default_factory=NegativePeakParams)
     shoulders: ShoulderParams = Field(default_factory=ShoulderParams)
     integration: IntegrationSubParams = Field(default_factory=IntegrationSubParams)
+    rt_table: List[RTTableEntry] = Field(default_factory=list)
+    rf_table: List[RFTableEntry] = Field(default_factory=list)
+    rt_matching: RTMatchingParams = Field(default_factory=RTMatchingParams)
+    quant_strategy: Optional[str] = Field(
+        default=None,
+        description="Quantitation strategy: None | 'rf_table' | 'internal_standard'. "
+                    "Phase 1a implements 'rf_table' only.",
+    )
+    rf_unit: str = Field(
+        default="unspecified",
+        description="RF response-factor unit code (see logic.rf_quantitation.RF_UNITS)",
+    )
     chemstation_area_factor: float = Field(
         default=0.0784,
         description="Chemstation area conversion factor applied during integration",
@@ -149,6 +194,13 @@ class ChromaMethod(BaseModel):
             SignalProfileRegistry.get(v)
         except KeyError as exc:
             raise ValueError(str(exc)) from exc
+        return v
+
+    @field_validator("rf_unit")
+    @classmethod
+    def _validate_rf_unit(cls, v: str) -> str:
+        if v not in RF_UNITS:
+            raise ValueError(f"Unknown rf_unit '{v}'; expected one of {sorted(RF_UNITS)}")
         return v
 
     @classmethod
@@ -170,6 +222,25 @@ class ChromaMethod(BaseModel):
         processor receives the expected key names.
         """
         return self.model_dump(by_alias=True, exclude=_METADATA_FIELDS)
+
+    def rt_table_as_dataframe(self) -> "pd.DataFrame":
+        """Return the embedded RT table as a DataFrame with the GUI's column
+        names (Compound, Start, Apex, End) that logic/rt_matching expects.
+
+        The empty frame is constructed with explicit dtypes so the numeric
+        columns are float64 on both the empty and populated paths (downstream
+        RT matching does float comparisons on Start/Apex/End)."""
+        if not self.rt_table:
+            return pd.DataFrame({
+                "Compound": pd.Series([], dtype="object"),
+                "Start": pd.Series([], dtype="float64"),
+                "Apex": pd.Series([], dtype="float64"),
+                "End": pd.Series([], dtype="float64"),
+            })
+        return pd.DataFrame(
+            [[e.compound, e.start, e.apex, e.end] for e in self.rt_table],
+            columns=["Compound", "Start", "Apex", "End"],
+        )
 
     @classmethod
     def from_gui_params(

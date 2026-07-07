@@ -6,9 +6,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 import pandas as pd
-import numpy as np
-import os
 import json
+
+from logic.method import ChromaMethod, RTTableEntry, RTMatchingParams, RTMatchingWeights
+from ui.widgets.editable_table import EditableTableWidget, ColumnSpec
 
 
 GCXGC_COLUMN_HEADERS = [
@@ -156,13 +157,11 @@ class RTTableFrame(QWidget):
         super().__init__(parent)
         self.setMinimumWidth(350)
         
+        # Guard against re-entrant settings emits while apply_method syncs widgets
+        self._applying = False
+        
         # RT table data
         self.rt_table_data = None
-        self.rt_table_file = None
-        
-        # Change tracking
-        self.is_modified = False
-        self.original_data = None  # Store original data for comparison
         
         # Create main layout
         self.layout = QVBoxLayout(self)
@@ -183,9 +182,9 @@ class RTTableFrame(QWidget):
         # File selection controls
         file_controls = QHBoxLayout()
         
-        self.load_button = QPushButton("Load RT Table...")
-        self.load_button.clicked.connect(self._load_rt_table)
-        file_controls.addWidget(self.load_button)
+        self.import_button = QPushButton("Import RT Table\u2026")
+        self.import_button.clicked.connect(self._import_rt_table)
+        file_controls.addWidget(self.import_button)
         
         self.clear_button = QPushButton("Clear Table")
         self.clear_button.clicked.connect(self._clear_rt_table)
@@ -194,15 +193,10 @@ class RTTableFrame(QWidget):
         
         file_layout.addLayout(file_controls)
         
-        # Save/Export controls
+        # Export controls
         save_controls = QHBoxLayout()
         
-        self.save_button = QPushButton("Save (CSV+JSON)")
-        self.save_button.clicked.connect(self._save_rt_table)
-        self.save_button.setEnabled(False)
-        save_controls.addWidget(self.save_button)
-        
-        self.export_button = QPushButton("Save As...")
+        self.export_button = QPushButton("Export RT Table\u2026")
         self.export_button.clicked.connect(self._export_rt_table)
         self.export_button.setEnabled(False)
         save_controls.addWidget(self.export_button)
@@ -217,41 +211,66 @@ class RTTableFrame(QWidget):
         self.layout.addWidget(file_group)
     
     def _init_table_widget(self):
-        """Initialize the table widget for displaying RT data."""
+        """Initialize the table widgets for displaying RT data.
+
+        Two widgets share this group box:
+          * ``self.rt_table`` — an editable RT grid (Compound/Start/Apex/End)
+            that mirrors ``self.rt_table_data`` and is the normal RT view.
+          * ``self.table_widget`` — a plain ``QTableWidget`` used ONLY for the
+            transient 9-column GCxGC results view (populate_gcxgc). It is hidden
+            in the normal RT workflow so the two views never corrupt each other.
+        """
         table_group = QGroupBox("RT Table Contents")
         table_layout = QVBoxLayout(table_group)
-        
+
+        # Editable RT grid — the normal RT view; kept consistent with rt_table_data.
+        RT_COLUMNS = [
+            ColumnSpec(key="Compound", header="Compound", dtype="str", default=""),
+            ColumnSpec(key="Start", header="Start RT", dtype="float", default=0.0),
+            ColumnSpec(key="Apex", header="Apex RT", dtype="float", default=0.0),
+            ColumnSpec(key="End", header="End RT", dtype="float", default=0.0),
+        ]
+        self.rt_table = EditableTableWidget(RT_COLUMNS)
+        self.rt_table.setMaximumHeight(240)
+        self.rt_table.table_edited.connect(self._on_table_edited)
+
+        # Configure the inner table's header sizing (Compound stretches).
+        rt_header = self.rt_table.table.horizontalHeader()
+        rt_header.setStretchLastSection(False)
+        rt_header.setSectionResizeMode(0, QHeaderView.Stretch)              # Compound
+        rt_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)     # Start RT
+        rt_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)     # Apex RT
+        rt_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)     # End RT
+
+        table_layout.addWidget(self.rt_table)
+
+        # Transient GCxGC results view — dedicated QTableWidget, hidden by default.
         self.table_widget = QTableWidget()
         self.table_widget.setMaximumHeight(200)
         self.table_widget.setAlternatingRowColors(True)
-        
-        # Set headers - now includes Apex RT column
-        self.table_widget.setColumnCount(4)
-        self.table_widget.setHorizontalHeaderLabels(["Compound", "Start RT", "Apex RT", "End RT"])
-        
-        # Configure table
-        header = self.table_widget.horizontalHeader()
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QHeaderView.Stretch)  # Compound column stretches
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Start RT
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Apex RT
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # End RT
-        
+        self.table_widget.setColumnCount(len(GCXGC_COLUMN_HEADERS))
+        self.table_widget.setHorizontalHeaderLabels(GCXGC_COLUMN_HEADERS)
+        self.table_widget.hide()
+
         table_layout.addWidget(self.table_widget)
         self.layout.addWidget(table_group)
     
     def set_column_labels(self, position_label: str) -> None:
         """Update table headers to match the active signal profile (e.g., 'Wavenumber')."""
         labels = ["Compound", f"Start {position_label}", f"Apex {position_label}", f"End {position_label}"]
-        self.table_widget.setHorizontalHeaderLabels(labels)
+        self.rt_table.table.setHorizontalHeaderLabels(labels)
     
     def populate_gcxgc(self, peaks: list) -> None:
         """Display GCxGC2DPeak results in the table.
 
-        Replaces whatever is currently shown with a flat peak results table.
-        Does not modify rt_table_data or affect compound matching.
+        Swaps the normal editable RT grid out for a dedicated flat peak results
+        table. Does not modify rt_table_data or affect compound matching.
         """
         from logic.gcxgc_peak import GCxGC2DPeak
+
+        # Swap views: hide the editable RT grid, show the GCxGC results widget.
+        self.rt_table.hide()
+        self.table_widget.show()
 
         self.table_widget.clearContents()
         self.table_widget.setColumnCount(len(GCXGC_COLUMN_HEADERS))
@@ -450,207 +469,129 @@ class RTTableFrame(QWidget):
         
         self._on_settings_changed()
     
-    def _load_rt_table(self):
-        """Load RT table from CSV or JSON file."""
+    def _import_rt_table(self):
+        """Import an RT table from CSV or JSON, replacing the current grid.
+
+        Parses the file into a validated DataFrame (via ``_parse_csv`` /
+        ``_parse_json``), pushes it into the editable RT grid, and emits
+        ``rt_table_changed``. Importing REPLACES the method's current RT table;
+        the app writes the emitted table back into ``current_method``.
+        """
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Load RT Table", "", 
+            self, "Import RT Table", "",
             "RT Table Files (*.csv *.json);;CSV Files (*.csv);;JSON Files (*.json);;All Files (*)"
         )
-        
         if not file_path:
             return
-        
         try:
-            # Determine file format and load accordingly
-            if file_path.lower().endswith('.json'):
-                df = self._load_from_json(file_path)
+            if file_path.lower().endswith(".json"):
+                df = self._parse_json(file_path)
             else:
-                # Default to CSV loading (handles .csv and unknown extensions)
-                df = self._load_from_csv(file_path)
-            
-            if df is None:
-                return  # Error already shown in load method
-            
-            # Store the data
-            self.rt_table_data = df
-            self.rt_table_file = file_path
-            
-            # Initialize change tracking
-            self.original_data = df.copy()
-            self.is_modified = False
-            
-            # Update UI
-            self._populate_table()
-            self._update_file_info()
-            self._set_settings_enabled(True)
-            self._on_settings_changed()
-            
-            # Enable buttons
-            self.clear_button.setEnabled(True)
-            self.save_button.setEnabled(False)  # Not modified yet
-            self.export_button.setEnabled(True)
-            
-            # Show success message
-            file_format = "JSON" if file_path.lower().endswith('.json') else "CSV"
-            QMessageBox.information(
-                self, "RT Table Loaded", 
-                f"Successfully loaded {len(df)} compounds from {file_format} RT table."
-            )
-            
+                df = self._parse_csv(file_path)
         except Exception as e:
-            QMessageBox.critical(
-                self, "Error Loading RT Table", 
-                f"Failed to load RT table:\n{str(e)}"
-            )
-    
-    def _load_from_csv(self, file_path):
-        """Load RT table from CSV file with legacy format support."""
-        # Read CSV file
+            QMessageBox.critical(self, "Import RT Table Failed", str(e))
+            return
+
+        # Replace the editable grid (guarded — no table_edited emit).
+        self.table_widget.hide()
+        self.rt_table.show()
+        self.rt_table.set_dataframe(df)
+        self.rt_table_data = self.rt_table.get_dataframe()
+
+        # Enable controls now that we have data.
+        self._set_settings_enabled(True)
+        self.clear_button.setEnabled(True)
+        self.export_button.setEnabled(True)
+
+        self._update_file_info()      # refresh "(N compounds)" label
+        self._on_settings_changed()   # emits rt_table_changed
+
+    def _parse_csv(self, file_path):
+        """Parse a CSV RT table into a validated DataFrame (import adapter).
+
+        Supports the legacy 3-column format (Compound/Start/End) by synthesizing
+        Apex = (Start + End) / 2. Raises ValueError on invalid data.
+        """
         df = pd.read_csv(file_path)
-        
-        # Check for legacy format (without Apex RT column)
-        legacy_format = False
-        required_columns_legacy = ['Compound', 'Start', 'End']
-        required_columns_new = ['Compound', 'Start', 'Apex', 'End']
-        
-        # Check if this is the new format with Apex column
-        if all(col in df.columns for col in required_columns_new):
-            # New format with Apex RT
-            pass
-        elif all(col in df.columns for col in required_columns_legacy):
-            # Legacy format - need to add Apex column
-            legacy_format = True
-            df['Apex'] = (df['Start'] + df['End']) / 2.0
-            # Reorder columns to put Apex between Start and End
-            df = df[['Compound', 'Start', 'Apex', 'End']]
-            
-            # Show user notification about automatic apex calculation
-            QMessageBox.information(
-                self, "Legacy RT Table Format Detected", 
-                "This RT table uses the legacy format without an 'Apex RT' column.\n\n"
-                "Apex RT values have been automatically calculated by averaging Start and End RT values.\n"
-                "You may want to review and manually adjust these apex values for better accuracy."
-            )
-        else:
-            QMessageBox.warning(
-                self, "Invalid Format", 
-                f"CSV file must contain columns: {', '.join(required_columns_new)}\n"
-                f"Or legacy format: {', '.join(required_columns_legacy)}\n"
+        legacy = list(df.columns) == ["Compound", "Start", "End"]
+        if legacy:
+            df["Apex"] = (df["Start"] + df["End"]) / 2.0
+            df = df[["Compound", "Start", "Apex", "End"]]
+        elif not all(col in df.columns for col in ["Compound", "Start", "Apex", "End"]):
+            raise ValueError(
+                "CSV file must contain columns: Compound, Start, Apex, End\n"
+                "Or legacy format: Compound, Start, End\n"
                 f"Found columns: {', '.join(df.columns)}"
             )
-            return None
-        
-        # Validate and process the data
-        return self._validate_rt_data(df, legacy_format)
-    
-    def _load_from_json(self, file_path):
-        """Load RT table from JSON file."""
-        with open(file_path, 'r') as f:
+        self._validate_rt_data(df, legacy)
+        # Drop rows with no compound name (NaN/blank) so blank identities never
+        # reach rt_table_data (and thus the matcher). Mirrors _parse_json.
+        df = df[df["Compound"].notna() & (df["Compound"].astype(str).str.strip() != "")]
+        return df
+
+    def _parse_json(self, file_path):
+        """Parse a JSON RT table into a validated DataFrame (import adapter).
+
+        Supports both new (name/start_rt/apex_rt/end_rt) and legacy
+        (compound/start/apex/end) field names, synthesizing Apex when absent.
+        Raises ValueError on invalid data.
+        """
+        with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        # Validate JSON structure
-        if not isinstance(data, dict) or 'compounds' not in data:
-            QMessageBox.warning(
-                self, "Invalid JSON Format", 
-                "JSON file must contain a 'compounds' array with RT table data."
-            )
-            return None
-        
-        compounds = data['compounds']
-        if not isinstance(compounds, list):
-            QMessageBox.warning(
-                self, "Invalid JSON Format", 
-                "The 'compounds' field must be an array."
-            )
-            return None
-        
-        # Convert JSON to DataFrame
         rows = []
-        for compound in compounds:
-            if not isinstance(compound, dict):
+        for c in data.get("compounds", []):
+            name = c.get("name", c.get("compound"))
+            start = c.get("start_rt", c.get("start"))
+            end = c.get("end_rt", c.get("end"))
+            apex = c.get("apex_rt", c.get("apex"))
+            if apex is None and start is not None and end is not None:
+                apex = (start + end) / 2.0
+            if name is None or str(name).strip() == "":
                 continue
-                
-            # Support both old and new field names
-            name = compound.get('name') or compound.get('compound')
-            start_rt = compound.get('start_rt') or compound.get('start')
-            apex_rt = compound.get('apex_rt') or compound.get('apex')
-            end_rt = compound.get('end_rt') or compound.get('end')
-            
-            if name and start_rt is not None and end_rt is not None:
-                # If apex is missing, calculate it
-                if apex_rt is None:
-                    apex_rt = (start_rt + end_rt) / 2.0
-                
-                rows.append({
-                    'Compound': name,
-                    'Start': float(start_rt),
-                    'Apex': float(apex_rt),
-                    'End': float(end_rt)
-                })
-        
-        if not rows:
-            QMessageBox.warning(
-                self, "No Valid Data", 
-                "No valid compound data found in JSON file."
-            )
-            return None
-        
-        df = pd.DataFrame(rows)
-        
-        # Validate and process the data
-        return self._validate_rt_data(df, False)
-    
+            rows.append({"Compound": name, "Start": start, "Apex": apex, "End": end})
+        df = pd.DataFrame(rows, columns=["Compound", "Start", "Apex", "End"])
+        self._validate_rt_data(df, False)
+        return df
+
     def _validate_rt_data(self, df, legacy_format):
-        """Validate RT table data and return processed DataFrame."""
+        """Validate RT table data in place; raise ValueError on invalid data."""
         # Validate data types
         try:
             df['Start'] = pd.to_numeric(df['Start'])
             df['Apex'] = pd.to_numeric(df['Apex'])
             df['End'] = pd.to_numeric(df['End'])
-        except ValueError as e:
-            QMessageBox.warning(
-                self, "Invalid Data", 
+        except (ValueError, TypeError) as e:
+            raise ValueError(
                 f"Start, Apex, and End columns must contain numeric values.\nError: {str(e)}"
             )
-            return None
-        
+
         # Validate RT windows and apex positions
         invalid_windows = df[df['Start'] >= df['End']]
         if not invalid_windows.empty:
-            QMessageBox.warning(
-                self, "Invalid RT Windows", 
+            raise ValueError(
                 f"Found {len(invalid_windows)} compounds where Start RT >= End RT.\n"
                 "Please fix these entries in the file."
             )
-            return None
-        
+
         # Validate apex positions (should be between start and end)
         invalid_apex = df[(df['Apex'] < df['Start']) | (df['Apex'] > df['End'])]
         if not invalid_apex.empty:
-            QMessageBox.warning(
-                self, "Invalid Apex Positions", 
+            raise ValueError(
                 f"Found {len(invalid_apex)} compounds where Apex RT is outside the Start-End window.\n"
                 "Apex RT should be between Start RT and End RT."
             )
-            return None
-        
-        # Mark as modified if we had to do legacy format conversion
-        if legacy_format:
-            self.is_modified = True
-        
+
         return df
 
     def _clear_rt_table(self):
         """Clear the loaded RT table."""
         self.rt_table_data = None
-        self.rt_table_file = None
-        
-        # Reset change tracking
-        self.is_modified = False
-        self.original_data = None
         
         # Clear UI
         self.table_widget.setRowCount(0)
+        self.table_widget.hide()
+        self.rt_table.set_rows([])   # guarded — no emit
+        self.rt_table.show()
         self.file_info_label.setText("No RT table loaded")
         self.status_label.setText("RT matching disabled")
         
@@ -658,50 +599,15 @@ class RTTableFrame(QWidget):
         self._set_settings_enabled(False)
         self.enable_checkbox.setChecked(False)
         self.clear_button.setEnabled(False)
-        self.save_button.setEnabled(False)
         self.export_button.setEnabled(False)
         
         # Emit settings change
         self._on_settings_changed()
     
-    def _save_rt_table(self):
-        """Save the current RT table in dual format (CSV + JSON) or to original file."""
-        if self.rt_table_data is None or len(self.rt_table_data) == 0:
-            QMessageBox.warning(self, "No Data", "No RT table data to save.")
-            return
-        
-        # If we have an original file, save there and also create complementary format
-        if self.rt_table_file:
-            try:
-                # Save to original format
-                if self.rt_table_file.lower().endswith('.json'):
-                    self._export_as_json(self.rt_table_file)
-                    # Also create CSV version
-                    csv_file = self.rt_table_file.rsplit('.', 1)[0] + '.csv'
-                    self._export_as_csv(csv_file)
-                    complementary_note = f"\nAlso saved CSV version: {csv_file}"
-                else:
-                    # Assume CSV
-                    self._export_as_csv(self.rt_table_file)
-                    # Also create JSON version
-                    json_file = self.rt_table_file.rsplit('.', 1)[0] + '.json'
-                    self._export_as_json(json_file)
-                    complementary_note = f"\nAlso saved JSON version: {json_file}"
-                
-                self._mark_as_saved()
-                QMessageBox.information(
-                    self, "Saved", 
-                    f"RT table saved to:\n{self.rt_table_file}{complementary_note}"
-                )
-            except Exception as e:
-                QMessageBox.critical(self, "Save Error", f"Failed to save RT table:\n{str(e)}")
-        else:
-            # No original file, prompt for save location
-            self._export_rt_table()
-    
     def _export_rt_table(self):
-        """Export RT table to a new file with format selection."""
-        if self.rt_table_data is None or len(self.rt_table_data) == 0:
+        """Export the current RT grid to a chosen CSV or JSON path."""
+        df = self.rt_table.get_dataframe()
+        if df is None or len(df) == 0:
             QMessageBox.warning(self, "No Data", "No RT table data to export.")
             return
         
@@ -721,40 +627,23 @@ class RTTableFrame(QWidget):
             
             try:
                 if "JSON" in selected_filter or file_path.lower().endswith('.json'):
-                    # Export as JSON primary format
-                    self._export_as_json(file_path)
-                    # Also create CSV version
-                    csv_file = file_path.rsplit('.', 1)[0] + '.csv'
-                    self._export_as_csv(csv_file)
-                    complementary_note = f"\nAlso saved CSV version: {csv_file}"
+                    self._write_json(df, file_path)
                 else:
-                    # Export as CSV primary format (default)
-                    self._export_as_csv(file_path)
-                    # Also create JSON version
-                    json_file = file_path.rsplit('.', 1)[0] + '.json'
-                    self._export_as_json(json_file)
-                    complementary_note = f"\nAlso saved JSON version: {json_file}"
-                    
-                QMessageBox.information(
-                    self, "Exported", 
-                    f"RT table exported to:\n{file_path}{complementary_note}"
-                )
+                    self._write_csv(df, file_path)
                 
-                # If this is the first save and we don't have an original file, set it as the current file
-                if not self.rt_table_file:
-                    self.rt_table_file = file_path
-                    self._mark_as_saved()
-                    
+                QMessageBox.information(
+                    self, "Exported",
+                    f"RT table exported to:\n{file_path}"
+                )
             except Exception as e:
                 QMessageBox.critical(self, "Export Error", f"Failed to export RT table:\n{str(e)}")
     
-    def _export_as_csv(self, file_path):
-        """Export RT table data as CSV."""
-        self.rt_table_data.to_csv(file_path, index=False)
+    def _write_csv(self, df, file_path):
+        """Write the given RT DataFrame to CSV."""
+        df.to_csv(file_path, index=False)
     
-    def _export_as_json(self, file_path):
-        """Export RT table data as JSON."""
-        # Convert DataFrame to dictionary format
+    def _write_json(self, df, file_path):
+        """Write the given RT DataFrame to JSON."""
         data = {
             'format': 'ChromaKit-MS RT Table',
             'version': '1.0',
@@ -762,7 +651,7 @@ class RTTableFrame(QWidget):
             'compounds': []
         }
         
-        for _, row in self.rt_table_data.iterrows():
+        for _, row in df.iterrows():
             compound = {
                 'name': row['Compound'],
                 'start_rt': float(row['Start']),
@@ -774,121 +663,42 @@ class RTTableFrame(QWidget):
         with open(file_path, 'w') as f:
             json.dump(data, f, indent=2)
     
-    def _mark_as_modified(self):
-        """Mark the RT table as modified."""
-        if not self.is_modified:
-            self.is_modified = True
-            self._update_file_info()
-            self.save_button.setEnabled(True)
-    
-    def _mark_as_saved(self):
-        """Mark the RT table as saved (no unsaved changes)."""
-        self.is_modified = False
-        self.original_data = self.rt_table_data.copy() if self.rt_table_data is not None else None
-        self._update_file_info()
-    
     def _populate_table(self):
-        """Populate the table widget with RT data."""
+        """Populate the editable RT grid from ``self.rt_table_data``.
+
+        Keeps the editable widget (``self.rt_table``) in sync with the backing
+        DataFrame (``self.rt_table_data``), which remains the source of truth for
+        compound lookups. Swaps back from any transient GCxGC view.
+        """
         if self.rt_table_data is None:
             return
-        
-        df = self.rt_table_data
-        self.table_widget.setRowCount(len(df))
-        
-        for i, row in df.iterrows():
-            # Check if this row is new (not in original data)
-            is_new_row = False
-            if self.original_data is not None:
-                # Check if this compound exists in original data with same RT values
-                original_matches = self.original_data[self.original_data['Compound'] == row['Compound']]
-                if original_matches.empty:
-                    is_new_row = True
-                else:
-                    # Check if RT values have changed
-                    original_row = original_matches.iloc[0]
-                    if (abs(original_row['Start'] - row['Start']) > 0.001 or 
-                        abs(original_row['Apex'] - row['Apex']) > 0.001 or 
-                        abs(original_row['End'] - row['End']) > 0.001):
-                        is_new_row = True
-            
-            # Create styling for modified items
-            from PySide6.QtGui import QBrush, QColor, QFont
-            modified_brush = QBrush(QColor("#CC6600"))  # Orange color
-            normal_brush = QBrush(QColor("#000000"))    # Black color
-            
-            # Font for modified items
-            modified_font = QFont()
-            modified_font.setBold(True)
-            normal_font = QFont()
-            
-            # Compound name
-            compound_item = QTableWidgetItem(str(row['Compound']))
-            if is_new_row:
-                compound_item.setForeground(modified_brush)
-                compound_item.setFont(modified_font)
-            else:
-                compound_item.setForeground(normal_brush)
-                compound_item.setFont(normal_font)
-            self.table_widget.setItem(i, 0, compound_item)
-            
-            # Start RT
-            start_item = QTableWidgetItem(f"{row['Start']:.3f}")
-            start_item.setTextAlignment(Qt.AlignCenter)
-            if is_new_row:
-                start_item.setForeground(modified_brush)
-                start_item.setFont(modified_font)
-            else:
-                start_item.setForeground(normal_brush)
-                start_item.setFont(normal_font)
-            self.table_widget.setItem(i, 1, start_item)
-            
-            # Apex RT
-            apex_item = QTableWidgetItem(f"{row['Apex']:.3f}")
-            apex_item.setTextAlignment(Qt.AlignCenter)
-            if is_new_row:
-                apex_item.setForeground(modified_brush)
-                apex_item.setFont(modified_font)
-            else:
-                apex_item.setForeground(normal_brush)
-                apex_item.setFont(normal_font)
-            self.table_widget.setItem(i, 2, apex_item)
-            
-            # End RT
-            end_item = QTableWidgetItem(f"{row['End']:.3f}")
-            end_item.setTextAlignment(Qt.AlignCenter)
-            if is_new_row:
-                end_item.setForeground(modified_brush)
-                end_item.setFont(modified_font)
-            else:
-                end_item.setForeground(normal_brush)
-                end_item.setFont(normal_font)
-            self.table_widget.setItem(i, 3, end_item)
+
+        # Ensure the normal RT view is shown (in case a GCxGC view was active).
+        self.table_widget.hide()
+        self.rt_table.show()
+
+        # set_dataframe is guarded internally (no table_edited emit).
+        self.rt_table.set_dataframe(self.rt_table_data)
     
     def _update_file_info(self):
-        """Update the file info label with current status."""
-        if self.rt_table_file:
-            filename = os.path.basename(self.rt_table_file)
-            count = len(self.rt_table_data) if self.rt_table_data is not None else 0
-            if self.is_modified:
-                self.file_info_label.setText(f"File: {filename} ({count} compounds) *")
-                self.file_info_label.setStyleSheet("color: #CC6600; font-size: 10px; font-style: italic;")
-            else:
-                self.file_info_label.setText(f"File: {filename} ({count} compounds)")
-                self.file_info_label.setStyleSheet("color: #666; font-size: 10px;")
-        elif self.rt_table_data is not None:
+        """Update the info label with the current in-memory RT table status.
+
+        The frame no longer owns a file path or dirty flag (the method's own
+        dirty flag supersedes them), so this reports only the compound count of
+        the current grid.
+        """
+        if self.rt_table_data is not None and len(self.rt_table_data) > 0:
             count = len(self.rt_table_data)
-            if self.is_modified:
-                self.file_info_label.setText(f"Unsaved RT table ({count} compounds) *")
-                self.file_info_label.setStyleSheet("color: #CC6600; font-size: 10px; font-style: italic;")
-            else:
-                self.file_info_label.setText(f"New RT table ({count} compounds)")
-                self.file_info_label.setStyleSheet("color: #666; font-size: 10px;")
+            self.file_info_label.setText(f"RT table ({count} compounds)")
+            self.file_info_label.setStyleSheet("color: #666; font-size: 10px;")
         else:
             self.file_info_label.setText("No RT table loaded")
             self.file_info_label.setStyleSheet("color: #666; font-size: 10px;")
     
     def _on_settings_changed(self):
         """Handle changes to RT matching settings."""
+        if getattr(self, "_applying", False):
+            return
         enabled = self.enable_checkbox.isChecked() and self.rt_table_data is not None
         
         # Update dependent controls
@@ -919,134 +729,9 @@ class RTTableFrame(QWidget):
             'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),
             'window_expansion': self.window_expansion_spin.value(),
             'rt_table': self.rt_table_data,
-            'file_path': self.rt_table_file
         }
         
         self.rt_table_changed.emit(settings)
-    
-    def lookup_compound_by_rt(self, retention_time):
-        """Look up compound name by retention time using the selected matching strategy."""
-        if self.rt_table_data is None or not self.enable_checkbox.isChecked():
-            return None
-        
-        mode = self.matching_mode_combo.currentIndex()
-        
-        if mode == 0:  # Simple Window Matching (legacy mode)
-            return self._lookup_simple_window(retention_time)
-        elif mode == 1:  # Closest Apex RT Matching
-            return self._lookup_closest_apex(retention_time)
-        elif mode == 2:  # Weighted Distance Matching
-            return self._lookup_weighted_distance(retention_time)
-        
-        return None
-    
-    def _lookup_simple_window(self, retention_time):
-        """Simple window matching (legacy method)."""
-        # Add window expansion if specified
-        expansion = self.window_expansion_spin.value()
-        
-        # Find compounds where retention time falls within the window
-        matches = self.rt_table_data[
-            (self.rt_table_data['Start'] - expansion <= retention_time) &
-            (retention_time <= self.rt_table_data['End'] + expansion)
-        ]
-        
-        if len(matches) == 0:
-            return None
-        elif len(matches) == 1:
-            return matches.iloc[0]['Compound']
-        else:
-            # Multiple matches - choose the one with the narrowest window
-            matches['window_size'] = matches['End'] - matches['Start']
-            best_match = matches.loc[matches['window_size'].idxmin()]
-            return best_match['Compound']
-    
-    def _lookup_closest_apex(self, retention_time):
-        """Closest apex RT matching with tolerance."""
-        tolerance = self.tolerance_spin.value()
-        
-        # Calculate distance from each apex RT
-        distances = np.abs(self.rt_table_data['Apex'] - retention_time)
-        
-        # Find matches within tolerance
-        within_tolerance = distances <= tolerance
-        
-        if not within_tolerance.any():
-            return None
-        
-        # Get the closest match within tolerance
-        closest_idx = distances[within_tolerance].idxmin()
-        return self.rt_table_data.loc[closest_idx, 'Compound']
-    
-    def _lookup_weighted_distance(self, retention_time):
-        """Weighted distance-based matching using start, apex, and end RTs with boundary validation."""
-        if not hasattr(self, 'normalized_weights'):
-            # Fallback to default weights if not initialized
-            self.normalized_weights = {'start': 0.25, 'apex': 0.50, 'end': 0.25}
-        
-        weights = self.normalized_weights
-        
-        # First, do a reasonable boundary check to prevent obviously bad matches
-        rt_range = self.rt_table_data['End'].max() - self.rt_table_data['Start'].min()
-        table_left_bound = self.rt_table_data['Start'].min()
-        table_right_bound = self.rt_table_data['End'].max()
-        
-        # Calculate window analysis for more reasonable boundary checking
-        compound_windows = self.rt_table_data['End'] - self.rt_table_data['Start']
-        avg_window_width = compound_windows.mean()
-        
-        # More reasonable boundary tolerance - prevent peaks way outside the table
-        # Use larger of: average window width or 5% of total range, but cap at 1.0 min
-        boundary_tolerance = min(
-            max(avg_window_width, rt_range * 0.05),  # Reasonable extension
-            1.0                                       # But not more than 1 minute
-        )
-        
-        # Only reject peaks that are way outside the reasonable range
-        if (retention_time < (table_left_bound - boundary_tolerance) or 
-            retention_time > (table_right_bound + boundary_tolerance)):
-            return None  # Peak is way outside the RT table range
-        
-        # Calculate weighted distances for each compound
-        distances = []
-        for _, row in self.rt_table_data.iterrows():
-            start_dist = abs(row['Start'] - retention_time)
-            apex_dist = abs(row['Apex'] - retention_time)
-            end_dist = abs(row['End'] - retention_time)
-            
-            # Weighted distance calculation
-            weighted_dist = (weights['start'] * start_dist + 
-                           weights['apex'] * apex_dist + 
-                           weights['end'] * end_dist)
-            distances.append(weighted_dist)
-        
-        # Find the compound with minimum weighted distance
-        min_dist_idx = np.argmin(distances)
-        min_distance = distances[min_dist_idx]
-        best_match = self.rt_table_data.iloc[min_dist_idx]
-        
-        # More reasonable final threshold - based on compound's own characteristics
-        compound_window_width = best_match['End'] - best_match['Start']
-        
-        # Check if peak is at least close to the compound's RT range
-        # Allow some reasonable distance outside the compound window
-        max_distance_from_window = compound_window_width * 0.75  # 75% of window width
-        
-        # Calculate distance from the compound's RT window
-        distance_from_window = 0
-        if retention_time < best_match['Start']:
-            distance_from_window = best_match['Start'] - retention_time
-        elif retention_time > best_match['End']:
-            distance_from_window = retention_time - best_match['End']
-        # If inside the window, distance_from_window remains 0
-        
-        # Accept the match if:
-        # 1. The peak is inside the compound window, OR
-        # 2. The peak is close enough outside the window (within 75% of window width)
-        if distance_from_window <= max_distance_from_window:
-            return best_match['Compound']
-        
-        return None
     
     def add_peak_to_rt_table(self, peak_data):
         """Add a peak to the RT table with user input for compound name."""
@@ -1107,9 +792,6 @@ class RTTableFrame(QWidget):
             # Sort by Start RT
             self.rt_table_data = self.rt_table_data.sort_values('Start').reset_index(drop=True)
             
-            # Mark as modified
-            self._mark_as_modified()
-            
             # Update UI
             self._populate_table()
             self._update_file_info()
@@ -1166,5 +848,72 @@ class RTTableFrame(QWidget):
             'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),
             'window_expansion': self.window_expansion_spin.value(),
             'rt_table': self.rt_table_data,
-            'file_path': self.rt_table_file
         }
+
+    # ── Method sync surface (Phase 1b) ──────────────────────────────────────────
+
+    def apply_method(self, method: ChromaMethod) -> None:
+        """Populate the RT grid and matching widgets from a ChromaMethod.
+
+        Guarded by ``self._applying`` so the widget updates below do not emit
+        settings-changed churn while syncing.
+        """
+        self._applying = True
+        try:
+            rows = [
+                {"Compound": e.compound, "Start": e.start, "Apex": e.apex, "End": e.end}
+                for e in method.rt_table
+            ]
+            self.rt_table.set_rows(rows)          # guarded — no emit
+            self.rt_table_data = self.rt_table.get_dataframe()
+            p = method.rt_matching
+            self.matching_mode_combo.setCurrentIndex(p.matching_mode)
+            self.tolerance_spin.setValue(p.tolerance)
+            self.window_expansion_spin.setValue(p.window_expansion)
+            self.high_priority_checkbox.setChecked(p.high_priority)
+            self.normalized_weights = {
+                "start": p.weights.start, "apex": p.weights.apex, "end": p.weights.end,
+            }
+            # Refresh control-enable state to match the file-import path: when the
+            # method carries an RT table, the enable checkbox + file controls become
+            # usable; with no data they stay disabled (boot/clear state). These are
+            # pure setEnabled() calls (no signals), so no rt_table_changed is emitted.
+            has_data = self.rt_table_data is not None and len(self.rt_table_data) > 0
+            self._set_settings_enabled(has_data)
+            self.clear_button.setEnabled(has_data)
+            self.export_button.setEnabled(has_data)
+            self._update_file_info()
+        finally:
+            self._applying = False
+
+    def get_rt_entries(self):
+        """Read the editable RT grid back as a list of RTTableEntry models."""
+        entries = []
+        for row in self.rt_table.get_rows():
+            name = str(row.get("Compound", "")).strip()
+            if not name:
+                continue
+            entries.append(RTTableEntry(
+                compound=name,
+                start=float(row.get("Start", 0.0)),
+                apex=float(row.get("Apex", 0.0)),
+                end=float(row.get("End", 0.0)),
+            ))
+        return entries
+
+    def get_matching_params(self) -> RTMatchingParams:
+        """Read the matching widgets back as an RTMatchingParams model."""
+        w = getattr(self, "normalized_weights", {"start": 0.25, "apex": 0.50, "end": 0.25})
+        return RTMatchingParams(
+            matching_mode=self.matching_mode_combo.currentIndex(),
+            tolerance=self.tolerance_spin.value(),
+            window_expansion=self.window_expansion_spin.value(),
+            weights=RTMatchingWeights(**w),
+            high_priority=self.high_priority_checkbox.isChecked(),
+        )
+
+    def _on_table_edited(self):
+        """Keep ``rt_table_data`` in sync when the user edits the grid."""
+        self.rt_table_data = self.rt_table.get_dataframe()
+        if not getattr(self, "_applying", False):
+            self._on_settings_changed()

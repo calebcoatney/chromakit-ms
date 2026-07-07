@@ -1,0 +1,163 @@
+"""Tests for logic/rf_quantitation.py — RF-table external-standard quant."""
+import pytest
+
+from logic.rf_quantitation import quantitate_rf, RFQuantSummary, RF_UNITS
+from logic.method import RFTableEntry
+from logic.integration import ChromatographicPeak
+
+
+def _peak(compound_id, area, peak_number=1, rt=1.0):
+    return ChromatographicPeak(
+        compound_id=compound_id, peak_number=peak_number, retention_time=rt,
+        integrator="BB", width=0.1, area=area, start_time=rt - 0.05, end_time=rt + 0.05,
+    )
+
+
+def _rf():
+    return [
+        RFTableEntry(compound="Hydrogen", response_factor=100.0),
+        RFTableEntry(compound="Carbon monoxide", response_factor=200.0),
+    ]
+
+
+def test_normalized_mol_percent():
+    # H2: 1000/100 = 10 raw; CO: 2000/200 = 10 raw; total 20 → 50/50
+    peaks = [_peak("Hydrogen", 1000.0, 1), _peak("Carbon monoxide", 2000.0, 2)]
+    summary = quantitate_rf(peaks, _rf(), normalize=True)
+    assert peaks[0].mol_percent == pytest.approx(50.0)
+    assert peaks[1].mol_percent == pytest.approx(50.0)
+    assert peaks[0].raw_amount == pytest.approx(10.0)
+    assert summary.peaks_quantitated == 2
+    assert summary.normalized is True
+    assert summary.total_raw_amount == pytest.approx(20.0)
+
+
+def test_unnormalized_returns_raw_amounts():
+    peaks = [_peak("Hydrogen", 1000.0, 1)]
+    summary = quantitate_rf(peaks, _rf(), normalize=False)
+    assert peaks[0].raw_amount == pytest.approx(10.0)
+    assert peaks[0].mol_percent is None      # not computed when not normalizing
+    assert summary.normalized is False
+
+
+def test_compound_not_in_rf_table_is_flagged():
+    peaks = [_peak("Argon", 500.0, 1)]     # not in RF table
+    summary = quantitate_rf(peaks, _rf(), normalize=True)
+    assert peaks[0].mol_percent is None
+    assert len(summary.skipped_no_rf) == 1
+    assert "Argon" in summary.skipped_no_rf[0]
+
+
+def test_unassigned_peak_is_flagged():
+    peaks = [_peak("Unknown (1.234)", 500.0, 1)]
+    summary = quantitate_rf(peaks, _rf(), normalize=True)
+    assert len(summary.skipped_unassigned) == 1
+
+
+def test_nothing_quantitated_emits_loud_warning():
+    # All peaks skipped (one no-RF, one unassigned) → a warning must be present
+    # so a real-time feed can alarm on it (spec §3e).
+    peaks = [_peak("Argon", 500.0, 1), _peak("Unknown (2.000)", 500.0, 2)]
+    summary = quantitate_rf(peaks, _rf(), normalize=True)
+    assert summary.peaks_quantitated == 0
+    assert len(summary.warnings) >= 1
+    assert any("no peaks quantitated" in w.lower() for w in summary.warnings)
+
+
+def test_empty_inputs_clean_summary():
+    summary = quantitate_rf([], _rf(), normalize=True)
+    assert summary.peaks_quantitated == 0
+    assert summary.peaks_total == 0
+    assert summary.warnings == []   # no spurious zero-total warning when nothing to normalize
+
+
+def test_zero_total_adds_warning_no_crash():
+    # area 0 → raw 0 → total 0; normalization must not divide by zero
+    peaks = [_peak("Hydrogen", 0.0, 1)]
+    summary = quantitate_rf(peaks, _rf(), normalize=True)
+    assert peaks[0].mol_percent == pytest.approx(0.0)
+    assert any("zero" in w.lower() for w in summary.warnings)
+
+
+def test_mixed_batch_unequal_amounts():
+    # H2 3000/100=30, CO 2000/200=10 → total 40 → 75/25; Argon (no RF) and
+    # Unknown (unassigned) are skipped and left unquantitated.
+    peaks = [
+        _peak("Hydrogen", 3000.0, 1),
+        _peak("Carbon monoxide", 2000.0, 2),
+        _peak("Argon", 500.0, 3),
+        _peak("Unknown (4.000)", 500.0, 4),
+    ]
+    summary = quantitate_rf(peaks, _rf(), normalize=True)
+    assert peaks[0].mol_percent == pytest.approx(75.0)
+    assert peaks[1].mol_percent == pytest.approx(25.0)
+    assert peaks[2].mol_percent is None and peaks[2].raw_amount is None
+    assert peaks[3].mol_percent is None and peaks[3].raw_amount is None
+    assert summary.peaks_quantitated == 2
+    assert len(summary.skipped_no_rf) == 1
+    assert len(summary.skipped_unassigned) == 1
+
+
+# --- RF unit / composition basis (Task 1) --------------------------------
+# Reuse the module's real-class factories: _peak() -> ChromatographicPeak,
+# _rf() -> [RFTableEntry(Hydrogen, RF=100), RFTableEntry(CO, RF=200)].
+# H2 1000/100 = 10 raw, CO 2000/200 = 10 raw -> total 20 -> 50/50.
+def _peaks():
+    return [_peak("Hydrogen", 1000.0, 1), _peak("Carbon monoxide", 2000.0, 2)]
+
+
+def test_mol_basis_sets_both_fields():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="area_per_mol")
+    assert abs(peaks[0].composition_percent - 50.0) < 1e-9
+    assert abs(peaks[0].mol_percent - 50.0) < 1e-9
+    assert s.composition_basis == "mol%"
+    assert s.rf_unit == "area_per_mol"
+    assert not s.warnings
+
+
+def test_mol_pct_basis_also_mol():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="area_per_mol_pct")
+    assert peaks[0].mol_percent is not None
+    assert s.composition_basis == "mol%"
+
+
+def test_wt_basis_sets_composition_not_mol():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="area_per_wt_pct")
+    assert abs(peaks[0].composition_percent - 50.0) < 1e-9
+    assert peaks[0].mol_percent is None
+    assert s.composition_basis == "wt%"
+    assert not s.warnings
+
+
+def test_molC_basis():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="area_per_molC_pct")
+    assert peaks[0].composition_percent is not None
+    assert peaks[0].mol_percent is None
+    assert s.composition_basis == "molC%"
+
+
+def test_unspecified_warns_and_writes_mol_percent_legacy():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf(), rf_unit="unspecified")
+    assert peaks[0].composition_percent is not None
+    assert peaks[0].mol_percent is not None
+    assert s.composition_basis is None
+    assert any("unspecified" in w.lower() for w in s.warnings)
+
+
+def test_default_rf_unit_is_unspecified():
+    peaks = _peaks()
+    s = quantitate_rf(peaks, _rf())
+    assert s.rf_unit == "unspecified"
+    assert peaks[0].mol_percent is not None
+    assert peaks[0].composition_percent is not None
+
+
+def test_rf_units_mapping_shape():
+    assert RF_UNITS["area_per_mol"] == "mol%"
+    assert RF_UNITS["area_per_wt_pct"] == "wt%"
+    assert RF_UNITS["unspecified"] is None
