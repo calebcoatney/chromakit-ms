@@ -1,8 +1,10 @@
 """
-Quantitation frame for Polyarc + Internal Standard method.
+Quantitation frame.
 
-Provides UI for entering internal standard and sample preparation information,
-and displays calculated quantitation results.
+Hosts the quant-strategy selector (None / Internal Standard (Polyarc) / RF Table)
+and, for the internal-standard strategy, UI for entering internal standard and
+sample preparation information. Displays calculated quantitation results,
+including an RF-table results summary.
 """
 
 from PySide6.QtWidgets import (
@@ -138,6 +140,22 @@ class QuantitationFrame(QWidget):
         results_group.setLayout(results_layout)
         layout.addWidget(results_group)
         
+        # RF results group (shown when strategy = rf_table)
+        self.rf_results_group = QGroupBox("RF Quantitation Results")
+        rf_layout = QFormLayout()
+        self.rf_quantitated_label = QLabel("—")
+        self.rf_skipped_unassigned_label = QLabel("—")
+        self.rf_skipped_no_rf_label = QLabel("—")
+        self.rf_warnings_label = QLabel("")
+        self.rf_warnings_label.setStyleSheet("color: #b00000;")
+        self.rf_warnings_label.setWordWrap(True)
+        rf_layout.addRow("Peaks quantitated:", self.rf_quantitated_label)
+        rf_layout.addRow("Skipped (unassigned):", self.rf_skipped_unassigned_label)
+        rf_layout.addRow("Skipped (no RF):", self.rf_skipped_no_rf_label)
+        rf_layout.addRow("Warnings:", self.rf_warnings_label)
+        self.rf_results_group.setLayout(rf_layout)
+        layout.addWidget(self.rf_results_group)
+        
         # Re-Quantitate button
         self.requantitate_btn = QPushButton("Re-Quantitate")
         self.requantitate_btn.setEnabled(False)
@@ -219,6 +237,7 @@ class QuantitationFrame(QWidget):
         is_selected = self.current_strategy() == "internal_standard"
         self.is_group.setVisible(is_selected)
         self.sample_group.setVisible(is_selected)
+        self.rf_results_group.setVisible(self.current_strategy() == "rf_table")
         
     def _on_search_library(self):
         """Search MS library for compound and autofill formula/MW."""
@@ -373,6 +392,13 @@ class QuantitationFrame(QWidget):
             self.c_balance_label.setText(f"{c_balance:.1f}%")
         else:
             self.c_balance_label.setText("—")
+            
+    def update_rf_status(self, summary):
+        """Display RF-table quantitation counts and warnings from a summary."""
+        self.rf_quantitated_label.setText(f"{summary.peaks_quantitated} / {summary.peaks_total}")
+        self.rf_skipped_unassigned_label.setText(str(len(summary.skipped_unassigned)))
+        self.rf_skipped_no_rf_label.setText(str(len(summary.skipped_no_rf)))
+        self.rf_warnings_label.setText("\n".join(summary.warnings))
             
     def autofill_from_library(self, compound_name, formula, mw):
         """Autofill formula and MW from MS library."""
