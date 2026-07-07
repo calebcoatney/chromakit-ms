@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 import pandas as pd
 import numpy as np
-import os
 import json
 
 from logic.method import ChromaMethod, RTTableEntry, RTMatchingParams, RTMatchingWeights
@@ -164,11 +163,6 @@ class RTTableFrame(QWidget):
         
         # RT table data
         self.rt_table_data = None
-        self.rt_table_file = None
-        
-        # Change tracking
-        self.is_modified = False
-        self.original_data = None  # Store original data for comparison
         
         # Create main layout
         self.layout = QVBoxLayout(self)
@@ -189,9 +183,9 @@ class RTTableFrame(QWidget):
         # File selection controls
         file_controls = QHBoxLayout()
         
-        self.load_button = QPushButton("Load RT Table...")
-        self.load_button.clicked.connect(self._load_rt_table)
-        file_controls.addWidget(self.load_button)
+        self.import_button = QPushButton("Import RT Table\u2026")
+        self.import_button.clicked.connect(self._import_rt_table)
+        file_controls.addWidget(self.import_button)
         
         self.clear_button = QPushButton("Clear Table")
         self.clear_button.clicked.connect(self._clear_rt_table)
@@ -200,15 +194,10 @@ class RTTableFrame(QWidget):
         
         file_layout.addLayout(file_controls)
         
-        # Save/Export controls
+        # Export controls
         save_controls = QHBoxLayout()
         
-        self.save_button = QPushButton("Save (CSV+JSON)")
-        self.save_button.clicked.connect(self._save_rt_table)
-        self.save_button.setEnabled(False)
-        save_controls.addWidget(self.save_button)
-        
-        self.export_button = QPushButton("Save As...")
+        self.export_button = QPushButton("Export RT Table\u2026")
         self.export_button.clicked.connect(self._export_rt_table)
         self.export_button.setEnabled(False)
         save_controls.addWidget(self.export_button)
@@ -481,204 +470,117 @@ class RTTableFrame(QWidget):
         
         self._on_settings_changed()
     
-    def _load_rt_table(self):
-        """Load RT table from CSV or JSON file."""
+    def _import_rt_table(self):
+        """Import an RT table from CSV or JSON, replacing the current grid.
+
+        Parses the file into a validated DataFrame (via ``_parse_csv`` /
+        ``_parse_json``), pushes it into the editable RT grid, and emits
+        ``rt_table_changed``. Importing REPLACES the method's current RT table;
+        the app writes the emitted table back into ``current_method``.
+        """
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Load RT Table", "", 
+            self, "Import RT Table", "",
             "RT Table Files (*.csv *.json);;CSV Files (*.csv);;JSON Files (*.json);;All Files (*)"
         )
-        
         if not file_path:
             return
-        
         try:
-            # Determine file format and load accordingly
-            if file_path.lower().endswith('.json'):
-                df = self._load_from_json(file_path)
+            if file_path.lower().endswith(".json"):
+                df = self._parse_json(file_path)
             else:
-                # Default to CSV loading (handles .csv and unknown extensions)
-                df = self._load_from_csv(file_path)
-            
-            if df is None:
-                return  # Error already shown in load method
-            
-            # Store the data
-            self.rt_table_data = df
-            self.rt_table_file = file_path
-            
-            # Initialize change tracking
-            self.original_data = df.copy()
-            self.is_modified = False
-            
-            # Update UI
-            self._populate_table()
-            self._update_file_info()
-            self._set_settings_enabled(True)
-            self._on_settings_changed()
-            
-            # Enable buttons
-            self.clear_button.setEnabled(True)
-            self.save_button.setEnabled(False)  # Not modified yet
-            self.export_button.setEnabled(True)
-            
-            # Show success message
-            file_format = "JSON" if file_path.lower().endswith('.json') else "CSV"
-            QMessageBox.information(
-                self, "RT Table Loaded", 
-                f"Successfully loaded {len(df)} compounds from {file_format} RT table."
-            )
-            
+                df = self._parse_csv(file_path)
         except Exception as e:
-            QMessageBox.critical(
-                self, "Error Loading RT Table", 
-                f"Failed to load RT table:\n{str(e)}"
-            )
-    
-    def _load_from_csv(self, file_path):
-        """Load RT table from CSV file with legacy format support."""
-        # Read CSV file
+            QMessageBox.critical(self, "Import RT Table Failed", str(e))
+            return
+
+        # Replace the editable grid (guarded — no table_edited emit).
+        self.table_widget.hide()
+        self.rt_table.show()
+        self.rt_table.set_dataframe(df)
+        self.rt_table_data = self.rt_table.get_dataframe()
+
+        # Enable controls now that we have data.
+        self._set_settings_enabled(True)
+        self.clear_button.setEnabled(True)
+        self.export_button.setEnabled(True)
+
+        self._on_settings_changed()   # emits rt_table_changed
+
+    def _parse_csv(self, file_path):
+        """Parse a CSV RT table into a validated DataFrame (import adapter).
+
+        Supports the legacy 3-column format (Compound/Start/End) by synthesizing
+        Apex = (Start + End) / 2. Raises ValueError on invalid data.
+        """
         df = pd.read_csv(file_path)
-        
-        # Check for legacy format (without Apex RT column)
-        legacy_format = False
-        required_columns_legacy = ['Compound', 'Start', 'End']
-        required_columns_new = ['Compound', 'Start', 'Apex', 'End']
-        
-        # Check if this is the new format with Apex column
-        if all(col in df.columns for col in required_columns_new):
-            # New format with Apex RT
-            pass
-        elif all(col in df.columns for col in required_columns_legacy):
-            # Legacy format - need to add Apex column
-            legacy_format = True
-            df['Apex'] = (df['Start'] + df['End']) / 2.0
-            # Reorder columns to put Apex between Start and End
-            df = df[['Compound', 'Start', 'Apex', 'End']]
-            
-            # Show user notification about automatic apex calculation
-            QMessageBox.information(
-                self, "Legacy RT Table Format Detected", 
-                "This RT table uses the legacy format without an 'Apex RT' column.\n\n"
-                "Apex RT values have been automatically calculated by averaging Start and End RT values.\n"
-                "You may want to review and manually adjust these apex values for better accuracy."
-            )
-        else:
-            QMessageBox.warning(
-                self, "Invalid Format", 
-                f"CSV file must contain columns: {', '.join(required_columns_new)}\n"
-                f"Or legacy format: {', '.join(required_columns_legacy)}\n"
+        legacy = list(df.columns) == ["Compound", "Start", "End"]
+        if legacy:
+            df["Apex"] = (df["Start"] + df["End"]) / 2.0
+            df = df[["Compound", "Start", "Apex", "End"]]
+        elif not all(col in df.columns for col in ["Compound", "Start", "Apex", "End"]):
+            raise ValueError(
+                "CSV file must contain columns: Compound, Start, Apex, End\n"
+                "Or legacy format: Compound, Start, End\n"
                 f"Found columns: {', '.join(df.columns)}"
             )
-            return None
-        
-        # Validate and process the data
-        return self._validate_rt_data(df, legacy_format)
-    
-    def _load_from_json(self, file_path):
-        """Load RT table from JSON file."""
-        with open(file_path, 'r') as f:
+        self._validate_rt_data(df, legacy)
+        return df
+
+    def _parse_json(self, file_path):
+        """Parse a JSON RT table into a validated DataFrame (import adapter).
+
+        Supports both new (name/start_rt/apex_rt/end_rt) and legacy
+        (compound/start/apex/end) field names, synthesizing Apex when absent.
+        Raises ValueError on invalid data.
+        """
+        with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        # Validate JSON structure
-        if not isinstance(data, dict) or 'compounds' not in data:
-            QMessageBox.warning(
-                self, "Invalid JSON Format", 
-                "JSON file must contain a 'compounds' array with RT table data."
-            )
-            return None
-        
-        compounds = data['compounds']
-        if not isinstance(compounds, list):
-            QMessageBox.warning(
-                self, "Invalid JSON Format", 
-                "The 'compounds' field must be an array."
-            )
-            return None
-        
-        # Convert JSON to DataFrame
         rows = []
-        for compound in compounds:
-            if not isinstance(compound, dict):
-                continue
-                
-            # Support both old and new field names
-            name = compound.get('name') or compound.get('compound')
-            start_rt = compound.get('start_rt') or compound.get('start')
-            apex_rt = compound.get('apex_rt') or compound.get('apex')
-            end_rt = compound.get('end_rt') or compound.get('end')
-            
-            if name and start_rt is not None and end_rt is not None:
-                # If apex is missing, calculate it
-                if apex_rt is None:
-                    apex_rt = (start_rt + end_rt) / 2.0
-                
-                rows.append({
-                    'Compound': name,
-                    'Start': float(start_rt),
-                    'Apex': float(apex_rt),
-                    'End': float(end_rt)
-                })
-        
-        if not rows:
-            QMessageBox.warning(
-                self, "No Valid Data", 
-                "No valid compound data found in JSON file."
-            )
-            return None
-        
-        df = pd.DataFrame(rows)
-        
-        # Validate and process the data
-        return self._validate_rt_data(df, False)
-    
+        for c in data.get("compounds", []):
+            name = c.get("name", c.get("compound"))
+            start = c.get("start_rt", c.get("start"))
+            end = c.get("end_rt", c.get("end"))
+            apex = c.get("apex_rt", c.get("apex"))
+            if apex is None and start is not None and end is not None:
+                apex = (start + end) / 2.0
+            rows.append({"Compound": name, "Start": start, "Apex": apex, "End": end})
+        df = pd.DataFrame(rows, columns=["Compound", "Start", "Apex", "End"])
+        self._validate_rt_data(df, False)
+        return df
+
     def _validate_rt_data(self, df, legacy_format):
-        """Validate RT table data and return processed DataFrame."""
+        """Validate RT table data in place; raise ValueError on invalid data."""
         # Validate data types
         try:
             df['Start'] = pd.to_numeric(df['Start'])
             df['Apex'] = pd.to_numeric(df['Apex'])
             df['End'] = pd.to_numeric(df['End'])
-        except ValueError as e:
-            QMessageBox.warning(
-                self, "Invalid Data", 
+        except (ValueError, TypeError) as e:
+            raise ValueError(
                 f"Start, Apex, and End columns must contain numeric values.\nError: {str(e)}"
             )
-            return None
-        
+
         # Validate RT windows and apex positions
         invalid_windows = df[df['Start'] >= df['End']]
         if not invalid_windows.empty:
-            QMessageBox.warning(
-                self, "Invalid RT Windows", 
+            raise ValueError(
                 f"Found {len(invalid_windows)} compounds where Start RT >= End RT.\n"
                 "Please fix these entries in the file."
             )
-            return None
-        
+
         # Validate apex positions (should be between start and end)
         invalid_apex = df[(df['Apex'] < df['Start']) | (df['Apex'] > df['End'])]
         if not invalid_apex.empty:
-            QMessageBox.warning(
-                self, "Invalid Apex Positions", 
+            raise ValueError(
                 f"Found {len(invalid_apex)} compounds where Apex RT is outside the Start-End window.\n"
                 "Apex RT should be between Start RT and End RT."
             )
-            return None
-        
-        # Mark as modified if we had to do legacy format conversion
-        if legacy_format:
-            self.is_modified = True
-        
+
         return df
 
     def _clear_rt_table(self):
         """Clear the loaded RT table."""
         self.rt_table_data = None
-        self.rt_table_file = None
-        
-        # Reset change tracking
-        self.is_modified = False
-        self.original_data = None
         
         # Clear UI
         self.table_widget.setRowCount(0)
@@ -692,50 +594,15 @@ class RTTableFrame(QWidget):
         self._set_settings_enabled(False)
         self.enable_checkbox.setChecked(False)
         self.clear_button.setEnabled(False)
-        self.save_button.setEnabled(False)
         self.export_button.setEnabled(False)
         
         # Emit settings change
         self._on_settings_changed()
     
-    def _save_rt_table(self):
-        """Save the current RT table in dual format (CSV + JSON) or to original file."""
-        if self.rt_table_data is None or len(self.rt_table_data) == 0:
-            QMessageBox.warning(self, "No Data", "No RT table data to save.")
-            return
-        
-        # If we have an original file, save there and also create complementary format
-        if self.rt_table_file:
-            try:
-                # Save to original format
-                if self.rt_table_file.lower().endswith('.json'):
-                    self._export_as_json(self.rt_table_file)
-                    # Also create CSV version
-                    csv_file = self.rt_table_file.rsplit('.', 1)[0] + '.csv'
-                    self._export_as_csv(csv_file)
-                    complementary_note = f"\nAlso saved CSV version: {csv_file}"
-                else:
-                    # Assume CSV
-                    self._export_as_csv(self.rt_table_file)
-                    # Also create JSON version
-                    json_file = self.rt_table_file.rsplit('.', 1)[0] + '.json'
-                    self._export_as_json(json_file)
-                    complementary_note = f"\nAlso saved JSON version: {json_file}"
-                
-                self._mark_as_saved()
-                QMessageBox.information(
-                    self, "Saved", 
-                    f"RT table saved to:\n{self.rt_table_file}{complementary_note}"
-                )
-            except Exception as e:
-                QMessageBox.critical(self, "Save Error", f"Failed to save RT table:\n{str(e)}")
-        else:
-            # No original file, prompt for save location
-            self._export_rt_table()
-    
     def _export_rt_table(self):
-        """Export RT table to a new file with format selection."""
-        if self.rt_table_data is None or len(self.rt_table_data) == 0:
+        """Export the current RT grid to a chosen CSV or JSON path."""
+        df = self.rt_table.get_dataframe()
+        if df is None or len(df) == 0:
             QMessageBox.warning(self, "No Data", "No RT table data to export.")
             return
         
@@ -755,40 +622,23 @@ class RTTableFrame(QWidget):
             
             try:
                 if "JSON" in selected_filter or file_path.lower().endswith('.json'):
-                    # Export as JSON primary format
-                    self._export_as_json(file_path)
-                    # Also create CSV version
-                    csv_file = file_path.rsplit('.', 1)[0] + '.csv'
-                    self._export_as_csv(csv_file)
-                    complementary_note = f"\nAlso saved CSV version: {csv_file}"
+                    self._write_json(df, file_path)
                 else:
-                    # Export as CSV primary format (default)
-                    self._export_as_csv(file_path)
-                    # Also create JSON version
-                    json_file = file_path.rsplit('.', 1)[0] + '.json'
-                    self._export_as_json(json_file)
-                    complementary_note = f"\nAlso saved JSON version: {json_file}"
-                    
-                QMessageBox.information(
-                    self, "Exported", 
-                    f"RT table exported to:\n{file_path}{complementary_note}"
-                )
+                    self._write_csv(df, file_path)
                 
-                # If this is the first save and we don't have an original file, set it as the current file
-                if not self.rt_table_file:
-                    self.rt_table_file = file_path
-                    self._mark_as_saved()
-                    
+                QMessageBox.information(
+                    self, "Exported",
+                    f"RT table exported to:\n{file_path}"
+                )
             except Exception as e:
                 QMessageBox.critical(self, "Export Error", f"Failed to export RT table:\n{str(e)}")
     
-    def _export_as_csv(self, file_path):
-        """Export RT table data as CSV."""
-        self.rt_table_data.to_csv(file_path, index=False)
+    def _write_csv(self, df, file_path):
+        """Write the given RT DataFrame to CSV."""
+        df.to_csv(file_path, index=False)
     
-    def _export_as_json(self, file_path):
-        """Export RT table data as JSON."""
-        # Convert DataFrame to dictionary format
+    def _write_json(self, df, file_path):
+        """Write the given RT DataFrame to JSON."""
         data = {
             'format': 'ChromaKit-MS RT Table',
             'version': '1.0',
@@ -796,7 +646,7 @@ class RTTableFrame(QWidget):
             'compounds': []
         }
         
-        for _, row in self.rt_table_data.iterrows():
+        for _, row in df.iterrows():
             compound = {
                 'name': row['Compound'],
                 'start_rt': float(row['Start']),
@@ -807,19 +657,6 @@ class RTTableFrame(QWidget):
         
         with open(file_path, 'w') as f:
             json.dump(data, f, indent=2)
-    
-    def _mark_as_modified(self):
-        """Mark the RT table as modified."""
-        if not self.is_modified:
-            self.is_modified = True
-            self._update_file_info()
-            self.save_button.setEnabled(True)
-    
-    def _mark_as_saved(self):
-        """Mark the RT table as saved (no unsaved changes)."""
-        self.is_modified = False
-        self.original_data = self.rt_table_data.copy() if self.rt_table_data is not None else None
-        self._update_file_info()
     
     def _populate_table(self):
         """Populate the editable RT grid from ``self.rt_table_data``.
@@ -839,24 +676,16 @@ class RTTableFrame(QWidget):
         self.rt_table.set_dataframe(self.rt_table_data)
     
     def _update_file_info(self):
-        """Update the file info label with current status."""
-        if self.rt_table_file:
-            filename = os.path.basename(self.rt_table_file)
-            count = len(self.rt_table_data) if self.rt_table_data is not None else 0
-            if self.is_modified:
-                self.file_info_label.setText(f"File: {filename} ({count} compounds) *")
-                self.file_info_label.setStyleSheet("color: #CC6600; font-size: 10px; font-style: italic;")
-            else:
-                self.file_info_label.setText(f"File: {filename} ({count} compounds)")
-                self.file_info_label.setStyleSheet("color: #666; font-size: 10px;")
-        elif self.rt_table_data is not None:
+        """Update the info label with the current in-memory RT table status.
+
+        The frame no longer owns a file path or dirty flag (the method's own
+        dirty flag supersedes them), so this reports only the compound count of
+        the current grid.
+        """
+        if self.rt_table_data is not None and len(self.rt_table_data) > 0:
             count = len(self.rt_table_data)
-            if self.is_modified:
-                self.file_info_label.setText(f"Unsaved RT table ({count} compounds) *")
-                self.file_info_label.setStyleSheet("color: #CC6600; font-size: 10px; font-style: italic;")
-            else:
-                self.file_info_label.setText(f"New RT table ({count} compounds)")
-                self.file_info_label.setStyleSheet("color: #666; font-size: 10px;")
+            self.file_info_label.setText(f"RT table ({count} compounds)")
+            self.file_info_label.setStyleSheet("color: #666; font-size: 10px;")
         else:
             self.file_info_label.setText("No RT table loaded")
             self.file_info_label.setStyleSheet("color: #666; font-size: 10px;")
@@ -895,7 +724,6 @@ class RTTableFrame(QWidget):
             'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),
             'window_expansion': self.window_expansion_spin.value(),
             'rt_table': self.rt_table_data,
-            'file_path': self.rt_table_file
         }
         
         self.rt_table_changed.emit(settings)
@@ -1083,9 +911,6 @@ class RTTableFrame(QWidget):
             # Sort by Start RT
             self.rt_table_data = self.rt_table_data.sort_values('Start').reset_index(drop=True)
             
-            # Mark as modified
-            self._mark_as_modified()
-            
             # Update UI
             self._populate_table()
             self._update_file_info()
@@ -1142,7 +967,6 @@ class RTTableFrame(QWidget):
             'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),
             'window_expansion': self.window_expansion_spin.value(),
             'rt_table': self.rt_table_data,
-            'file_path': self.rt_table_file
         }
 
     # ── Method sync surface (Phase 1b) ──────────────────────────────────────────

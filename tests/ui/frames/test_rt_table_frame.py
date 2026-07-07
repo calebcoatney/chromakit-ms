@@ -61,3 +61,34 @@ def test_apply_method_does_not_emit_rt_table_changed(qtbot):
     frame.rt_table_changed.connect(lambda *a: fired.append(True))
     frame.apply_method(_method_with_rt())
     assert fired == []  # programmatic load must be silent (no feedback-loop trigger)
+
+
+def test_import_replaces_table_and_emits(qtbot, tmp_path, monkeypatch):
+    frame = _make(qtbot)
+    frame.apply_method(_method_with_rt())  # start with Methane/Ethane
+    src = tmp_path / "rt.csv"
+    src.write_text("Compound,Start,Apex,End\nBenzene,4.0,4.1,4.2\n")
+    monkeypatch.setattr(
+        "ui.frames.rt_table.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(src), "CSV Files (*.csv)"),
+    )
+    fired = []
+    frame.rt_table_changed.connect(lambda *a: fired.append(True))
+    frame.import_button.click()
+    entries = frame.get_rt_entries()
+    assert [e.compound for e in entries] == ["Benzene"]   # replaced
+    assert fired
+
+
+def test_legacy_3col_csv_synthesizes_apex(qtbot, tmp_path, monkeypatch):
+    frame = _make(qtbot)
+    src = tmp_path / "legacy.csv"
+    src.write_text("Compound,Start,End\nToluene,5.0,5.4\n")
+    monkeypatch.setattr(
+        "ui.frames.rt_table.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(src), "CSV Files (*.csv)"),
+    )
+    frame.import_button.click()
+    entries = frame.get_rt_entries()
+    assert entries[0].compound == "Toluene"
+    assert abs(entries[0].apex - 5.2) < 1e-9   # (5.0 + 5.4) / 2
