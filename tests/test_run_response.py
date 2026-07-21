@@ -233,3 +233,43 @@ def test_run_endpoint_ingests_ftir_c_folder(tmp_path):
     assert body['signal_type'] == 'ftir'
     # The synthetic band at ~1988 cm-1 should be detected as at least one peak.
     assert body['peak_count'] >= 1
+
+
+def test_run_endpoint_ftir_c_folder_yields_spectral_features(tmp_path):
+    """FTIR .C data must be integrated with the profile's SpectralFeature class.
+
+    The ftir signal profile declares feature_class=SpectralFeature. /api/run must
+    thread the .C folder's profile into processing/integration so IR bands come
+    back as spectral features (position on the wavenumber axis, absorbance/
+    band_assignment fields) — NOT chromatography peaks keyed by retention_time.
+    """
+    from fastapi.testclient import TestClient
+    from api.main import app
+
+    client = TestClient(app)
+
+    c_folder = _write_ftir_c_folder(tmp_path)
+    method_path = _write_ftir_method(tmp_path)
+
+    response = client.post(
+        '/api/run',
+        json={
+            'data_path': c_folder,
+            'method_path': method_path,
+            'write_output': False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    peaks = response.json()['peaks']
+    assert peaks, "expected at least one detected band"
+    peak = peaks[0]
+    # SpectralFeature.as_dict emits 'position' + spectroscopy fields, not 'retention_time'.
+    assert 'position' in peak, f"expected SpectralFeature fields, got keys: {list(peak.keys())}"
+    assert 'retention_time' not in peak, (
+        f"got ChromatographicPeak (retention_time) instead of SpectralFeature: {list(peak.keys())}"
+    )
+    assert 'absorbance' in peak
+    assert 'band_assignment' in peak
+    # The detected band should sit on the wavenumber axis near the synthetic 1988 band.
+    assert peak['position_units'] == 'Wavenumber (cm⁻¹)'

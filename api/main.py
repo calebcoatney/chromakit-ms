@@ -710,6 +710,7 @@ async def run_pipeline(request: RunRequest):
                 from logic.c_folder import CFolder
 
                 cf = CFolder.open(request.data_path)
+                profile = cf.profile
                 data = cf.load_signal(detector=request.detector)
                 x = np.array(data["x"])
                 y = np.array(data["y"])
@@ -718,6 +719,7 @@ async def run_pipeline(request: RunRequest):
                 if detected and detected != "Unknown":
                     data_handler.current_detector = detected
             else:
+                profile = None  # legacy .D → default ChromatographicPeak path
                 data = data_handler.load_data_directory(
                     request.data_path, detector=request.detector
                 )
@@ -726,10 +728,13 @@ async def run_pipeline(request: RunRequest):
         except (FileNotFoundError, ValueError) as e:
             raise HTTPException(status_code=404, detail=str(e))
 
-        # 3. Process (smoothing + baseline + peak detection)
+        # 3. Process (smoothing + baseline + peak detection).
+        # Pass the signal profile so spectroscopy (.C FTIR/UV-Vis) data is
+        # integrated with the profile's feature_class (SpectralFeature), matching
+        # ui/app.py. Without this, IR/UV-Vis bands fall back to ChromatographicPeak.
         raw_params = method.to_processor_params()
         proc_params = convert_params_for_processor(raw_params)
-        processed = processor.process(x, y, params=proc_params)
+        processed = processor.process(x, y, params=proc_params, profile=profile)
 
         # 4. Integrate
         integrated = processor.integrate_peaks(
@@ -737,6 +742,7 @@ async def run_pipeline(request: RunRequest):
             rt_table=None,
             chemstation_area_factor=method.chemstation_area_factor,
             peak_groups=method.integration.peak_groups or [],
+            profile=profile,
         )
         peaks = integrated.get("peaks", [])
 
