@@ -702,16 +702,29 @@ async def run_pipeline(request: RunRequest):
                 status_code=404, detail=f"Method file not found: {request.method_path}"
             )
 
-        # 2. Load data
+        # 2. Load data — branch on folder type: .C (new format, incl. FTIR/UV-Vis)
+        # vs .D (legacy Agilent). Mirrors ui/app.py::on_file_selected so the HTTP
+        # API and the GUI share one .C ingestion path.
         try:
-            data = data_handler.load_data_directory(
-                request.data_path, detector=request.detector
-            )
+            if request.data_path.endswith(".C"):
+                from logic.c_folder import CFolder
+
+                cf = CFolder.open(request.data_path)
+                data = cf.load_signal(detector=request.detector)
+                x = np.array(data["x"])
+                y = np.array(data["y"])
+                # Sync detector so the export step names files with the real detector.
+                detected = data.get("metadata", {}).get("detector", "")
+                if detected and detected != "Unknown":
+                    data_handler.current_detector = detected
+            else:
+                data = data_handler.load_data_directory(
+                    request.data_path, detector=request.detector
+                )
+                x = np.array(data["chromatogram"]["x"])
+                y = np.array(data["chromatogram"]["y"])
         except (FileNotFoundError, ValueError) as e:
             raise HTTPException(status_code=404, detail=str(e))
-
-        x = np.array(data["chromatogram"]["x"])
-        y = np.array(data["chromatogram"]["y"])
 
         # 3. Process (smoothing + baseline + peak detection)
         raw_params = method.to_processor_params()

@@ -153,3 +153,83 @@ def test_run_endpoint_write_output_true_preserves_existing_behavior(tmp_path):
     assert response.status_code == 200
     mock_export.assert_called_once()
     assert response.json()['output_files'] == ['/fake/out.json']
+
+
+# ─── .C folder (FTIR / UV-Vis) ingestion through /api/run ─────────────
+#
+# The HMI spectro_bridge packs a .C folder and POSTs its path to /api/run.
+# ChromaKit has a full .C ingestion path (CFolder.open().load_signal()) wired
+# into the GUI and AutomationWorker, but historically NOT into /api/run, which
+# hard-rejected any non-.D path. These tests exercise the real loader (no
+# mocking of data loading) so a raw ReactIR-style FTIR CSV can be processed
+# end-to-end over HTTP — the path the bridge actually depends on.
+
+
+def _write_ftir_c_folder(tmp_path):
+    """Build a real .C FTIR folder from a 2-column headerless wavenumber,absorbance CSV.
+
+    Mimics a Mettler Toledo ReactIR auto-export. Returns the .C folder path.
+    """
+    import numpy as np
+    from logic.loaders.reactir_parser import parse_reactir_csv
+
+    # A synthetic IR spectrum: flat baseline with one clear Gaussian absorbance band.
+    wavenumbers = np.arange(4000.0, 400.0, -2.0)  # descending, like real ReactIR
+    band = 5.0 * np.exp(-((wavenumbers - 1988.0) ** 2) / (2.0 * 15.0 ** 2))
+    absorbance = 0.1 + band
+
+    csv_path = tmp_path / "MoCFlow_2026-07-21_14-30-00_Spectrum.csv"
+    with open(csv_path, "w") as f:
+        for wn, ab in zip(wavenumbers, absorbance):
+            f.write(f"{wn},{ab}\n")
+
+    cf = parse_reactir_csv(str(csv_path))
+    return cf.path
+
+
+def _write_ftir_method(tmp_path):
+    """A minimal ftir .chromethod that detects peaks (no MS, no deconvolution)."""
+    method_path = tmp_path / "ir_nanoparticle.chromethod"
+    method_path.write_text(
+        '{"name": "ir_nanoparticle", "version": "1", "signal_type": "ftir", '
+        '"chemstation_area_factor": 1.0, '
+        '"smoothing": {"enabled": false}, '
+        '"baseline": {"method": "asls"}, '
+        '"peaks": {"enabled": true, "min_prominence": 0.5, "peak_prominence": 0.5, "min_height": 0.5}, '
+        '"deconvolution": {"enabled": false}, '
+        '"negative_peaks": {"enabled": false}, '
+        '"shoulders": {"enabled": false}, '
+        '"integration": {"peak_groups": []}}'
+    )
+    return str(method_path)
+
+
+def test_run_endpoint_ingests_ftir_c_folder(tmp_path):
+    """POSTing a real .C FTIR folder to /api/run processes it (does NOT 404).
+
+    Exercises the true loader path — CFolder.open().load_signal() via CSVLoader —
+    with no mocking. This is the exact call the HMI spectro_bridge makes.
+    """
+    from fastapi.testclient import TestClient
+    from api.main import app
+
+    client = TestClient(app)
+
+    c_folder = _write_ftir_c_folder(tmp_path)
+    method_path = _write_ftir_method(tmp_path)
+
+    response = client.post(
+        '/api/run',
+        json={
+            'data_path': c_folder,
+            'method_path': method_path,
+            'write_output': False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['status'] == 'complete'
+    assert body['signal_type'] == 'ftir'
+    # The synthetic band at ~1988 cm-1 should be detected as at least one peak.
+    assert body['peak_count'] >= 1
