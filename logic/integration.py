@@ -932,17 +932,24 @@ class Integrator:
                 )
 
         if verbose:
+            # Use the feature class's own headers/rows so the summary works for
+            # any Feature subtype (ChromatographicPeak, SpectralFeature, ...).
+            headers = (
+                feature_cls.column_headers()
+                if hasattr(feature_cls, "column_headers")
+                else ['Compound ID', 'Peak #', 'Ret Time',
+                      'Integrator', 'Width', 'Area', 'Start Time', 'End Time']
+            )
             try:
                 from tabulate import tabulate
-                headers = ['Compound ID', 'Peak #', 'Ret Time',
-                         'Integrator', 'Width', 'Area', 'Start Time', 'End Time']
                 print(tabulate([p.as_row() for p in peaks_list], headers), end='\n\n')
             except ImportError:
                 print("Tabulate package not found. Install with 'pip install tabulate' for better formatting.")
-                # Print in a basic format
+                # Basic format — polymorphic via each peak's as_row().
                 print("Integration Results:")
+                print("  " + " | ".join(str(h) for h in headers))
                 for peak in peaks_list:
-                    print(f"Peak {peak.peak_number}: RT={peak.retention_time:.3f}, Area={peak.area:.1f}")
+                    print("  " + " | ".join(str(v) for v in peak.as_row()))
         
         return {
             'peaks': peaks_list,
