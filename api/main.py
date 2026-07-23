@@ -741,6 +741,10 @@ async def run_pipeline(request: RunRequest):
         if method.bands:
             # Fixed-window band integration replaces peak detection entirely.
             from logic.integration import integrate_bands
+            # When baseline is enabled we integrate the corrected signal; when
+            # disabled we integrate original_y (truly raw, pre-smoothing) so the
+            # broad UV-Vis band is not altered. Smoothing is intentionally
+            # bypassed on the raw-band path.
             y_int = processed["corrected_y"] if method.baseline.enabled else processed["original_y"]
             peaks = integrate_bands(processed["x"], y_int, method.bands, profile)
         else:
