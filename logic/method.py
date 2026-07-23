@@ -69,7 +69,17 @@ class PeakParams(BaseModel):
     polyorder: int = 3
     peak_prominence: float = 0.05
     peak_width: int = 5
-    min_prominence: Optional[float] = Field(default=1e5)
+    min_prominence: float = Field(default=1e5, description="Prominence threshold. Must be non-null; values <=1 are treated as a fraction of signal range.")
+
+    @field_validator("min_prominence")
+    @classmethod
+    def _min_prominence_not_null(cls, v):
+        if v is None:
+            raise ValueError(
+                "min_prominence must not be null; use a fractional value "
+                "(e.g. 0.02) for spectroscopy or a large value for chromatography."
+            )
+        return v
     min_height: Optional[float] = 0.0
     min_width: Optional[float] = 0.0
     range_filters: Optional[List[List[float]]] = Field(default=None)

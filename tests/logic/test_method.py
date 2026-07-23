@@ -317,3 +317,14 @@ def test_baseline_enabled_false_roundtrip():
     assert bp.enabled is False
     bp2 = BaselineParams.model_validate_json(bp.model_dump_json(by_alias=True))
     assert bp2.enabled is False
+
+
+def test_min_prominence_rejects_null():
+    from logic.method import PeakParams
+    with pytest.raises(ValueError):
+        PeakParams(min_prominence=None)
+
+
+def test_min_prominence_accepts_fractional():
+    from logic.method import PeakParams
+    assert PeakParams(min_prominence=0.02).min_prominence == 0.02
