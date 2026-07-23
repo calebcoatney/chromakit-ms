@@ -266,3 +266,41 @@ def test_legacy_method_json_loads_with_unspecified(tmp_path):
     )
     loaded = ChromaMethod.from_file(p)
     assert loaded.rf_unit == "unspecified"
+
+
+def test_bandwindow_valid():
+    from logic.method import BandWindow
+    b = BandWindow(name="np_broad", x_min=350.0, x_max=500.0)
+    assert b.name == "np_broad"
+    assert b.x_min == 350.0
+    assert b.x_max == 500.0
+
+
+def test_bandwindow_rejects_non_increasing():
+    from logic.method import BandWindow
+    with pytest.raises(ValueError):
+        BandWindow(name="bad", x_min=500.0, x_max=350.0)
+
+
+def test_bandwindow_rejects_equal_bounds():
+    from logic.method import BandWindow
+    with pytest.raises(ValueError):
+        BandWindow(name="bad", x_min=400.0, x_max=400.0)
+
+
+def test_method_bands_default_empty():
+    m = ChromaMethod(name="m", signal_type="gcms")
+    assert m.bands == []
+
+
+def test_method_bands_roundtrip():
+    from logic.method import BandWindow
+    m = ChromaMethod(
+        name="ir", signal_type="ftir",
+        bands=[BandWindow(name="precursor_CO", x_min=1970, x_max=2005)],
+    )
+    js = m.model_dump_json(by_alias=True)
+    m2 = ChromaMethod.model_validate_json(js)
+    assert m2.bands[0].name == "precursor_CO"
+    assert m2.bands[0].x_min == 1970
+    assert m2.bands[0].x_max == 2005
