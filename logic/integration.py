@@ -477,6 +477,13 @@ class Integrator:
         """
         feature_cls = profile.feature_class if (profile is not None and profile.feature_class is not None) else Peak
 
+        # Peak grouping keys on retention_time; it is only valid for
+        # chromatographic peaks. Spectroscopy features have no RT — return the
+        # inputs unchanged rather than raising AttributeError.
+        if not all(hasattr(p, "retention_time") for p in peaks_list):
+            return (peaks_list, x_peaks, y_peaks, baseline_peaks,
+                    ret_times, integrated_areas, integration_bounds)
+
         # Track which peaks get consumed by a group
         consumed_indices = set()
         grouped_peaks = []  # (sort_key, Peak, x_peak, y_peak, baseline_peak)
