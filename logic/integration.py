@@ -253,6 +253,78 @@ Peak = ChromatographicPeak  # backward-compatibility alias — no call sites nee
 from logic.signal_profiles import _update_chromatographic_profiles
 _update_chromatographic_profiles(ChromatographicPeak)
 
+
+def integrate_bands(x, y, bands, profile):
+    """Integrate fixed x-windows, independent of peak detection.
+
+    Args:
+        x: 1-D array of x positions (native units; may be ascending or
+           descending, e.g. inverted-x FTIR wavenumbers).
+        y: 1-D array of the signal to integrate. Caller passes the
+           baseline-corrected signal when baseline is enabled, else raw.
+        bands: list of BandWindow (name, x_min, x_max) with x_min < x_max.
+        profile: SignalProfile (used for position_units via x_label).
+
+    Returns:
+        list[SpectralFeature] — exactly one per band, in input order. A band
+        with no samples in range yields a zero-area feature carrying a
+        quality issue rather than being dropped.
+    """
+    from logic.feature import SpectralFeature
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    units = profile.x_label if profile is not None else ""
+
+    features = []
+    for i, band in enumerate(bands):
+        x_min = min(band.x_min, band.x_max)
+        x_max = max(band.x_min, band.x_max)
+        mask = (x >= x_min) & (x <= x_max)
+        idx = np.nonzero(mask)[0]
+
+        if idx.size == 0:
+            features.append(SpectralFeature(
+                feature_id=i,
+                position=(x_min + x_max) / 2.0,
+                position_units=units,
+                area=0.0, width=(x_max - x_min),
+                start=x_min, end=x_max,
+                start_index=-1, end_index=-1,
+                band_assignment=band.name,
+                absorbance=0.0,
+                quality_issues=[f"no samples in [{x_min}, {x_max}]"],
+            ))
+            continue
+
+        x_win = x[idx]
+        y_win = y[idx]
+
+        # Direction-safe integration: sort ascending by x before simpson.
+        order = np.argsort(x_win)
+        x_sorted = x_win[order]
+        y_sorted = y_win[order]
+        area = float(abs(simpson(y_sorted, x=x_sorted)))
+
+        max_pos = int(np.argmax(y_win))
+        absorbance = float(y_win[max_pos])
+        position = float(x_win[max_pos])
+
+        features.append(SpectralFeature(
+            feature_id=i,
+            position=position,
+            position_units=units,
+            area=area,
+            width=(x_max - x_min),
+            start=x_min, end=x_max,
+            start_index=int(idx.min()), end_index=int(idx.max()),
+            band_assignment=band.name,
+            absorbance=absorbance,
+        ))
+
+    return features
+
+
 class Integrator:
     """Provides functionality for integrating chromatographic peaks."""
     
