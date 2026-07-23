@@ -304,3 +304,16 @@ def test_method_bands_roundtrip():
     assert m2.bands[0].name == "precursor_CO"
     assert m2.bands[0].x_min == 1970
     assert m2.bands[0].x_max == 2005
+
+
+def test_baseline_enabled_defaults_true():
+    from logic.method import BaselineParams
+    assert BaselineParams().enabled is True
+
+
+def test_baseline_enabled_false_roundtrip():
+    from logic.method import BaselineParams
+    bp = BaselineParams(enabled=False)
+    assert bp.enabled is False
+    bp2 = BaselineParams.model_validate_json(bp.model_dump_json(by_alias=True))
+    assert bp2.enabled is False

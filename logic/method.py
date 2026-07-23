@@ -47,6 +47,7 @@ class FastchromParams(BaseModel):
 
 
 class BaselineParams(BaseModel):
+    enabled: bool = Field(default=True, description="Run baseline correction. False integrates raw signal.")
     show_corrected: bool = False
     method: str = Field(
         default="arpls",
