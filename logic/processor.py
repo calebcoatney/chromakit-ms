@@ -457,18 +457,24 @@ class ChromatogramProcessor:
         else:
             smoothed_y = np.copy(y_values)
         
-        # STEP 2: Always calculate baseline
-        # Pass ms_range so the baseline is not fit through the solvent peak
-        # (the pre-MS region of the FID is masked with NaN).
-        baseline_y, baseline_corrected_y = self._apply_baseline_correction(
-            x_values, smoothed_y,
-            method=params['baseline']['method'],
-            lam=params['baseline']['lambda'],
-            fastchrom_params=params['baseline'].get('fastchrom'),
-            break_points=params['baseline'].get('break_points', []),
-            baseline_offset=params['baseline'].get('baseline_offset', 0.0),
-            ms_range=ms_range,
-        )
+        # STEP 2: Baseline correction (skippable via baseline.enabled=False).
+        # When disabled, corrected_y IS the smoothed signal and baseline is zero,
+        # so downstream (band integration, plotting) has a well-defined corrected_y.
+        if params['baseline'].get('enabled', True):
+            # Pass ms_range so the baseline is not fit through the solvent peak
+            # (the pre-MS region of the FID is masked with NaN).
+            baseline_y, baseline_corrected_y = self._apply_baseline_correction(
+                x_values, smoothed_y,
+                method=params['baseline']['method'],
+                lam=params['baseline']['lambda'],
+                fastchrom_params=params['baseline'].get('fastchrom'),
+                break_points=params['baseline'].get('break_points', []),
+                baseline_offset=params['baseline'].get('baseline_offset', 0.0),
+                ms_range=ms_range,
+            )
+        else:
+            baseline_y = np.zeros_like(smoothed_y)
+            baseline_corrected_y = np.copy(smoothed_y)
         
         # STEP 3: Find peaks and shoulders using derivative method
         peaks_x = np.array([])

@@ -736,35 +736,46 @@ async def run_pipeline(request: RunRequest):
         proc_params = convert_params_for_processor(raw_params)
         processed = processor.process(x, y, params=proc_params, profile=profile)
 
-        # 4. Integrate
-        integrated = processor.integrate_peaks(
-            processed_data=processed,
-            rt_table=None,
-            chemstation_area_factor=method.chemstation_area_factor,
-            peak_groups=method.integration.peak_groups or [],
-            profile=profile,
-        )
-        peaks = integrated.get("peaks", [])
-
-        # 4b. RT-assign — populate compound_id from the method's embedded RT table.
-        if method.rt_table:
-            rt_df = method.rt_table_as_dataframe()
-            apply_rt_matching(peaks, rt_df, method.rt_matching)
-
-        # 4c. Quantitate — RF-table strategy only (Phase 1a).
         run_quant_summary = None
-        if method.quant_strategy == "rf_table" and method.rf_table:
-            rf_summary = quantitate_rf(peaks, method.rf_table, rf_unit=method.rf_unit, normalize=True)
-            run_quant_summary = RunQuantSummary(
-                strategy=rf_summary.strategy,
-                peaks_quantitated=rf_summary.peaks_quantitated,
-                peaks_skipped_unassigned=len(rf_summary.skipped_unassigned),
-                peaks_skipped_no_rf=len(rf_summary.skipped_no_rf),
-                normalized=rf_summary.normalized,
-                warnings=list(rf_summary.warnings),
-                rf_unit=rf_summary.rf_unit,
-                composition_basis=rf_summary.composition_basis,
+
+        if method.bands:
+            # Fixed-window band integration replaces peak detection entirely.
+            from logic.integration import integrate_bands
+            # When baseline is enabled we integrate the corrected signal; when
+            # disabled we integrate original_y (truly raw, pre-smoothing) so the
+            # broad UV-Vis band is not altered. Smoothing is intentionally
+            # bypassed on the raw-band path.
+            y_int = processed["corrected_y"] if method.baseline.enabled else processed["original_y"]
+            peaks = integrate_bands(processed["x"], y_int, method.bands, profile)
+        else:
+            # 4. Integrate
+            integrated = processor.integrate_peaks(
+                processed_data=processed,
+                rt_table=None,
+                chemstation_area_factor=method.chemstation_area_factor,
+                peak_groups=method.integration.peak_groups or [],
+                profile=profile,
             )
+            peaks = integrated.get("peaks", [])
+
+            # 4b. RT-assign — populate compound_id from the method's embedded RT table.
+            if method.rt_table:
+                rt_df = method.rt_table_as_dataframe()
+                apply_rt_matching(peaks, rt_df, method.rt_matching)
+
+            # 4c. Quantitate — RF-table strategy only (Phase 1a).
+            if method.quant_strategy == "rf_table" and method.rf_table:
+                rf_summary = quantitate_rf(peaks, method.rf_table, rf_unit=method.rf_unit, normalize=True)
+                run_quant_summary = RunQuantSummary(
+                    strategy=rf_summary.strategy,
+                    peaks_quantitated=rf_summary.peaks_quantitated,
+                    peaks_skipped_unassigned=len(rf_summary.skipped_unassigned),
+                    peaks_skipped_no_rf=len(rf_summary.skipped_no_rf),
+                    normalized=rf_summary.normalized,
+                    warnings=list(rf_summary.warnings),
+                    rf_unit=rf_summary.rf_unit,
+                    composition_basis=rf_summary.composition_basis,
+                )
 
         # 5. Export JSON (writes alongside data file, same as GUI behavior).
         # Skipped when write_output=False so sweep iterations don't spam disk.

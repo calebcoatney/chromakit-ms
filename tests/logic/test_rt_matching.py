@@ -106,3 +106,23 @@ def test_no_match_leaves_peak_untouched():
     apply_rt_matching(peaks, _df(), RTMatchingParams(matching_mode=0))
     assert peaks[0].compound_id == "Unknown"
     assert getattr(peaks[0], "rt_assignment", False) is False
+
+
+def test_apply_rt_matching_skips_spectral_features():
+    import pandas as pd
+    from logic.rt_matching import apply_rt_matching
+    from logic.method import RTMatchingParams
+    from logic.feature import SpectralFeature
+
+    sf = SpectralFeature(
+        feature_id=1, position=1987.0, position_units="cm-1",
+        area=10.0, width=5.0, start=1980.0, end=1994.0,
+        start_index=0, end_index=10,
+    )
+    rt_df = pd.DataFrame(
+        [["precursor", 1.0, 1.1, 1.2]],
+        columns=["Compound", "Start", "Apex", "End"],
+    )
+    # Must NOT raise AttributeError on peak.retention_time
+    apply_rt_matching([sf], rt_df, RTMatchingParams())
+    assert not hasattr(sf, "compound_id") or getattr(sf, "compound_id", None) is None

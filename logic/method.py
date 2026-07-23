@@ -47,6 +47,7 @@ class FastchromParams(BaseModel):
 
 
 class BaselineParams(BaseModel):
+    enabled: bool = Field(default=True, description="Run baseline correction. False integrates raw signal.")
     show_corrected: bool = False
     method: str = Field(
         default="arpls",
@@ -68,7 +69,17 @@ class PeakParams(BaseModel):
     polyorder: int = 3
     peak_prominence: float = 0.05
     peak_width: int = 5
-    min_prominence: Optional[float] = Field(default=1e5)
+    min_prominence: float = Field(default=1e5, description="Prominence threshold. Must be non-null; values <=1 are treated as a fraction of signal range.")
+
+    @field_validator("min_prominence")
+    @classmethod
+    def _min_prominence_not_null(cls, v):
+        if v is None:
+            raise ValueError(
+                "min_prominence must not be null; use a fractional value "
+                "(e.g. 0.02) for spectroscopy or a large value for chromatography."
+            )
+        return v
     min_height: Optional[float] = 0.0
     min_width: Optional[float] = 0.0
     range_filters: Optional[List[List[float]]] = Field(default=None)
@@ -117,6 +128,25 @@ class RTTableEntry(BaseModel):
 class RFTableEntry(BaseModel):
     compound: str
     response_factor: float    # response factor; output basis is set by the method's rf_unit
+
+
+class BandWindow(BaseModel):
+    """A named fixed x-window for spectroscopy band integration.
+
+    x_min/x_max are in the signal profile's native x-units (cm-1 for FTIR,
+    nm for UV-Vis). Bounds are stored ascending regardless of axis direction.
+    """
+    name: str = Field(..., description="Band name -> SpectralFeature.band_assignment")
+    x_min: float = Field(..., description="Window lower bound (native x-units)")
+    x_max: float = Field(..., description="Window upper bound (native x-units)")
+
+    @field_validator("x_max")
+    @classmethod
+    def _check_bounds(cls, v: float, info) -> float:
+        x_min = info.data.get("x_min")
+        if x_min is not None and v <= x_min:
+            raise ValueError(f"x_max ({v}) must be greater than x_min ({x_min})")
+        return v
 
 
 class RTMatchingWeights(BaseModel):
@@ -171,6 +201,11 @@ class ChromaMethod(BaseModel):
     integration: IntegrationSubParams = Field(default_factory=IntegrationSubParams)
     rt_table: List[RTTableEntry] = Field(default_factory=list)
     rf_table: List[RFTableEntry] = Field(default_factory=list)
+    bands: List[BandWindow] = Field(
+        default_factory=list,
+        description="Fixed-window bands for spectroscopy integration. When "
+                    "non-empty, band integration replaces peak detection.",
+    )
     rt_matching: RTMatchingParams = Field(default_factory=RTMatchingParams)
     quant_strategy: Optional[str] = Field(
         default=None,
