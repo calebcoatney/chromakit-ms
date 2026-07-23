@@ -104,6 +104,13 @@ def apply_rt_matching(
     if rt_table is None or len(rt_table) == 0:
         return
 
+    # RT matching is only meaningful for chromatographic peaks (which carry a
+    # retention_time). Spectroscopy features (SpectralFeature) have no RT — skip
+    # rather than raising AttributeError. Band naming for spectra is handled by
+    # the bands mechanism, not rt_table.
+    if not all(hasattr(p, "retention_time") for p in peaks):
+        return
+
     for peak in peaks:
         rt_compound = lookup_compound_by_rt(peak.retention_time, rt_table, params)
         if not rt_compound:
