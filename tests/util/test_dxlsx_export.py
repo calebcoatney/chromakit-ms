@@ -137,3 +137,19 @@ def test_sanitize_empty_falls_back():
     used = set()
     name = dx.safe_sheet_name("", used)
     assert name == "Sheet"
+
+
+def test_sanitize_no_trailing_space_after_truncation():
+    used = set()
+    name = dx.safe_sheet_name("X" * 30 + "   tail", used)
+    assert len(name) <= 31
+    assert name == name.strip()  # no leading/trailing whitespace
+
+
+def test_sanitize_long_base_with_many_collisions_stay_unique_and_bounded():
+    used = set()
+    base = "N" * 31
+    names = [dx.safe_sheet_name(base, used) for _ in range(15)]
+    assert len(set(names)) == 15          # all unique
+    assert all(len(n) <= 31 for n in names)
+    assert all(n == n.strip() for n in names)

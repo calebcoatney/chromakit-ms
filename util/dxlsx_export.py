@@ -82,16 +82,18 @@ _INVALID_SHEET_CHARS = r'[]:*?/\\'
 
 
 def safe_sheet_name(raw, used_names):
-    """Sanitize to a valid, unique Excel sheet name; records result in used_names."""
+    """Sanitize to a valid, unique Excel sheet name (<=31 chars, no invalid
+    chars, no leading/trailing spaces). Mutates used_names in place, adding the
+    chosen name, and returns it."""
     name = "".join(c for c in str(raw) if c not in _INVALID_SHEET_CHARS).strip()
+    name = name[:31].strip()
     if not name:
         name = "Sheet"
-    name = name[:31]
     base = name
     counter = 2
     while name in used_names:
         suffix = "_" + str(counter)
-        name = base[:31 - len(suffix)] + suffix
+        name = base[:31 - len(suffix)].strip() + suffix
         counter += 1
     used_names.add(name)
     return name
