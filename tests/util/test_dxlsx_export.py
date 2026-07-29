@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from openpyxl import load_workbook
 from util import dxlsx_export as dx
 
 
@@ -185,3 +186,18 @@ def test_build_sheet_rows_empty_when_no_signals_present():
         skip_solvent_delay=False, n=5)
     assert header == ["Time (min)"]
     assert rows == []
+
+
+def test_write_workbook_creates_sheets(tmp_path):
+    out = tmp_path / "out.xlsx"
+    sheets = [
+        ("SampleA", ["Time (min)", "FID1A.ch"], [[0.0, 1.0], [0.5, None]]),
+        ("SampleB", ["Time (min)", "data.ms"], [[1.0, 6.0]]),
+    ]
+    dx.write_workbook(str(out), sheets)
+    wb = load_workbook(str(out))
+    assert wb.sheetnames == ["SampleA", "SampleB"]
+    ws = wb["SampleA"]
+    assert ws.cell(row=1, column=1).value == "Time (min)"
+    assert ws.cell(row=1, column=1).font.bold is True
+    assert ws.cell(row=3, column=2).value is None  # NaN cell empty

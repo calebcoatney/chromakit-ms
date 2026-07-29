@@ -11,6 +11,8 @@ Run: python util/dxlsx_export.py
 import os
 import sys
 import numpy as np
+from openpyxl import Workbook
+from openpyxl.styles import Font
 
 
 # ---------------------------------------------------------------------------
@@ -130,3 +132,18 @@ def build_sheet_rows(data_dir, selected, skip_solvent_delay, n):
             row.append(None if (isinstance(v, float) and np.isnan(v)) else float(v))
         rows.append(row)
     return header, rows
+
+
+def write_workbook(out_path, sheets):
+    """sheets: list of (sheet_name, header, rows). Writes bold header row."""
+    wb = Workbook()
+    wb.remove(wb.active)
+    bold = Font(bold=True)
+    for sheet_name, header, rows in sheets:
+        ws = wb.create_sheet(title=sheet_name)
+        ws.append(header)
+        for c in range(1, len(header) + 1):
+            ws.cell(row=1, column=c).font = bold
+        for row in rows:
+            ws.append(row)
+    wb.save(out_path)
