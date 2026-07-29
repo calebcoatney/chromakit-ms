@@ -76,3 +76,22 @@ def resample_to_grid(grid, x, y):
     out = np.interp(grid, x, y)
     out = np.where((grid < np.min(x)) | (grid > np.max(x)), np.nan, out)
     return out
+
+
+_INVALID_SHEET_CHARS = r'[]:*?/\\'
+
+
+def safe_sheet_name(raw, used_names):
+    """Sanitize to a valid, unique Excel sheet name; records result in used_names."""
+    name = "".join(c for c in str(raw) if c not in _INVALID_SHEET_CHARS).strip()
+    if not name:
+        name = "Sheet"
+    name = name[:31]
+    base = name
+    counter = 2
+    while name in used_names:
+        suffix = "_" + str(counter)
+        name = base[:31 - len(suffix)] + suffix
+        counter += 1
+    used_names.add(name)
+    return name

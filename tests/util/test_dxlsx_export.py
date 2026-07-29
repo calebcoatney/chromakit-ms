@@ -112,3 +112,28 @@ def test_resample_masks_out_of_range_to_nan():
     assert np.isclose(out[2], 10.0)
     assert np.isclose(out[3], 15.0)
     assert np.isnan(out[4])
+
+
+def test_sanitize_removes_invalid_and_truncates():
+    used = set()
+    name = dx.safe_sheet_name("a/b:c*d?e[f]g" * 5, used)
+    for ch in r'[]:*?/\\':
+        assert ch not in name
+    assert len(name) <= 31
+    assert name in used
+
+
+def test_sanitize_dedupes_collisions():
+    used = set()
+    n1 = dx.safe_sheet_name("Sample", used)
+    n2 = dx.safe_sheet_name("Sample", used)
+    n3 = dx.safe_sheet_name("Sample", used)
+    assert n1 == "Sample"
+    assert n2 == "Sample_2"
+    assert n3 == "Sample_3"
+
+
+def test_sanitize_empty_falls_back():
+    used = set()
+    name = dx.safe_sheet_name("", used)
+    assert name == "Sheet"
