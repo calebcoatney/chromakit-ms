@@ -52,3 +52,25 @@ def read_notebook(data_dir, d_path):
     if name:
         return str(name)
     return os.path.splitext(os.path.basename(os.path.normpath(d_path)))[0]
+
+
+def build_time_grid(sig_x, skip_solvent_delay, has_ms, ms_x, n):
+    """Build a common time grid (minutes) over the union range of all signals.
+
+    sig_x: dict signal_name -> native x array.
+    If skip_solvent_delay and has_ms, clip the start to min(ms_x).
+    """
+    starts = [np.min(x) for x in sig_x.values() if len(x)]
+    ends = [np.max(x) for x in sig_x.values() if len(x)]
+    t_min = min(starts)
+    t_max = max(ends)
+    if skip_solvent_delay and has_ms and ms_x is not None and len(ms_x):
+        t_min = float(np.min(ms_x))
+    return np.linspace(t_min, t_max, int(n))
+
+
+def resample_to_grid(grid, x, y):
+    """np.interp onto grid, masking points outside [x.min(), x.max()] to NaN."""
+    out = np.interp(grid, x, y)
+    out = np.where((grid < np.min(x)) | (grid > np.max(x)), np.nan, out)
+    return out

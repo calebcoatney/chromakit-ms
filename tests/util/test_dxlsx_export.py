@@ -71,3 +71,32 @@ def test_read_notebook_basename_handles_trailing_slash():
     fid = StubDataFile("FID1A.ch", [0.0], [1.0], metadata={})
     d = StubDataDir(None, [fid], metadata={})  # name=None
     assert dx.read_notebook(d, "/data/MySample.D/") == "MySample"
+
+
+def test_build_grid_union_range():
+    sig_x = {"A": np.array([0.0, 1.0]), "B": np.array([0.5, 2.0])}
+    grid = dx.build_time_grid(sig_x, skip_solvent_delay=False, has_ms=False,
+                              ms_x=None, n=5)
+    assert np.isclose(grid[0], 0.0)
+    assert np.isclose(grid[-1], 2.0)
+    assert len(grid) == 5
+
+
+def test_build_grid_clips_to_ms_start_when_enabled():
+    sig_x = {"FID1A.ch": np.array([0.0, 2.0]), "data.ms": np.array([1.8, 2.0])}
+    grid = dx.build_time_grid(sig_x, skip_solvent_delay=True, has_ms=True,
+                              ms_x=np.array([1.8, 2.0]), n=5)
+    assert np.isclose(grid[0], 1.8)
+    assert np.isclose(grid[-1], 2.0)
+
+
+def test_resample_masks_out_of_range_to_nan():
+    grid = np.array([0.0, 0.5, 1.0, 1.5, 2.0])
+    x = np.array([0.5, 1.0, 1.5])
+    y = np.array([5.0, 10.0, 15.0])
+    out = dx.resample_to_grid(grid, x, y)
+    assert np.isnan(out[0])
+    assert np.isclose(out[1], 5.0)
+    assert np.isclose(out[2], 10.0)
+    assert np.isclose(out[3], 15.0)
+    assert np.isnan(out[4])
