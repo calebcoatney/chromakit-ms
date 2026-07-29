@@ -182,7 +182,7 @@ def export_folders(folders, selected, skip_solvent_delay, n, out_path,
                 exported += 1
                 log("Exported: " + str(folder) + " -> " + sheet_name)
         except Exception as e:  # noqa: BLE001 - report and continue
-            log("Skipped (error): " + str(folder) + " (" + str(e) + ")")
+            log("Skipped (error): " + str(folder) + " (" + type(e).__name__ + ": " + str(e) + ")")
             skipped += 1
         if progress is not None:
             progress(int((idx + 1) / max(total, 1) * 100))

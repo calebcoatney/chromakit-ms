@@ -228,3 +228,54 @@ def test_export_folders_builds_sheets_and_skips_failures(tmp_path):
     assert result["skipped"] == 1
     assert out.exists()
     assert any("bad .D" in m or "BAD" in m for m in logs)
+
+
+def test_export_folders_all_fail_writes_no_file(tmp_path):
+    def reader(path):
+        raise IOError("boom")
+
+    out = tmp_path / "none.xlsx"
+    logs = []
+    result = dx.export_folders(
+        ["A", "B"], selected=["FID1A.ch"], skip_solvent_delay=False, n=4,
+        out_path=str(out), reader=reader, log=logs.append)
+    assert result == {"exported": 0, "skipped": 2}
+    assert not out.exists()
+    assert any("No sheets to write." in m for m in logs)
+
+
+def test_export_folders_empty_folder_list(tmp_path):
+    out = tmp_path / "none.xlsx"
+    result = dx.export_folders(
+        [], selected=["FID1A.ch"], skip_solvent_delay=False, n=4,
+        out_path=str(out), reader=lambda p: None, log=lambda m: None)
+    assert result == {"exported": 0, "skipped": 0}
+    assert not out.exists()
+
+
+def test_export_folders_skips_folder_with_no_selected_signals(tmp_path):
+    fid_only = StubDataDir("d", [StubDataFile("FID1A.ch", [0.0, 1.0], [1.0, 2.0])])
+
+    def reader(path):
+        return fid_only
+
+    out = tmp_path / "wb.xlsx"
+    logs = []
+    result = dx.export_folders(
+        ["X"], selected=["data.ms"],  # not present -> len(header)<=1 skip
+        skip_solvent_delay=False, n=4, out_path=str(out),
+        reader=reader, log=logs.append)
+    assert result == {"exported": 0, "skipped": 1}
+    assert not out.exists()
+    assert any("no selected signals present" in m for m in logs)
+
+
+def test_export_folders_progress_reaches_100(tmp_path):
+    good = make_dir()
+    out = tmp_path / "wb.xlsx"
+    seen = []
+    dx.export_folders(
+        ["G"], selected=["FID1A.ch", "data.ms"], skip_solvent_delay=False,
+        n=4, out_path=str(out), reader=lambda p: good,
+        log=lambda m: None, progress=seen.append)
+    assert seen and seen[-1] == 100
