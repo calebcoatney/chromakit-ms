@@ -236,7 +236,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QLineEdit, QScrollArea, QSpinBox, QListWidget,
     QAbstractItemView,
 )
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import QSettings
 
 
 class ExportDialog(QDialog):
