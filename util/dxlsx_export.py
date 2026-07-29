@@ -204,7 +204,7 @@ from PySide6.QtCore import QThread, Signal
 class ExportWorker(QThread):
     progress = Signal(int)
     log = Signal(str)
-    finished = Signal(dict)
+    done = Signal(dict)
 
     def __init__(self, folders, selected, skip_solvent_delay, n, out_path):
         super().__init__()
@@ -222,7 +222,7 @@ class ExportWorker(QThread):
         except Exception as e:  # noqa: BLE001
             self.log.emit("Fatal error: " + str(e))
             result = {"exported": 0, "skipped": len(self._folders), "error": str(e)}
-        self.finished.emit(result)
+        self.done.emit(result)
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +391,7 @@ class ExportDialog(QDialog):
             self._points_spin.value(), out_path)
         self._worker.progress.connect(self._progress.setValue)
         self._worker.log.connect(self._log.append)
-        self._worker.finished.connect(self._on_finished)
+        self._worker.done.connect(self._on_finished)
         self._worker.start()
 
     def _on_finished(self, result):
@@ -399,4 +399,24 @@ class ExportDialog(QDialog):
         msg = ("Exported " + str(result.get("exported", 0)) + " folder(s), skipped "
                + str(result.get("skipped", 0)) + ".")
         self._log.append(msg)
-        QMessageBox.information(self, "Export complete", msg)
+        if result.get("error"):
+            QMessageBox.warning(self, "Export finished with error",
+                                msg + "\n\nError: " + str(result["error"]))
+        else:
+            QMessageBox.information(self, "Export complete", msg)
+
+    def closeEvent(self, event):
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.wait()
+        super().closeEvent(event)
+
+
+def main():
+    app = QApplication(sys.argv)
+    dlg = ExportDialog()
+    dlg.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
