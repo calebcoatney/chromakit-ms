@@ -234,7 +234,7 @@ from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QWidget, QPushButton,
     QLabel, QFileDialog, QTextEdit, QProgressBar, QMessageBox, QGroupBox,
     QCheckBox, QLineEdit, QScrollArea, QSpinBox, QListWidget,
-    QAbstractItemView,
+    QAbstractItemView, QListView, QTreeView,
 )
 from PySide6.QtCore import QSettings
 
@@ -318,10 +318,26 @@ class ExportDialog(QDialog):
 
     # -- Folder handling -------------------------------------------------
     def _add_folders(self):
-        d = QFileDialog.getExistingDirectory(self, "Select an Agilent .D folder")
-        if d and d not in self._folders:
-            self._folders.append(d)
-            self._folder_list.addItem(d)
+        # QFileDialog's native directory picker only allows a single selection.
+        # Use a non-native dialog and switch its internal views to multi-select
+        # so several .D folders can be chosen at once.
+        dialog = QFileDialog(self, "Select Agilent .D folder(s)")
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        for view in dialog.findChildren((QListView, QTreeView)):
+            view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+
+        if not dialog.exec():
+            return
+
+        added = False
+        for d in dialog.selectedFiles():
+            if d and d not in self._folders:
+                self._folders.append(d)
+                self._folder_list.addItem(d)
+                added = True
+        if added:
             self._rescan_signals()
 
     def _remove_selected(self):
