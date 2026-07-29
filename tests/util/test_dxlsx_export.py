@@ -175,3 +175,13 @@ def test_build_sheet_rows_skips_absent_signals():
         skip_solvent_delay=True, n=3)
     # data.ms not present -> column omitted
     assert header == ["Time (min)", "FID1A.ch"]
+
+
+def test_build_sheet_rows_empty_when_no_signals_present():
+    fid = StubDataFile("FID1A.ch", [0.0, 1.0], [1.0, 2.0])
+    d = StubDataDir("d", [fid])
+    header, rows = dx.build_sheet_rows(
+        d, selected=["data.ms"],  # not present in this folder
+        skip_solvent_delay=False, n=5)
+    assert header == ["Time (min)"]
+    assert rows == []

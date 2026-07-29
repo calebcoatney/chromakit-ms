@@ -106,6 +106,8 @@ def build_sheet_rows(data_dir, selected, skip_solvent_delay, n):
     rows: list of [time, val, ...] with NaN converted to None.
     """
     present = [s for s in selected if s in list_signals(data_dir)]
+    if not present:
+        return ["Time (min)"], []
     sig_xy = {s: read_signal(data_dir, s) for s in present}
     sig_x = {s: xy[0] for s, xy in sig_xy.items()}
 
