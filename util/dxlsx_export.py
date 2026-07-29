@@ -192,3 +192,211 @@ def export_folders(folders, selected, skip_solvent_delay, n, out_path,
     else:
         log("No sheets to write.")
     return {"exported": exported, "skipped": skipped}
+
+
+# ---------------------------------------------------------------------------
+# Task 7: QThread export worker
+# ---------------------------------------------------------------------------
+
+from PySide6.QtCore import QThread, Signal
+
+
+class ExportWorker(QThread):
+    progress = Signal(int)
+    log = Signal(str)
+    finished = Signal(dict)
+
+    def __init__(self, folders, selected, skip_solvent_delay, n, out_path):
+        super().__init__()
+        self._folders = folders
+        self._selected = selected
+        self._skip = skip_solvent_delay
+        self._n = n
+        self._out = out_path
+
+    def run(self):
+        try:
+            result = export_folders(
+                self._folders, self._selected, self._skip, self._n, self._out,
+                log=self.log.emit, progress=self.progress.emit)
+        except Exception as e:  # noqa: BLE001
+            self.log.emit("Fatal error: " + str(e))
+            result = {"exported": 0, "skipped": len(self._folders), "error": str(e)}
+        self.finished.emit(result)
+
+
+# ---------------------------------------------------------------------------
+# Task 8: GUI dialog
+# ---------------------------------------------------------------------------
+
+import rainbow as rb
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QWidget, QPushButton,
+    QLabel, QFileDialog, QTextEdit, QProgressBar, QMessageBox, QGroupBox,
+    QCheckBox, QLineEdit, QScrollArea, QSpinBox, QListWidget,
+    QAbstractItemView,
+)
+from PySide6.QtCore import Qt, QSettings
+
+
+class ExportDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Agilent .D → xlsx Export")
+        self.resize(640, 640)
+        self._settings = QSettings("CalebCoatney", "ChromaKit")
+        self._folders = []          # list[str]
+        self._signal_checks = {}    # signal name -> QCheckBox
+        self._worker = None
+        self._build_ui()
+
+    # -- UI construction -------------------------------------------------
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Folders
+        fbox = QGroupBox("Agilent .D folders")
+        fl = QVBoxLayout(fbox)
+        self._folder_list = QListWidget()
+        self._folder_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        fl.addWidget(self._folder_list)
+        frow = QHBoxLayout()
+        add_btn = QPushButton("Add .D Folder(s)…")
+        add_btn.clicked.connect(self._add_folders)
+        rm_btn = QPushButton("Remove Selected")
+        rm_btn.clicked.connect(self._remove_selected)
+        frow.addWidget(add_btn)
+        frow.addWidget(rm_btn)
+        fl.addLayout(frow)
+        layout.addWidget(fbox)
+
+        # Signals
+        sbox = QGroupBox("Signals to export")
+        sl = QVBoxLayout(sbox)
+        self._signal_area = QScrollArea()
+        self._signal_area.setWidgetResizable(True)
+        self._signal_inner = QWidget()
+        self._signal_layout = QVBoxLayout(self._signal_inner)
+        self._signal_area.setWidget(self._signal_inner)
+        sl.addWidget(self._signal_area)
+        layout.addWidget(sbox)
+
+        # Options
+        obox = QGroupBox("Options")
+        ol = QHBoxLayout(obox)
+        self._skip_check = QCheckBox("Skip solvent delay (clip to MS start when MS present)")
+        self._skip_check.setChecked(True)
+        ol.addWidget(self._skip_check)
+        ol.addWidget(QLabel("Points per signal:"))
+        self._points_spin = QSpinBox()
+        self._points_spin.setRange(100, 200000)
+        self._points_spin.setValue(int(self._settings.value("dxlsx/points", 10000)))
+        ol.addWidget(self._points_spin)
+        layout.addWidget(obox)
+
+        # Output
+        orow = QHBoxLayout()
+        orow.addWidget(QLabel("Output:"))
+        self._out_edit = QLineEdit()
+        self._out_edit.setReadOnly(True)
+        self._out_edit.setText(self._settings.value("dxlsx/out", ""))
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._pick_output)
+        orow.addWidget(self._out_edit)
+        orow.addWidget(browse)
+        layout.addLayout(orow)
+
+        # Export + progress + log
+        self._export_btn = QPushButton("Export")
+        self._export_btn.clicked.connect(self._start_export)
+        layout.addWidget(self._export_btn)
+        self._progress = QProgressBar()
+        layout.addWidget(self._progress)
+        self._log = QTextEdit()
+        self._log.setReadOnly(True)
+        layout.addWidget(self._log)
+
+    # -- Folder handling -------------------------------------------------
+    def _add_folders(self):
+        d = QFileDialog.getExistingDirectory(self, "Select an Agilent .D folder")
+        if d and d not in self._folders:
+            self._folders.append(d)
+            self._folder_list.addItem(d)
+            self._rescan_signals()
+
+    def _remove_selected(self):
+        for item in self._folder_list.selectedItems():
+            path = item.text()
+            if path in self._folders:
+                self._folders.remove(path)
+            self._folder_list.takeItem(self._folder_list.row(item))
+        self._rescan_signals()
+
+    def _rescan_signals(self):
+        prev = {s: cb.isChecked() for s, cb in self._signal_checks.items()}
+        union = []
+        for folder in self._folders:
+            try:
+                data_dir = rb.read(folder)
+                for s in list_signals(data_dir):
+                    if s not in union:
+                        union.append(s)
+            except Exception as e:  # noqa: BLE001
+                self._log.append("Could not scan " + folder + ": " + str(e))
+        while self._signal_layout.count():
+            item = self._signal_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self._signal_checks = {}
+        for s in union:
+            cb = QCheckBox(s)
+            cb.setChecked(prev.get(s, True))
+            self._signal_layout.addWidget(cb)
+            self._signal_checks[s] = cb
+
+    # -- Output ----------------------------------------------------------
+    def _pick_output(self):
+        start_dir = self._settings.value("dxlsx/out", "")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save workbook", start_dir, "Excel Workbook (*.xlsx)")
+        if path:
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
+            self._out_edit.setText(path)
+
+    # -- Export ----------------------------------------------------------
+    def _start_export(self):
+        selected = [s for s, cb in self._signal_checks.items() if cb.isChecked()]
+        out_path = self._out_edit.text().strip()
+        if not self._folders:
+            QMessageBox.warning(self, "No folders", "Add at least one .D folder.")
+            return
+        if not selected:
+            QMessageBox.warning(self, "No signals", "Select at least one signal.")
+            return
+        if not out_path:
+            QMessageBox.warning(self, "No output", "Choose an output .xlsx path.")
+            return
+
+        self._settings.setValue("dxlsx/points", self._points_spin.value())
+        self._settings.setValue("dxlsx/out", out_path)
+
+        self._export_btn.setEnabled(False)
+        self._progress.setValue(0)
+        self._log.clear()
+
+        self._worker = ExportWorker(
+            list(self._folders), selected, self._skip_check.isChecked(),
+            self._points_spin.value(), out_path)
+        self._worker.progress.connect(self._progress.setValue)
+        self._worker.log.connect(self._log.append)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.start()
+
+    def _on_finished(self, result):
+        self._export_btn.setEnabled(True)
+        msg = ("Exported " + str(result.get("exported", 0)) + " folder(s), skipped "
+               + str(result.get("skipped", 0)) + ".")
+        self._log.append(msg)
+        QMessageBox.information(self, "Export complete", msg)
