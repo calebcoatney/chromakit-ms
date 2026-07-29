@@ -51,4 +51,4 @@ def read_notebook(data_dir, d_path):
     name = getattr(data_dir, "name", None)
     if name:
         return str(name)
-    return os.path.splitext(os.path.basename(d_path.rstrip("/\\")))[0]
+    return os.path.splitext(os.path.basename(os.path.normpath(d_path)))[0]

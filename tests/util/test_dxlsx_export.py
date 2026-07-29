@@ -59,3 +59,15 @@ def test_read_notebook_falls_back_to_dir_then_basename():
     fid = StubDataFile("FID1A.ch", [0.0], [1.0], metadata={})
     d = StubDataDir("dname", [fid], metadata={})
     assert dx.read_notebook(d, "/x/basename.D") == "dname"
+
+
+def test_read_notebook_uses_basename_when_no_name():
+    fid = StubDataFile("FID1A.ch", [0.0], [1.0], metadata={})
+    d = StubDataDir(None, [fid], metadata={})  # name=None
+    assert dx.read_notebook(d, "/data/MySample.D") == "MySample"
+
+
+def test_read_notebook_basename_handles_trailing_slash():
+    fid = StubDataFile("FID1A.ch", [0.0], [1.0], metadata={})
+    d = StubDataDir(None, [fid], metadata={})  # name=None
+    assert dx.read_notebook(d, "/data/MySample.D/") == "MySample"
