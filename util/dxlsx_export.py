@@ -325,8 +325,9 @@ class ExportDialog(QDialog):
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setOption(QFileDialog.DontUseNativeDialog, True)
         dialog.setOption(QFileDialog.ShowDirsOnly, True)
-        for view in dialog.findChildren((QListView, QTreeView)):
-            view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        for view_type in (QListView, QTreeView):
+            for view in dialog.findChildren(view_type):
+                view.setSelectionMode(QAbstractItemView.ExtendedSelection)
 
         if not dialog.exec():
             return
