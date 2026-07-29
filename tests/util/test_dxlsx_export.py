@@ -207,3 +207,24 @@ def test_write_workbook_raises_on_no_sheets(tmp_path):
     out = tmp_path / "empty.xlsx"
     with pytest.raises(ValueError):
         dx.write_workbook(str(out), [])
+
+
+def test_export_folders_builds_sheets_and_skips_failures(tmp_path):
+    good = make_dir()
+
+    def reader(path):
+        if path == "GOOD":
+            return good
+        raise IOError("bad .D")
+
+    out = tmp_path / "wb.xlsx"
+    logs = []
+    result = dx.export_folders(
+        ["GOOD", "BAD"], selected=["FID1A.ch", "data.ms"],
+        skip_solvent_delay=False, n=4, out_path=str(out),
+        reader=reader, log=logs.append, progress=lambda i: None)
+
+    assert result["exported"] == 1
+    assert result["skipped"] == 1
+    assert out.exists()
+    assert any("bad .D" in m or "BAD" in m for m in logs)

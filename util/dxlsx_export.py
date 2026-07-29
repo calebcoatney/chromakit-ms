@@ -149,3 +149,46 @@ def write_workbook(out_path, sheets):
         for row in rows:
             ws.append(row)
     wb.save(out_path)
+
+
+def _default_reader(path):
+    import rainbow as rb
+    return rb.read(path)
+
+
+def export_folders(folders, selected, skip_solvent_delay, n, out_path,
+                   reader=_default_reader, log=print, progress=None):
+    """Read each folder, build a sheet, write the workbook.
+
+    Returns {'exported': int, 'skipped': int}. Failures are logged and skipped.
+    """
+    sheets = []
+    used_names = set()
+    exported = 0
+    skipped = 0
+    total = len(folders)
+    for idx, folder in enumerate(folders):
+        try:
+            data_dir = reader(folder)
+            header, rows = build_sheet_rows(data_dir, selected,
+                                            skip_solvent_delay, n)
+            if len(header) <= 1:
+                log("Skipped (no selected signals present): " + str(folder))
+                skipped += 1
+            else:
+                raw_name = read_notebook(data_dir, folder)
+                sheet_name = safe_sheet_name(raw_name, used_names)
+                sheets.append((sheet_name, header, rows))
+                exported += 1
+                log("Exported: " + str(folder) + " -> " + sheet_name)
+        except Exception as e:  # noqa: BLE001 - report and continue
+            log("Skipped (error): " + str(folder) + " (" + str(e) + ")")
+            skipped += 1
+        if progress is not None:
+            progress(int((idx + 1) / max(total, 1) * 100))
+
+    if sheets:
+        write_workbook(out_path, sheets)
+    else:
+        log("No sheets to write.")
+    return {"exported": exported, "skipped": skipped}
