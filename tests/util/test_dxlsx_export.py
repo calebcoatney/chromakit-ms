@@ -90,6 +90,18 @@ def test_build_grid_clips_to_ms_start_when_enabled():
     assert np.isclose(grid[-1], 2.0)
 
 
+def test_build_grid_raises_on_empty():
+    with pytest.raises(ValueError):
+        dx.build_time_grid({}, skip_solvent_delay=False, has_ms=False, ms_x=None, n=5)
+
+
+def test_build_grid_no_clip_when_flag_off_even_with_ms():
+    sig_x = {"FID1A.ch": np.array([0.0, 2.0]), "data.ms": np.array([1.8, 2.0])}
+    grid = dx.build_time_grid(sig_x, skip_solvent_delay=False, has_ms=True,
+                              ms_x=np.array([1.8, 2.0]), n=5)
+    assert np.isclose(grid[0], 0.0)
+
+
 def test_resample_masks_out_of_range_to_nan():
     grid = np.array([0.0, 0.5, 1.0, 1.5, 2.0])
     x = np.array([0.5, 1.0, 1.5])

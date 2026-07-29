@@ -62,6 +62,8 @@ def build_time_grid(sig_x, skip_solvent_delay, has_ms, ms_x, n):
     """
     starts = [np.min(x) for x in sig_x.values() if len(x)]
     ends = [np.max(x) for x in sig_x.values() if len(x)]
+    if not starts:
+        raise ValueError("build_time_grid: no non-empty signals provided")
     t_min = min(starts)
     t_max = max(ends)
     if skip_solvent_delay and has_ms and ms_x is not None and len(ms_x):
