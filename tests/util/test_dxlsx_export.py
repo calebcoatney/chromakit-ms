@@ -153,3 +153,25 @@ def test_sanitize_long_base_with_many_collisions_stay_unique_and_bounded():
     assert len(set(names)) == 15          # all unique
     assert all(len(n) <= 31 for n in names)
     assert all(n == n.strip() for n in names)
+
+
+def test_build_sheet_rows_shape_and_headers():
+    d = make_dir()  # FID1A.ch (0..1), data.ms (0.5..1.0)
+    header, rows = dx.build_sheet_rows(
+        d, selected=["FID1A.ch", "data.ms"],
+        skip_solvent_delay=False, n=4)
+    assert header == ["Time (min)", "FID1A.ch", "data.ms"]
+    assert len(rows) == 4
+    assert len(rows[0]) == 3
+    # first grid point 0.0 is before MS start -> MS cell is None
+    assert rows[0][2] is None
+
+
+def test_build_sheet_rows_skips_absent_signals():
+    fid = StubDataFile("FID1A.ch", [0.0, 1.0], [1.0, 2.0])
+    d = StubDataDir("d", [fid])
+    header, rows = dx.build_sheet_rows(
+        d, selected=["FID1A.ch", "data.ms"],
+        skip_solvent_delay=True, n=3)
+    # data.ms not present -> column omitted
+    assert header == ["Time (min)", "FID1A.ch"]

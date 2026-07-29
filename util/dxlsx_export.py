@@ -97,3 +97,34 @@ def safe_sheet_name(raw, used_names):
         counter += 1
     used_names.add(name)
     return name
+
+
+def build_sheet_rows(data_dir, selected, skip_solvent_delay, n):
+    """Return (header, rows) for one .D folder.
+
+    header: ["Time (min)", <signal>, ...] for selected signals present here.
+    rows: list of [time, val, ...] with NaN converted to None.
+    """
+    present = [s for s in selected if s in list_signals(data_dir)]
+    sig_xy = {s: read_signal(data_dir, s) for s in present}
+    sig_x = {s: xy[0] for s, xy in sig_xy.items()}
+
+    has_ms = "data.ms" in present
+    ms_x = sig_x.get("data.ms")
+    grid = build_time_grid(sig_x, skip_solvent_delay, has_ms, ms_x, n)
+
+    columns = [grid]
+    header = ["Time (min)"]
+    for s in present:
+        x, y = sig_xy[s]
+        columns.append(resample_to_grid(grid, x, y))
+        header.append(s)
+
+    rows = []
+    for i in range(len(grid)):
+        row = []
+        for col in columns:
+            v = col[i]
+            row.append(None if (isinstance(v, float) and np.isnan(v)) else float(v))
+        rows.append(row)
+    return header, rows
