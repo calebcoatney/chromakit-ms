@@ -201,3 +201,9 @@ def test_write_workbook_creates_sheets(tmp_path):
     assert ws.cell(row=1, column=1).value == "Time (min)"
     assert ws.cell(row=1, column=1).font.bold is True
     assert ws.cell(row=3, column=2).value is None  # NaN cell empty
+
+
+def test_write_workbook_raises_on_no_sheets(tmp_path):
+    out = tmp_path / "empty.xlsx"
+    with pytest.raises(ValueError):
+        dx.write_workbook(str(out), [])

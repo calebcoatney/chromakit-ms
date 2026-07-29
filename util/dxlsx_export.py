@@ -136,6 +136,8 @@ def build_sheet_rows(data_dir, selected, skip_solvent_delay, n):
 
 def write_workbook(out_path, sheets):
     """sheets: list of (sheet_name, header, rows). Writes bold header row."""
+    if not sheets:
+        raise ValueError("write_workbook: no sheets to write")
     wb = Workbook()
     wb.remove(wb.active)
     bold = Font(bold=True)
