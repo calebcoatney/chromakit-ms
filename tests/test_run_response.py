@@ -88,7 +88,7 @@ def test_run_endpoint_write_output_false_does_not_write_json(tmp_path, monkeypat
     fake_dir = tmp_path / "sample.D"
     fake_dir.mkdir()
     fake_method = tmp_path / "test.chromethod"
-    fake_method.write_text('{"name": "t", "version": "1", "signal_type": "gc", "chemstation_area_factor": 0.0784, "smoothing": {"enabled": false}, "baseline": {"method": "asls"}, "peaks": {"min_height": 1.0}, "deconvolution": {"enabled": false}, "negative_peaks": {"enabled": false}, "shoulders": {"enabled": false}, "integration": {"peak_groups": []}}')
+    fake_method.write_text('{"name": "t", "version": "1", "signal_type": "gc", "smoothing": {"enabled": false}, "baseline": {"method": "asls"}, "peaks": {"min_height": 1.0}, "deconvolution": {"enabled": false}, "negative_peaks": {"enabled": false}, "shoulders": {"enabled": false}, "integration": {"peak_groups": []}}')
 
     fake_data = {
         'chromatogram': {'x': [0.0, 1.0], 'y': [100.0, 200.0]},
@@ -127,7 +127,7 @@ def test_run_endpoint_write_output_true_preserves_existing_behavior(tmp_path):
     fake_dir = tmp_path / "sample.D"
     fake_dir.mkdir()
     fake_method = tmp_path / "test.chromethod"
-    fake_method.write_text('{"name": "t", "version": "1", "signal_type": "gc", "chemstation_area_factor": 0.0784, "smoothing": {"enabled": false}, "baseline": {"method": "asls"}, "peaks": {"min_height": 1.0}, "deconvolution": {"enabled": false}, "negative_peaks": {"enabled": false}, "shoulders": {"enabled": false}, "integration": {"peak_groups": []}}')
+    fake_method.write_text('{"name": "t", "version": "1", "signal_type": "gc", "smoothing": {"enabled": false}, "baseline": {"method": "asls"}, "peaks": {"min_height": 1.0}, "deconvolution": {"enabled": false}, "negative_peaks": {"enabled": false}, "shoulders": {"enabled": false}, "integration": {"peak_groups": []}}')
 
     fake_data = {
         'chromatogram': {'x': [0.0, 1.0], 'y': [100.0, 200.0]},
@@ -192,7 +192,7 @@ def _write_ftir_method(tmp_path):
     method_path = tmp_path / "ir_nanoparticle.chromethod"
     method_path.write_text(
         '{"name": "ir_nanoparticle", "version": "1", "signal_type": "ftir", '
-        '"chemstation_area_factor": 1.0, '
+        '"area_factor": 1.0, '
         '"smoothing": {"enabled": false}, '
         '"baseline": {"method": "asls"}, '
         '"peaks": {"enabled": true, "min_prominence": 0.5, "peak_prominence": 0.5, "min_height": 0.5}, '
@@ -273,3 +273,87 @@ def test_run_endpoint_ftir_c_folder_yields_spectral_features(tmp_path):
     assert 'band_assignment' in peak
     # The detected band should sit on the wavenumber axis near the synthetic 1988 band.
     assert peak['position_units'] == 'Wavenumber (cm⁻¹)'
+
+
+def test_run_applies_method_signal_factor_and_detector(tmp_path):
+    """A .D method with signal_factor/detector: data_handler.signal_factor is set
+    from the method before load, and method.detector is used when the request omits it."""
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from api.main import app, data_handler
+
+    client = TestClient(app)
+    fake_dir = tmp_path / "sample.D"
+    fake_dir.mkdir()
+    fake_method = tmp_path / "m.chromethod"
+    fake_method.write_text(
+        '{"name": "t", "version": "1", "signal_type": "gc", '
+        '"signal_factor": 7700.0, "area_factor": 600.0, "detector": "TCD3C", '
+        '"smoothing": {"enabled": false}, "baseline": {"method": "asls"}, '
+        '"peaks": {"min_height": 1.0}, "deconvolution": {"enabled": false}, '
+        '"negative_peaks": {"enabled": false}, "shoulders": {"enabled": false}, '
+        '"integration": {"peak_groups": []}}'
+    )
+    captured = {}
+
+    def fake_load(path, detector=None):
+        captured["signal_factor"] = data_handler.signal_factor
+        captured["detector"] = detector
+        return {"chromatogram": {"x": [0.0, 1.0], "y": [100.0, 200.0]},
+                "tic": {"x": [], "y": []}, "metadata": {"filename": "sample.D"}}
+
+    with patch.object(data_handler, 'load_data_directory', side_effect=fake_load), \
+         patch.object(data_handler, 'current_detector', 'TCD3C'), \
+         patch('api.main.processor.process', return_value={'x': [], 'corrected_y': []}), \
+         patch('api.main.processor.integrate_peaks', return_value={'peaks': []}) as mock_int, \
+         patch('api.main.export_integration_results_to_json'), \
+         patch('api.main._resolve_export_context', return_value=({}, '/fake/out.json')):
+        resp = client.post('/api/run', json={
+            'data_path': str(fake_dir), 'method_path': str(fake_method),
+            'write_output': False,
+        })
+
+    assert resp.status_code == 200, resp.text
+    assert captured["signal_factor"] == 7700.0
+    assert captured["detector"] == "TCD3C"   # method.detector used (request omitted it)
+    # area_factor from the method is threaded into integrate_peaks
+    assert mock_int.call_args.kwargs.get("area_factor") == 600.0
+
+
+def test_run_request_detector_overrides_method(tmp_path):
+    """Explicit RunRequest.detector wins over method.detector."""
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from api.main import app, data_handler
+
+    client = TestClient(app)
+    fake_dir = tmp_path / "sample.D"
+    fake_dir.mkdir()
+    fake_method = tmp_path / "m.chromethod"
+    fake_method.write_text(
+        '{"name": "t", "version": "1", "signal_type": "gc", "detector": "TCD3C", '
+        '"smoothing": {"enabled": false}, "baseline": {"method": "asls"}, '
+        '"peaks": {"min_height": 1.0}, "deconvolution": {"enabled": false}, '
+        '"negative_peaks": {"enabled": false}, "shoulders": {"enabled": false}, '
+        '"integration": {"peak_groups": []}}'
+    )
+    captured = {}
+
+    def fake_load(path, detector=None):
+        captured["detector"] = detector
+        return {"chromatogram": {"x": [0.0, 1.0], "y": [100.0, 200.0]},
+                "tic": {"x": [], "y": []}, "metadata": {"filename": "sample.D"}}
+
+    with patch.object(data_handler, 'load_data_directory', side_effect=fake_load), \
+         patch.object(data_handler, 'current_detector', 'FID1A'), \
+         patch('api.main.processor.process', return_value={'x': [], 'corrected_y': []}), \
+         patch('api.main.processor.integrate_peaks', return_value={'peaks': []}), \
+         patch('api.main.export_integration_results_to_json'), \
+         patch('api.main._resolve_export_context', return_value=({}, '/fake/out.json')):
+        resp = client.post('/api/run', json={
+            'data_path': str(fake_dir), 'method_path': str(fake_method),
+            'detector': 'FID1A', 'write_output': False,
+        })
+
+    assert resp.status_code == 200, resp.text
+    assert captured["detector"] == "FID1A"

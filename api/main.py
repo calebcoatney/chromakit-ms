@@ -222,7 +222,7 @@ async def integrate_peaks(request: IntegrateRequest):
         result = processor.integrate_peaks(
             processed_data=processed_data,
             rt_table=request.rt_table,
-            chemstation_area_factor=request.chemstation_area_factor,
+            area_factor=request.chemstation_area_factor,
             peak_groups=request.peak_groups,
         )
 
@@ -711,7 +711,11 @@ async def run_pipeline(request: RunRequest):
 
                 cf = CFolder.open(request.data_path)
                 profile = cf.profile
-                data = cf.load_signal(detector=request.detector)
+                resolved_detector = request.detector or method.detector
+                data = cf.load_signal(
+                    signal_factor=method.signal_factor or 1.0,
+                    detector=resolved_detector,
+                )
                 x = np.array(data["x"])
                 y = np.array(data["y"])
                 # Sync detector so the export step names files with the real detector.
@@ -720,8 +724,10 @@ async def run_pipeline(request: RunRequest):
                     data_handler.current_detector = detected
             else:
                 profile = None  # legacy .D → default ChromatographicPeak path
+                resolved_detector = request.detector or method.detector
+                data_handler.signal_factor = method.signal_factor or 1.0
                 data = data_handler.load_data_directory(
-                    request.data_path, detector=request.detector
+                    request.data_path, detector=resolved_detector
                 )
                 x = np.array(data["chromatogram"]["x"])
                 y = np.array(data["chromatogram"]["y"])
@@ -752,7 +758,7 @@ async def run_pipeline(request: RunRequest):
             integrated = processor.integrate_peaks(
                 processed_data=processed,
                 rt_table=None,
-                chemstation_area_factor=method.chemstation_area_factor,
+                area_factor=method.area_factor,
                 peak_groups=method.integration.peak_groups or [],
                 profile=profile,
             )
