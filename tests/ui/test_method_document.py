@@ -221,3 +221,52 @@ def test_rf_unit_writes_back_and_dirties(qtbot):
     app.rf_table_frame.select_rf_unit("area_per_wt_pct")
     assert app.current_method.rf_unit == "area_per_wt_pct"
     assert app._method_dirty is True
+
+
+def test_scaling_change_writes_method_and_marks_dirty(qtbot):
+    app = _make(qtbot)
+    app._method_dirty = False
+    app._on_scaling_factors_changed(7700.0, 600.0)
+    assert app.current_method.signal_factor == 7700.0
+    assert app.current_method.area_factor == 600.0
+    assert app.signal_factor == 7700.0
+    assert app.area_factor == 600.0
+    assert app.data_handler.signal_factor == 7700.0
+    assert app._method_dirty is True
+
+
+def test_scaling_change_stores_one_as_none(qtbot):
+    """A factor of 1.0 means 'no scaling' and is stored as None on the method."""
+    app = _make(qtbot)
+    app._on_scaling_factors_changed(1.0, 1.0)
+    assert app.current_method.signal_factor is None
+    assert app.current_method.area_factor is None
+
+
+def test_load_method_syncs_scaling_to_session(qtbot, tmp_path):
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    m = ChromaMethod(name="Scaled", signal_type="gc",
+                     signal_factor=7700.0, area_factor=600.0)
+    path = tmp_path / "scaled.chromethod"
+    m.to_file(path)
+    app.current_method = ChromaMethod.from_file(str(path))
+    app._sync_scaling_from_method()
+    assert app.signal_factor == 7700.0
+    assert app.area_factor == 600.0
+    assert app.data_handler.signal_factor == 7700.0
+
+
+def test_params_writeback_preserves_scaling(qtbot):
+    """Editing parameters must NOT wipe the method's scaling/detector fields."""
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    app.current_method = ChromaMethod(name="X", signal_type="gc",
+                                      signal_factor=7700.0, area_factor=600.0,
+                                      detector="TCD3C")
+    app._method_dirty = False
+    app._loading_method = False
+    app._on_params_writeback(app.parameters_frame.current_params)
+    assert app.current_method.signal_factor == 7700.0
+    assert app.current_method.area_factor == 600.0
+    assert app.current_method.detector == "TCD3C"

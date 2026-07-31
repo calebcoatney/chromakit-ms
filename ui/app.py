@@ -63,6 +63,10 @@ class ChromaKitApp(QMainWindow):
         self._gcxgc_peaks: list = []
         
         # Load scaling factors from settings
+        # self.signal_factor / self.area_factor are numeric mirrors (never None) of
+        # the method's scaling, kept in sync with current_method. data_handler and
+        # export_manager (logic/export_manager.py) require guaranteed-numeric values,
+        # so 'no scaling' is represented here as 1.0 (and as None on the method).
         _settings = QSettings("CalebCoatney", "ChromaKit")
         self.signal_factor = _settings.value("scaling/signal_factor", 1.0, type=float)
         self.area_factor = _settings.value("scaling/area_factor", 1.0, type=float)
@@ -135,6 +139,11 @@ class ChromaKitApp(QMainWindow):
         # ── Document model: current_method is the always-present atom ──────────
         from logic.method import ChromaMethod
         self.current_method = ChromaMethod(name="Untitled", signal_type="gc")
+        # Seed the freshly-created method's scaling from session defaults (QSettings)
+        # so the method is the single source of truth from the start. Store 1.0 as
+        # None ("no scaling").
+        self.current_method.signal_factor = None if self.signal_factor == 1.0 else self.signal_factor
+        self.current_method.area_factor = None if self.area_factor == 1.0 else self.area_factor
         self.current_method_path = None
         self._method_dirty = False
         self._loading_method = False
@@ -329,10 +338,20 @@ class ChromaKitApp(QMainWindow):
             QMessageBox.critical(self, "Load Method Failed", str(e))
             return
         self.current_method = method
+        self._sync_scaling_from_method()
         self.current_method_path = Path(path)
         self._apply_method_to_frames()
         self._mark_dirty(False)
         self._update_window_title()
+
+    def _sync_scaling_from_method(self):
+        """Pull scaling from current_method into session state (self.* and the
+        data handler). None/0 on the method => x1 in the session. Called after a
+        method is loaded so the loaded method reproduces its processing context
+        with no separate scaling-dialog step."""
+        self.signal_factor = self.current_method.signal_factor or 1.0
+        self.area_factor = self.current_method.area_factor or 1.0
+        self.data_handler.signal_factor = self.signal_factor
 
     def _maybe_prompt_save(self) -> bool:
         if not self._method_dirty:
@@ -367,7 +386,6 @@ class ChromaKitApp(QMainWindow):
             params,
             name=self.current_method.name,
             signal_type=self.current_method.signal_type,
-            chemstation_area_factor=self.current_method.chemstation_area_factor,
         )
         updated.rt_table = self.current_method.rt_table
         updated.rf_table = self.current_method.rf_table
@@ -376,6 +394,9 @@ class ChromaKitApp(QMainWindow):
         # Preserve provenance/metadata that from_gui_params would otherwise reset
         updated.created_at = self.current_method.created_at
         updated.version = self.current_method.version
+        updated.signal_factor = self.current_method.signal_factor
+        updated.area_factor = self.current_method.area_factor
+        updated.detector = self.current_method.detector
         self.current_method = updated
         self._mark_dirty(True)
 
@@ -1983,7 +2004,7 @@ class ChromaKitApp(QMainWindow):
                     processed_data=self.current_processed,
                     ms_data=ms_data,
                     quality_options=quality_options,
-                    chemstation_area_factor=self.area_factor,
+                    area_factor=self._method_area_factor(),
                     peak_groups=peak_groups if peak_groups else None,
                     profile=profile
                 )
@@ -2027,7 +2048,7 @@ class ChromaKitApp(QMainWindow):
                 processed['x'],
                 processed['corrected_y'],
                 processed['baseline_y'],
-                self.area_factor,
+                self._method_area_factor(),
             )
         else:
             return integrate_emg_components(
@@ -2035,9 +2056,13 @@ class ChromaKitApp(QMainWindow):
                 processed['x'],
                 processed['corrected_y'],
                 processed['baseline_y'],
-                self.area_factor,
+                self._method_area_factor(),
             )
     
+    def _method_area_factor(self):
+        """Resolve the area multiplier from the method (None/0 => no scaling)."""
+        return self.current_method.area_factor
+
     def _integrate_hybrid(self, params, ms_data, quality_options):
         """Integrate peaks in hybrid mode: classical integrator for peaks
         outside peak splitting windows, peak splitting integrator for components inside.
@@ -2077,7 +2102,7 @@ class ChromaKitApp(QMainWindow):
                 processed_data=classical_processed,
                 ms_data=ms_data,
                 quality_options=quality_options,
-                chemstation_area_factor=self.area_factor,
+                area_factor=self._method_area_factor(),
                 peak_groups=peak_groups if peak_groups else None,
             )
 
@@ -4348,12 +4373,30 @@ class ChromaKitApp(QMainWindow):
         dialog.exec()
     
     def _on_scaling_factors_changed(self, signal_factor, area_factor):
-        """Handle updated scaling factors from the dialog."""
+        """Scaling changed via the dialog. The method is the source of truth:
+        write the values in, mark the document dirty, and keep self.* / the data
+        handler in sync. A value of 0 is coerced to 1 (0 does not disable scaling).
+        Storing 1.0 as None means 'no scaling'."""
+        if signal_factor == 0.0:
+            QMessageBox.warning(self, "Scaling Factor",
+                                "A signal factor of 0 does not disable scaling. "
+                                "Using 1 (no change).")
+            signal_factor = 1.0
+        if area_factor == 0.0:
+            QMessageBox.warning(self, "Scaling Factor",
+                                "An area factor of 0 does not disable scaling. "
+                                "Using 1 (no change).")
+            area_factor = 1.0
+
         self.signal_factor = signal_factor
         self.area_factor = area_factor
         self.data_handler.signal_factor = signal_factor
-        
-        # Reload current file so the new factor takes effect immediately
+
+        self.current_method.signal_factor = None if signal_factor == 1.0 else signal_factor
+        self.current_method.area_factor = None if area_factor == 1.0 else area_factor
+        self._mark_dirty(True)
+
+        # Reload current file so the new signal_factor takes effect immediately.
         if hasattr(self, 'current_directory_path') and self.current_directory_path:
             self.on_file_selected(self.current_directory_path)
 

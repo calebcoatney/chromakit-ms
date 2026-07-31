@@ -36,7 +36,7 @@ def _ftir_processed():
     proc = ChromatogramProcessor()
     method = ChromaMethod(
         name="ir", version="1", signal_type="ftir",
-        chemstation_area_factor=1.0,
+        area_factor=1.0,
         smoothing={"enabled": True, "window_length": 11, "polyorder": 3},
         baseline={"method": "asls"},
         peaks={"enabled": True, "min_prominence": 0.01,
@@ -69,7 +69,7 @@ def test_verbose_integrate_ftir_without_tabulate(monkeypatch):
     result = proc.integrate_peaks(
         processed_data=processed,
         rt_table=None,
-        chemstation_area_factor=1.0,
+        area_factor=1.0,
         peak_groups=[],
         profile=profile,
     )

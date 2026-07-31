@@ -159,12 +159,6 @@ class AssignmentRequest(BaseModel):
     spectrum: Optional[Dict[str, Any]] = None
 
 
-class ScalingFactorsRequest(BaseModel):
-    """Request to set scaling factors."""
-    signal_factor: float = 1.0
-    area_factor: float = 1.0
-
-
 # ─── Response Models ─────────────────────────────────────────────────
 
 class FileEntry(BaseModel):
