@@ -879,11 +879,10 @@ class PlotFrame(QWidget):
         self.chromatogram_data['peaks_y'] = np.array([])
         self.plot_chromatogram(self.chromatogram_data, show_corrected=showing_corrected, new_file=False)
         
-        # Import matplotlib's cm and create a colormap with good differentiation
-        import matplotlib.cm as cm
-        
-        # Get a distinct colormap from matplotlib
-        cmap = cm.get_cmap('tab20')
+        # Get a distinct colormap from matplotlib with good differentiation.
+        # (matplotlib.cm.get_cmap was removed in 3.9+; use pyplot.get_cmap.)
+        import matplotlib.pyplot as plt
+        cmap = plt.get_cmap('tab20')
         
         # Shade each integrated peak area with a unique color
         for i in range(len(self.x_peaks)):
