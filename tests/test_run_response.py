@@ -357,3 +357,77 @@ def test_run_request_detector_overrides_method(tmp_path):
 
     assert resp.status_code == 200, resp.text
     assert captured["detector"] == "FID1A"
+
+
+def test_run_export_includes_scaling_block(tmp_path):
+    """Headless export must carry processing_parameters.scaling from the method
+    (signal_factor/area_factor), so GUI and headless JSONs match on scaling."""
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from api.main import app, data_handler
+
+    client = TestClient(app)
+    fake_dir = tmp_path / "sample.D"
+    fake_dir.mkdir()
+    fake_method = tmp_path / "m.chromethod"
+    fake_method.write_text(
+        '{"name": "t", "version": "1", "signal_type": "gc", '
+        '"signal_factor": 7700.0, "area_factor": 600.0, '
+        '"smoothing": {"enabled": false}, "baseline": {"method": "asls"}, '
+        '"peaks": {"min_height": 1.0}, "deconvolution": {"enabled": false}, '
+        '"negative_peaks": {"enabled": false}, "shoulders": {"enabled": false}, '
+        '"integration": {"peak_groups": []}}'
+    )
+    fake_data = {"chromatogram": {"x": [0.0, 1.0], "y": [100.0, 200.0]},
+                 "tic": {"x": [], "y": []}, "metadata": {"filename": "sample.D"}}
+
+    with patch.object(data_handler, 'load_data_directory', return_value=fake_data), \
+         patch.object(data_handler, 'current_detector', 'FID1A'), \
+         patch('api.main.processor.process', return_value={'x': [], 'corrected_y': []}), \
+         patch('api.main.processor.integrate_peaks', return_value={'peaks': []}), \
+         patch('api.main.export_integration_results_to_json') as mock_export, \
+         patch('api.main._resolve_export_context', return_value=({}, '/fake/out.json')):
+        resp = client.post('/api/run', json={
+            'data_path': str(fake_dir), 'method_path': str(fake_method),
+            'write_output': True,
+        })
+
+    assert resp.status_code == 200, resp.text
+    scaling = mock_export.call_args.kwargs.get("scaling_factors")
+    assert scaling == {"signal_factor": 7700.0, "area_factor": 600.0}
+
+
+def test_run_export_scaling_defaults_to_one_when_method_none(tmp_path):
+    """When the method has no scaling (None), the export scaling block is x1."""
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from api.main import app, data_handler
+
+    client = TestClient(app)
+    fake_dir = tmp_path / "sample.D"
+    fake_dir.mkdir()
+    fake_method = tmp_path / "m.chromethod"
+    fake_method.write_text(
+        '{"name": "t", "version": "1", "signal_type": "gc", '
+        '"smoothing": {"enabled": false}, "baseline": {"method": "asls"}, '
+        '"peaks": {"min_height": 1.0}, "deconvolution": {"enabled": false}, '
+        '"negative_peaks": {"enabled": false}, "shoulders": {"enabled": false}, '
+        '"integration": {"peak_groups": []}}'
+    )
+    fake_data = {"chromatogram": {"x": [0.0, 1.0], "y": [100.0, 200.0]},
+                 "tic": {"x": [], "y": []}, "metadata": {"filename": "sample.D"}}
+
+    with patch.object(data_handler, 'load_data_directory', return_value=fake_data), \
+         patch.object(data_handler, 'current_detector', 'FID1A'), \
+         patch('api.main.processor.process', return_value={'x': [], 'corrected_y': []}), \
+         patch('api.main.processor.integrate_peaks', return_value={'peaks': []}), \
+         patch('api.main.export_integration_results_to_json') as mock_export, \
+         patch('api.main._resolve_export_context', return_value=({}, '/fake/out.json')):
+        resp = client.post('/api/run', json={
+            'data_path': str(fake_dir), 'method_path': str(fake_method),
+            'write_output': True,
+        })
+
+    assert resp.status_code == 200, resp.text
+    scaling = mock_export.call_args.kwargs.get("scaling_factors")
+    assert scaling == {"signal_factor": 1.0, "area_factor": 1.0}

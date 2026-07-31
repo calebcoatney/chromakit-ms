@@ -791,6 +791,10 @@ async def run_pipeline(request: RunRequest):
                 d_path=request.data_path,
                 detector=data_handler.current_detector,
                 processing_params=raw_params,
+                scaling_factors={
+                    "signal_factor": method.signal_factor if method.signal_factor is not None else 1.0,
+                    "area_factor": method.area_factor if method.area_factor is not None else 1.0,
+                },
                 ms_time_offset=float(getattr(data_handler, 'ms_time_offset', 0.0)),
             )
             _, output_file = _resolve_export_context(
