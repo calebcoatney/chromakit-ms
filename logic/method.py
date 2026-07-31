@@ -171,7 +171,7 @@ class RTMatchingParams(BaseModel):
 
 _METADATA_FIELDS = frozenset({
     "name", "version", "signal_type", "created_at",
-    "chemstation_area_factor",
+    "signal_factor", "area_factor", "detector",
 })
 
 
@@ -216,9 +216,18 @@ class ChromaMethod(BaseModel):
         default="unspecified",
         description="RF response-factor unit code (see logic.rf_quantitation.RF_UNITS)",
     )
-    chemstation_area_factor: float = Field(
-        default=0.0784,
-        description="Chemstation area conversion factor applied during integration",
+    signal_factor: Optional[float] = Field(
+        default=None,
+        description="Multiplier on raw detector signal at load. None or 0 => x1 (no scaling).",
+    )
+    area_factor: Optional[float] = Field(
+        default=None,
+        description="Multiplier on integrated peak area. None or 0 => x1 (no scaling). "
+                    "Use 1.0 to leave areas unaltered.",
+    )
+    detector: Optional[str] = Field(
+        default=None,
+        description="Intended acquisition channel (e.g. 'TCD3C'). None => auto-detect.",
     )
 
     @field_validator("signal_type")
@@ -283,7 +292,6 @@ class ChromaMethod(BaseModel):
         params: dict,
         name: str,
         signal_type: str,
-        chemstation_area_factor: float = 0.0784,
     ) -> "ChromaMethod":
         """Build a ChromaMethod from ParametersFrame.current_params.
 
@@ -295,7 +303,6 @@ class ChromaMethod(BaseModel):
         return cls(
             name=name,
             signal_type=signal_type,
-            chemstation_area_factor=chemstation_area_factor,
             **d,
         )
 

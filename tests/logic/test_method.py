@@ -57,7 +57,9 @@ def test_creates_with_defaults():
     assert m.name == "Test"
     assert m.signal_type == "gc"
     assert m.version == "1"
-    assert m.chemstation_area_factor == pytest.approx(0.0784)
+    assert m.area_factor is None
+    assert m.signal_factor is None
+    assert m.detector is None
 
 
 def test_invalid_signal_type_raises():
@@ -71,7 +73,9 @@ def test_round_trip_to_from_file():
     m = ChromaMethod(name="CO2 Hydro GC", signal_type="gc")
     m.smoothing.enabled = True
     m.baseline.method = "snip"
-    m.chemstation_area_factor = 0.05
+    m.area_factor = 600.0
+    m.signal_factor = 7700.0
+    m.detector = "TCD3C"
 
     with tempfile.NamedTemporaryFile(suffix=".chromethod", delete=False, mode="w") as f:
         path = f.name
@@ -84,7 +88,9 @@ def test_round_trip_to_from_file():
         assert loaded.signal_type == "gc"
         assert loaded.smoothing.enabled is True
         assert loaded.baseline.method == "snip"
-        assert loaded.chemstation_area_factor == pytest.approx(0.05)
+        assert loaded.area_factor == pytest.approx(600.0)
+        assert loaded.signal_factor == pytest.approx(7700.0)
+        assert loaded.detector == "TCD3C"
     finally:
         os.unlink(path)
 
@@ -93,7 +99,7 @@ def test_to_processor_params_excludes_metadata():
     m = ChromaMethod(name="Test", signal_type="gc")
     p = m.to_processor_params()
     for key in ("name", "signal_type", "created_at", "version",
-                "chemstation_area_factor", "export_output_dir"):
+                "signal_factor", "area_factor", "detector", "export_output_dir"):
         assert key not in p, f"metadata key '{key}' should not be in processor params"
     for key in ("smoothing", "baseline", "peaks", "deconvolution",
                 "negative_peaks", "shoulders", "integration"):
@@ -328,3 +334,22 @@ def test_min_prominence_rejects_null():
 def test_min_prominence_accepts_fractional():
     from logic.method import PeakParams
     assert PeakParams(min_prominence=0.02).min_prominence == 0.02
+
+
+def test_old_file_with_chemstation_area_factor_loads_as_none():
+    """A pre-migration .chromethod with chemstation_area_factor must still load;
+    the unknown key is ignored and area_factor defaults to None (x1)."""
+    import os
+    payload = (
+        '{"name": "old", "version": "1", "signal_type": "gc", '
+        '"chemstation_area_factor": 0.0784}'
+    )
+    with tempfile.NamedTemporaryFile(suffix=".chromethod", delete=False, mode="w") as f:
+        path = f.name
+        f.write(payload)
+    try:
+        loaded = ChromaMethod.from_file(path)
+        assert loaded.area_factor is None
+        assert not hasattr(loaded, "chemstation_area_factor")
+    finally:
+        os.unlink(path)
