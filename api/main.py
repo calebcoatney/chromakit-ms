@@ -46,7 +46,7 @@ from api.models import (
     ProcessRequest, ProcessResponse,
     IntegrateRequest, IntegrateResponse,
     SpectrumRequest, SpectrumResponse,
-    AssignmentRequest, ScalingFactorsRequest,
+    AssignmentRequest,
     NavigationResponse,
     ExportRequest,
     RunRequest, RunResponse, RunQuantSummary,
@@ -380,22 +380,6 @@ async def save_assignment(request: AssignmentRequest):
         return {"status": "saved", "key": key}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── Scaling Factors ──────────────────────────────────────────────────
-
-@app.post("/api/scaling")
-async def set_scaling_factors(request: ScalingFactorsRequest):
-    """Set signal and area scaling factors."""
-    data_handler.signal_factor = request.signal_factor
-    return {"signal_factor": request.signal_factor, "area_factor": request.area_factor}
-
-
-@app.get("/api/scaling")
-async def get_scaling_factors():
-    """Get current scaling factors."""
-    return {"signal_factor": data_handler.signal_factor, "area_factor": 1.0}
-
 
 # ─── MS Library Lifecycle ────────────────────────────────────────────
 
