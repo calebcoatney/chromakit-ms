@@ -210,6 +210,13 @@ class ScalingFactorsDialog(QDialog):
     # ---- Dialog accept ----
 
     def accept(self):
+        # A factor of 0 does not disable scaling (it would zero the data). Coerce
+        # to 1 ("no scaling") before persisting or emitting. The app-level handler
+        # also guards this, but hardening here keeps QSettings/presets clean too.
+        if self.signal_factor_spin.value() == 0.0:
+            self.signal_factor_spin.setValue(1.0)
+        if self.area_factor_spin.value() == 0.0:
+            self.area_factor_spin.setValue(1.0)
         self._save_settings()
         self.factors_changed.emit(
             self.signal_factor_spin.value(),
