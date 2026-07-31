@@ -1,9 +1,13 @@
+import logging
+
 import numpy as np
 from scipy.integrate import simpson
 from scipy.stats import skew
 import pandas as pd
 
 from logic.feature import Feature
+
+logger = logging.getLogger(__name__)
 
 class ChromatographicPeak(Feature):
     """Chromatographic peak. Subclass of Feature with RT, MS, and quantitation fields.
@@ -692,6 +696,14 @@ class Integrator:
                     
                     shoulder_bounds[idx] = (left_bound, right_bound)
         
+        # Warn once per integrate() call. area_factor=0.0 is a common mistake
+        # ("disable"); None or 0.0 => no scaling (x1), never zeroing peaks.
+        if area_factor == 0.0:
+            logger.warning(
+                "area_factor=0.0 does not disable scaling; treating as x1. "
+                "Use 1.0 to leave areas unaltered."
+            )
+
         # Iterate through each peak for integration
         for i, (apex_x, detected_apex_y) in enumerate(zip(peaks_x, peaks_y)):
             # Find the index of the apex in x and y arrays
@@ -934,13 +946,7 @@ class Integrator:
             area = simpson(y_peak_corrected, x=x_peak)
             
             # Apply area scaling. None or 0.0 => no scaling (x1). 0.0 is a common
-            # mistake ("disable"); warn and treat as x1 rather than zeroing peaks.
-            if area_factor == 0.0:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "area_factor=0.0 does not disable scaling; treating as x1. "
-                    "Use 1.0 to leave areas unaltered."
-                )
+            # mistake ("disable"); see the once-per-call warning above.
             if area_factor:
                 area *= area_factor
 

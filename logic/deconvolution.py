@@ -1600,7 +1600,7 @@ def integrate_emg_components(components, x, corrected_y, baseline_y, area_factor
     x : 1-D array — full time axis
     corrected_y : 1-D array — baseline-corrected signal
     baseline_y : 1-D array — baseline
-    area_factor : float — ChemStation area scaling factor
+    area_factor : float or None — area scaling multiplier; None or 0 => no scaling (x1)
 
     Returns
     -------
@@ -1692,7 +1692,7 @@ def integrate_deconv_components(components, x, corrected_y, baseline_y, area_fac
     x : 1-D array — full time axis
     corrected_y : 1-D array — baseline-corrected signal
     baseline_y : 1-D array — baseline
-    area_factor : float — ChemStation area scaling factor
+    area_factor : float or None — area scaling multiplier; None or 0 => no scaling (x1)
 
     Returns
     -------
