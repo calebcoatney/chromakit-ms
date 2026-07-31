@@ -807,13 +807,14 @@ class ChromatogramProcessor:
                 print(f"Fallback baseline also failed: {str(e2)}")
                 return np.zeros_like(y), y
     
-    def integrate_peaks(self, processed_data=None, rt_table=None, chemstation_area_factor=0.0784, ms_data=None, quality_options=None, peak_groups=None, profile=None):
+    def integrate_peaks(self, processed_data=None, rt_table=None, area_factor=None, ms_data=None, quality_options=None, peak_groups=None, profile=None):
         """Integrate peaks in a processed chromatogram.
         
         Args:
             processed_data: Dictionary with processed data, or None to use most recent processed data
             rt_table: Optional table mapping retention times to compounds
-            chemstation_area_factor: Area scaling factor to match ChemStation
+            area_factor: Optional area scaling multiplier applied to each peak
+                area. None or 0.0 mean no scaling (x1).
             ms_data: Optional MS data object for peak quality assessment
             quality_options: Options for peak quality assessment
             peak_groups: Optional list of [start, end] time windows for peak grouping
@@ -860,7 +861,7 @@ class ChromatogramProcessor:
         integration_results = Integrator.integrate(
             processed_data,
             rt_table=rt_table,
-            chemstation_area_factor=chemstation_area_factor,
+            area_factor=area_factor,
             verbose=True,
             ms_data=ms_data,
             quality_options=quality_options,

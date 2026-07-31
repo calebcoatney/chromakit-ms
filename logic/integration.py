@@ -602,13 +602,15 @@ class Integrator:
         return final_peaks, new_x_peaks, new_y_peaks, new_baseline_peaks, new_ret_times, new_areas, new_bounds
     
     @staticmethod
-    def integrate(processed_data, rt_table=None, chemstation_area_factor=0.0784, verbose=True, ms_data=None, quality_options=None, peak_groups=None, profile=None):
+    def integrate(processed_data, rt_table=None, area_factor=None, verbose=True, ms_data=None, quality_options=None, peak_groups=None, profile=None):
         """Integrate peaks in a chromatogram.
         
         Args:
             processed_data: Dictionary containing the processed chromatogram data
             rt_table: Dictionary or DataFrame mapping retention times to compounds
-            chemstation_area_factor: Area scaling factor to match ChemStation
+            area_factor: Optional area scaling multiplier applied to each peak
+                area. None or 0.0 mean no scaling (x1); 0.0 additionally logs a
+                warning (use 1.0 to leave areas unaltered).
             verbose: Whether to print integration results
             ms_data: Optional MS data object for peak quality assessment
             quality_options: Options for peak quality assessment
@@ -931,8 +933,16 @@ class Integrator:
             # Calculate the integrated area using Simpson's rule
             area = simpson(y_peak_corrected, x=x_peak)
             
-            # Apply correction factor
-            area *= chemstation_area_factor
+            # Apply area scaling. None or 0.0 => no scaling (x1). 0.0 is a common
+            # mistake ("disable"); warn and treat as x1 rather than zeroing peaks.
+            if area_factor == 0.0:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "area_factor=0.0 does not disable scaling; treating as x1. "
+                    "Use 1.0 to leave areas unaltered."
+                )
+            if area_factor:
+                area *= area_factor
 
             # For negative peaks, report area as positive
             if is_negative:
