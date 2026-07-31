@@ -63,6 +63,10 @@ class ChromaKitApp(QMainWindow):
         self._gcxgc_peaks: list = []
         
         # Load scaling factors from settings
+        # self.signal_factor / self.area_factor are numeric mirrors (never None) of
+        # the method's scaling, kept in sync with current_method. data_handler and
+        # export_manager (logic/export_manager.py) require guaranteed-numeric values,
+        # so 'no scaling' is represented here as 1.0 (and as None on the method).
         _settings = QSettings("CalebCoatney", "ChromaKit")
         self.signal_factor = _settings.value("scaling/signal_factor", 1.0, type=float)
         self.area_factor = _settings.value("scaling/area_factor", 1.0, type=float)
@@ -788,7 +792,7 @@ class ChromaKitApp(QMainWindow):
             if folder_path.endswith('.C'):
                 self.current_cf = CFolder.open(folder_path)
                 self.current_profile = self.current_cf.profile
-                data = self.current_cf.load_signal(signal_factor=(self.current_method.signal_factor or 1.0), detector=detector)
+                data = self.current_cf.load_signal(signal_factor=self.signal_factor, detector=detector)
                 # Sync the auto-detected detector back to data_handler so exports see the real name
                 detected = data.get('metadata', {}).get('detector', '')
                 if detected and detected != 'Unknown':
