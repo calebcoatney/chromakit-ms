@@ -207,6 +207,23 @@ def _same_detector(requested: str, resolved: str) -> bool:
     return key(requested) == key(resolved)
 
 
+def canonical_detector(requested: str, available: list[str]) -> str:
+    """`requested`, rewritten to match `available`'s own spelling when one of
+    its entries names the same channel (case-insensitive, `.ch`-tolerant, via
+    `_same_detector`) -- so a caller-supplied `fid1a` or `TCD3C.ch` becomes
+    the sample's own `FID1A` or `TCD3C` before it is used for anything.
+
+    Returns `requested` unchanged when `available` is empty or nothing in it
+    matches -- an unknown or unresolvable name is not this function's problem
+    to raise about; the existing read_record/read_trace degrade paths handle
+    it downstream exactly as they do today.
+    """
+    for candidate in available:
+        if _same_detector(requested, candidate):
+            return candidate
+    return requested
+
+
 def read_signal(sample_path: str, detector: str | None = None) -> tuple[list[float], list[float], str] | None:
     """(xs, ys, resolved_detector) in raw counts, or None if unreadable.
 

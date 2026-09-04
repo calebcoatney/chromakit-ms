@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from logic.render_trace import available_detectors, read_signal, read_trace
+from logic.render_trace import (
+    available_detectors, canonical_detector, read_signal, read_trace,
+)
 
 
 def test_unreadable_path_degrades_with_a_reason(tmp_path):
@@ -88,6 +90,33 @@ def test_detector_names_matching_case_insensitively_with_ch_suffix_are_not_a_mis
     for requested in ("fid1a", "FID1A.ch", "  FID1A  "):
         signal = read_signal(str(fake), detector=requested)
         assert signal is not None, f"{requested!r} should match resolved 'FID1A'"
+
+
+# --- canonical_detector ------------------------------------------------
+#
+# The signal path (read_signal, via _same_detector) already tolerates a
+# spelling difference; result_record.find_record compares `doc["detector"]`
+# to the caller's string exactly. canonical_detector rewrites the caller's
+# spelling to the sample's own, once, so both halves agree.
+
+def test_canonical_detector_exact_match_is_unchanged():
+    assert canonical_detector("FID1A", ["FID1A", "TCD3C"]) == "FID1A"
+
+
+def test_canonical_detector_matches_a_case_variant():
+    assert canonical_detector("fid1a", ["FID1A", "TCD3C"]) == "FID1A"
+
+
+def test_canonical_detector_matches_a_dot_ch_suffix():
+    assert canonical_detector("TCD3C.ch", ["FID1A", "TCD3C"]) == "TCD3C"
+
+
+def test_canonical_detector_passes_through_unchanged_on_no_match():
+    assert canonical_detector("TCD1A", ["FID1A", "TCD3C"]) == "TCD1A"
+
+
+def test_canonical_detector_passes_through_unchanged_on_empty_available():
+    assert canonical_detector("fid1a", []) == "fid1a"
 
 
 # --- shared path normalizer (FIX 2) -----------------------------------------

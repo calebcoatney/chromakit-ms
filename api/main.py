@@ -41,7 +41,7 @@ from logic.rt_matching import apply_rt_matching
 from logic.rf_quantitation import quantitate_rf
 from logic.render_trace import (
     available_detectors, read_trace, is_supported_sample_path,
-    DEFAULT_MAX_POINTS, MAX_POINTS_CAP,
+    canonical_detector, DEFAULT_MAX_POINTS, MAX_POINTS_CAP,
 )
 from logic.result_record import RecordParseError, read_record
 from functools import partial
@@ -216,6 +216,15 @@ async def render_sample(
         raise HTTPException(
             status_code=400, detail=f"No detector given and none found in {path}"
         )
+    # Canonicalize once, before `resolved` is used for anything: a caller can
+    # spell a detector any way the loaders themselves already tolerate
+    # (`fid1a`, `TCD3C.ch`), but result_record.find_record compares against
+    # the recorded `detector` field exactly. Rewriting here -- rather than in
+    # each half separately -- is what keeps the record lookup and the signal
+    # read agreeing on one name. A name absent from (or an empty) `detectors`
+    # passes through unchanged, so a CSV-backed .C profile with no enumerable
+    # detectors is unaffected.
+    resolved = canonical_detector(resolved, detectors)
 
     try:
         record = read_record(path, resolved)

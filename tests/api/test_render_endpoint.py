@@ -323,6 +323,60 @@ def test_trailing_separator_gives_the_same_result_as_without_one_explicit_detect
     assert r_plain.json()["channel"]["trace"] is not None
 
 
+# --- detector canonicalization (real sample) ----------------------------
+#
+# The real sample here has exactly two channels, FID1A and TCD3C. Before the
+# fix: `fid1a` drew FID1A's trace (read_signal already tolerates the case
+# difference) but found no record (result_record compares `doc["detector"]`
+# to "fid1a" exactly, which never matches "FID1A") -- peaks=0 with a false
+# "no recorded results" error alongside a perfectly good trace. And
+# `TCD3C.ch` made DataHandler look up "TCD3C.ch.ch", fail, fall back to
+# FID1A, and get correctly refused by the mismatch check in read_signal --
+# but the resulting message claimed TCD3C.ch "is not present", which is
+# false: TCD3C is very much present, just spelled differently.
+
+@pytest.mark.skipif(not REAL_SAMPLE.is_dir(), reason="real render sample not present on this machine")
+def test_lowercase_detector_matches_the_same_record_as_the_canonical_spelling(client):
+    r_canonical = client.get("/api/render", params={"path": str(REAL_SAMPLE), "detector": "FID1A"})
+    r_lower = client.get("/api/render", params={"path": str(REAL_SAMPLE), "detector": "fid1a"})
+
+    assert r_canonical.status_code == r_lower.status_code == 200
+    canonical_channel = r_canonical.json()["channel"]
+    lower_channel = r_lower.json()["channel"]
+
+    assert lower_channel["error"] is None
+    assert len(lower_channel["peaks"]) == len(canonical_channel["peaks"])
+    assert lower_channel["trace"]["points"] == canonical_channel["trace"]["points"]
+    assert r_lower.json()["sample"]["detector"] == "FID1A"
+
+
+@pytest.mark.skipif(not REAL_SAMPLE.is_dir(), reason="real render sample not present on this machine")
+def test_dot_ch_suffixed_detector_finds_its_own_record_not_a_false_absence(client):
+    r_canonical = client.get("/api/render", params={"path": str(REAL_SAMPLE), "detector": "TCD3C"})
+    r_suffixed = client.get("/api/render", params={"path": str(REAL_SAMPLE), "detector": "TCD3C.ch"})
+
+    assert r_canonical.status_code == r_suffixed.status_code == 200
+    canonical_channel = r_canonical.json()["channel"]
+    suffixed_channel = r_suffixed.json()["channel"]
+
+    assert suffixed_channel["error"] is None
+    assert len(suffixed_channel["peaks"]) == len(canonical_channel["peaks"])
+    assert suffixed_channel["trace"]["points"] == canonical_channel["trace"]["points"]
+    assert r_suffixed.json()["sample"]["detector"] == "TCD3C"
+
+
+@pytest.mark.skipif(not REAL_SAMPLE.is_dir(), reason="real render sample not present on this machine")
+def test_a_genuinely_absent_detector_still_refuses(client):
+    """TCD1A is not a channel in this sample at all -- canonicalization must
+    not paper over that; it only rewrites spelling, never invents a match."""
+    r = client.get("/api/render", params={"path": str(REAL_SAMPLE), "detector": "TCD1A"})
+    assert r.status_code == 200
+    channel = r.json()["channel"]
+    assert channel["trace"] is None
+    assert channel["error"] and "TCD1A" in channel["error"]
+    assert r.json()["sample"]["detector"] == "TCD1A"
+
+
 def test_the_route_does_not_touch_the_shared_data_handler(client, tmp_path, monkeypatch):
     """The module-level singleton's current_detector is overwritten by every
     load; sharing it would let two tabs corrupt each other. A sentinel that
