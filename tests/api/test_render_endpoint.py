@@ -219,6 +219,22 @@ def test_method_block_is_labelled_as_the_acquisition_method(client, tmp_path):
     assert method["name"] == doc["method"] == "TC DEF_GC"
 
 
+def test_method_source_is_null_when_the_recorded_method_is_empty(client, tmp_path):
+    """An empty `method: ""` is not a recorded method. Gating `source` on
+    `name is not None` would treat "" as non-null and falsely claim
+    Agilent-acquisition provenance for nothing -- and this isn't an edge
+    case: 3 of 11 distilled real records (schema01, schema02, schema05)
+    carry an empty method string. `name` itself still reports the recorded
+    (empty) value verbatim; only `source` -- the provenance claim -- is
+    null."""
+    sample, doc = _sample_with_fixture(tmp_path, "schema02.json")
+    assert doc["method"] == "", "fixture must carry an empty method for this test to mean anything"
+    r = client.get("/api/render", params={"path": sample, "detector": doc["detector"]})
+    method = r.json()["channel"]["method"]
+    assert method["name"] == ""
+    assert method["source"] is None
+
+
 def test_method_block_has_a_stable_shape_when_unanalysed(client, tmp_path):
     """A consumer doing `channel['method']['source']` must not KeyError on
     the common, not-yet-analysed path -- 442 of 453 real records carry no
@@ -236,20 +252,22 @@ def test_method_block_has_a_stable_shape_when_unanalysed(client, tmp_path):
 
 
 def test_sample_block_carries_chromakit_context(client, tmp_path):
-    sample, doc = _sample_with_record(tmp_path)
+    """schema02.json is used here (rather than the file's default fixture,
+    schema01.json, whose `scaling` block is absent) because it carries a
+    real, non-null `signal_factor` (7680.0). Asserting against a fixture
+    whose expected value is None would still pass for a route that never
+    read `record.signal_factor` at all -- only a non-null expected value
+    proves the field is actually propagated, not merely present under
+    `response_model`'s always-serialize-every-field default."""
+    sample, doc = _sample_with_fixture(tmp_path, "schema02.json")
     r = client.get("/api/render", params={"path": sample, "detector": doc["detector"]})
     block = r.json()["sample"]
     assert block["detector"] == doc["detector"]
     assert block["record_path"].endswith(".json")
 
-    # The real value, not just key presence: under `response_model`, Pydantic
-    # always serializes every declared field, so `"signal_factor" in block`
-    # is true even for a route that never read `record.signal_factor` at
-    # all. schema01.json (this file's default fixture) has no `scaling`
-    # block, so the correctly-propagated value is None here -- which still
-    # fails if the route wires the wrong field into `signal_factor`.
-    scaling = (doc.get("processing_parameters") or {}).get("scaling") or {}
-    assert block["signal_factor"] == scaling.get("signal_factor")
+    expected_signal_factor = doc["processing_parameters"]["scaling"]["signal_factor"]
+    assert expected_signal_factor == 7680.0, "fixture must carry a non-null signal_factor"
+    assert block["signal_factor"] == expected_signal_factor
 
 
 def test_the_route_does_not_touch_the_shared_data_handler(client, tmp_path, monkeypatch):

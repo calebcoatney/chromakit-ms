@@ -244,9 +244,10 @@ async def render_sample(
     ]
 
     # `name` is the recorded (AGILENT acquisition) method, or None when there
-    # is no record. `source` is set only when `name` is non-null, so a
-    # missing method never claims a provenance it doesn't have. This keeps
-    # `method`'s shape stable across both cases — a consumer doing
+    # is no record. `source` is set only when `name` is truthy, so neither a
+    # missing record NOR a record with an empty `method: ""` (3 of 11
+    # distilled real records carry one) claims a provenance it doesn't have.
+    # This keeps `method`'s shape stable across all cases — a consumer doing
     # `channel["method"]["source"]` must not KeyError on the common,
     # not-yet-analysed path.
     method_name = record.acquisition_method if record else None
@@ -267,7 +268,7 @@ async def render_sample(
         channel=RenderChannel(
             method=RenderMethod(
                 name=method_name,
-                source="agilent_acquisition" if method_name is not None else None,
+                source="agilent_acquisition" if method_name else None,
             ),
             trace=RenderTrace(**trace.__dict__) if trace else None,
             peaks=peaks,
