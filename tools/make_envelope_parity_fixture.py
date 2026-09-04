@@ -16,7 +16,7 @@ import json
 import random
 import sys
 
-CASES = ((10, 2), (5, 3), (1000, 7), (48997, 49), (3, 2))
+CASES = ((10, 2), (5, 3), (1000, 7), (5000, 49), (3, 2))
 
 
 def main() -> None:

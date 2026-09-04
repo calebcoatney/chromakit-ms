@@ -49,22 +49,35 @@ def rank(peak: dict) -> tuple:
     return (quantitated, named)
 
 
-def scrub_paths(obj, base: Path):
-    """Replace any string under `base` with its basename, recursively.
+# Field names known to carry an absolute filesystem path verbatim from the
+# source corpus (e.g. `source_d` holds the source .D directory's full path).
+# Scrubbing is restricted to these specific field names rather than to any
+# string that merely *contains* the corpus base path: a substring match would
+# also fire on a legitimate string that happens to mention a path in passing
+# (a provenance note, a comment) and silently truncate it to a basename,
+# losing the rest of the text. A field-name allowlist can't do that — the
+# worst it can do is basename a field that turns out not to be a path, which
+# is easy to notice. If a future corpus regeneration surfaces a new
+# path-bearing field, test_no_absolute_paths_leak_into_fixtures in
+# tests/logic/test_render_fixtures.py is the backstop that fails loudly and
+# names the field to add here.
+PATH_BEARING_FIELDS = {"source_d"}
 
-    Some records carry the source .D directory's absolute path in a field
-    (e.g. `source_d`) that survives the peak-trimming above verbatim. Fixture
-    provenance must record a basename only — absolute OneDrive paths must not
-    enter the repo — so scrub any string value, anywhere in the trimmed doc,
-    that looks like a path under the corpus base.
+
+def scrub_paths(obj):
+    """Basename the value of any known path-bearing field, recursively.
+
+    Fixture provenance must record a basename only — absolute OneDrive paths
+    must not enter the repo.
     """
-    base_str = str(base)
     if isinstance(obj, dict):
-        return {k: scrub_paths(v, base) for k, v in obj.items()}
+        return {
+            k: (Path(v).name if k in PATH_BEARING_FIELDS and isinstance(v, str)
+                else scrub_paths(v))
+            for k, v in obj.items()
+        }
     if isinstance(obj, list):
-        return [scrub_paths(v, base) for v in obj]
-    if isinstance(obj, str) and base_str in obj:
-        return Path(obj).name
+        return [scrub_paths(v) for v in obj]
     return obj
 
 
@@ -90,7 +103,7 @@ def main() -> None:
             continue
         trimmed = dict(doc)
         trimmed["peaks"] = sorted(peaks, key=rank)[:3]
-        trimmed = scrub_paths(trimmed, Path(args.base))
+        trimmed = scrub_paths(trimmed)
         seen[key] = (path.name, trimmed)
 
     out = Path(args.out)
