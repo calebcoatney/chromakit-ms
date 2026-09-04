@@ -40,12 +40,15 @@ def test_ignores_a_record_for_a_different_detector(tmp_path):
 
 
 def test_canonical_filename_beats_a_sidecar(tmp_path):
+    """The sidecar's suffix is chosen to sort BEFORE '.json' alphabetically
+    ('0' < 'j'), so a naive 'first sorted match wins' implementation would
+    pick the sidecar. Only genuine canonical-priority logic passes this."""
     doc = _fixture()
     detector = doc["detector"]
     sample = tmp_path / "SAMPLE.D"
     sample.mkdir()
     canonical = sample / f"SAMPLE - {detector}.json"
-    sidecar = sample / f"SAMPLE - {detector}.pre-fix-20260612.json"
+    sidecar = sample / f"SAMPLE - {detector}.0-backup.json"
     canonical.write_text(json.dumps(doc))
     sidecar.write_text(json.dumps(doc))
     assert find_record(str(sample), detector) == str(canonical)
@@ -79,6 +82,20 @@ def test_malformed_json_raises_rather_than_degrading(tmp_path):
     (sample / "SAMPLE - FID1A.json").write_text("{ this is not json")
     with pytest.raises(RecordParseError):
         read_record(str(sample), "FID1A")
+
+
+def test_unrelated_malformed_json_is_skipped_beside_a_valid_record(tmp_path):
+    """The inverse of the case above: a corrupt file that is NOT named as
+    this detector's canonical record must be skipped silently, not raise,
+    even though a real record for the same detector sits right beside it."""
+    doc = _fixture()
+    detector = doc["detector"]
+    sample = tmp_path / "SAMPLE.D"
+    sample.mkdir()
+    canonical = sample / f"SAMPLE - {detector}.json"
+    canonical.write_text(json.dumps(doc))
+    (sample / "notes.json").write_text("{ this is not json")
+    assert find_record(str(sample), detector) == str(canonical)
 
 
 def test_reads_the_sample_level_fields(tmp_path):
