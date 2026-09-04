@@ -142,6 +142,19 @@ def _is_c_folder(sample_path: str) -> bool:
     return sample_path.rstrip(os.sep).endswith(".C")
 
 
+def is_supported_sample_path(path: str) -> bool:
+    """True if `path` names an Agilent .D directory or a ChromaKit .C folder.
+
+    The one place a caller outside this module should ask "is this a
+    renderable sample path" — a public counterpart to the same suffix rule
+    `_is_c_folder` here and `result_record._candidate_dir` each already
+    encode inline for their own narrower purposes. Deliberately does not
+    replace either: this only centralizes the rule for new callers.
+    """
+    trimmed = path.rstrip("/\\")
+    return trimmed.endswith(".D") or trimmed.endswith(".C")
+
+
 def available_detectors(sample_path: str) -> list[str]:
     """Detector channel names in a .D or .C sample. Empty list on any failure."""
     try:

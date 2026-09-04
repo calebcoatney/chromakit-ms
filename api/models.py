@@ -453,11 +453,19 @@ class RenderPeak(BaseModel):
     mol_percent: Optional[float] = None
 
 
+class RenderMethod(BaseModel):
+    """RAPIDS Contract B method block. Stable two-key shape regardless of
+    whether a record exists: `source` is set only when `name` is non-null,
+    so an absent method never carries a false Agilent-acquisition claim."""
+    name: Optional[str] = None
+    source: Optional[str] = None
+
+
 class RenderChannel(BaseModel):
     """RAPIDS Contract B channel block, verbatim. No ChromaKit vocabulary here."""
-    method: dict = {}
+    method: RenderMethod = Field(default_factory=RenderMethod)
     trace: Optional[RenderTrace] = None
-    peaks: List[RenderPeak] = []
+    peaks: List[RenderPeak] = Field(default_factory=list)
     closure_percent: Optional[float] = None
     error: Optional[str] = None
 
@@ -467,7 +475,7 @@ class RenderSample(BaseModel):
     sample_id: Optional[str] = None
     timestamp: Optional[str] = None
     detector: Optional[str] = None
-    available_detectors: List[str] = []
+    available_detectors: List[str] = Field(default_factory=list)
     record_path: Optional[str] = None
     signal_path: Optional[str] = None
     signal_factor: Optional[float] = None

@@ -39,6 +39,11 @@ from logic.quantitation_runner import (
 )
 from logic.rt_matching import apply_rt_matching
 from logic.rf_quantitation import quantitate_rf
+from logic.render_trace import (
+    available_detectors, read_trace, is_supported_sample_path,
+    DEFAULT_MAX_POINTS, MAX_POINTS_CAP,
+)
+from logic.result_record import RecordParseError, read_record
 from functools import partial
 from api.models import (
     BrowseResponse, FileEntry,
@@ -56,6 +61,7 @@ from api.models import (
     MSSearchRequest, MSSearchHit, MSSearchResponse,
     QuantitateRequest, QuantitateResponse,
     RenderResponse, RenderSample, RenderChannel, RenderTrace, RenderPeak,
+    RenderMethod,
 )
 from api.utils import serialize_numpy, convert_params_for_processor
 
@@ -180,7 +186,7 @@ async def get_detectors(path: str = Query(..., description="Path to .D directory
 async def render_sample(
     path: str = Query(..., description="Path to a .D or .C sample directory"),
     detector: Optional[str] = Query(default=None, description="Detector channel"),
-    max_points: int = Query(default=2000, ge=2, le=20000),
+    max_points: int = Query(default=DEFAULT_MAX_POINTS, ge=2, le=MAX_POINTS_CAP),
 ):
     """Render an already-analysed sample: numbers from its recorded results,
     drawable signal from the raw file. Recomputes nothing and writes nothing.
@@ -189,14 +195,10 @@ async def render_sample(
     whose mutable current_detector would otherwise let concurrent clients
     corrupt one another.
     """
-    from logic.render_trace import available_detectors, read_trace
-    from logic.result_record import RecordParseError, read_record
-
     sample = Path(path)
     if not sample.exists():
         raise HTTPException(status_code=404, detail=f"Sample not found: {path}")
-    trimmed = path.rstrip("/\\")
-    if not (trimmed.endswith(".D") or trimmed.endswith(".C")):
+    if not is_supported_sample_path(path):
         raise HTTPException(
             status_code=400, detail="Path must be an Agilent .D or a ChromaKit .C directory"
         )
@@ -216,7 +218,14 @@ async def render_sample(
         # would hide it indefinitely.
         raise HTTPException(status_code=500, detail=str(exc))
 
-    signal_path = record.signal_path if record else path
+    # Prefer the requested `path` whenever the record's own `signal_path`
+    # (verbatim from the record's `source_d`) doesn't point at anything on
+    # disk. An archival record's source data can move; the .D actually named
+    # in this request may still hold a perfectly readable signal, and that
+    # must not be abandoned in favor of a dead recorded path.
+    signal_path = path
+    if record and record.signal_path and Path(record.signal_path).exists():
+        signal_path = record.signal_path
     trace, trace_error = read_trace(signal_path, detector=resolved, max_points=max_points)
 
     errors = []
@@ -234,6 +243,14 @@ async def render_sample(
         for p in (record.peaks if record else [])
     ]
 
+    # `name` is the recorded (AGILENT acquisition) method, or None when there
+    # is no record. `source` is set only when `name` is non-null, so a
+    # missing method never claims a provenance it doesn't have. This keeps
+    # `method`'s shape stable across both cases — a consumer doing
+    # `channel["method"]["source"]` must not KeyError on the common,
+    # not-yet-analysed path.
+    method_name = record.acquisition_method if record else None
+
     return RenderResponse(
         sample=RenderSample(
             sample_id=record.sample_id if record else sample.name,
@@ -248,11 +265,10 @@ async def render_sample(
             quantitation=record.quantitation if record else None,
         ),
         channel=RenderChannel(
-            # `source` is deliberate: the recorded `method` is the AGILENT
-            # acquisition method, not the ChromaKit .chromethod. Labelling it
-            # stops a consumer reading it as the processing method.
-            method={"name": record.acquisition_method, "source": "agilent_acquisition"}
-                   if record else {},
+            method=RenderMethod(
+                name=method_name,
+                source="agilent_acquisition" if method_name is not None else None,
+            ),
             trace=RenderTrace(**trace.__dict__) if trace else None,
             peaks=peaks,
             closure_percent=None,

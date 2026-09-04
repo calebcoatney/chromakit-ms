@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import logic.render_trace as render_trace
 from api.main import app
 
 RECORDS = Path(__file__).parent.parent / "data" / "records"
@@ -28,12 +29,21 @@ def _record_doc():
     return json.loads((RECORDS / manifest[0]["fixture"]).read_text())
 
 
-def _sample_with_record(tmp_path) -> tuple[str, dict]:
-    doc = _record_doc()
+def _write_sample(tmp_path, doc) -> str:
     sample = tmp_path / "SAMPLE.D"
     sample.mkdir()
     (sample / f"SAMPLE - {doc['detector']}.json").write_text(json.dumps(doc))
-    return str(sample), doc
+    return str(sample)
+
+
+def _sample_with_record(tmp_path) -> tuple[str, dict]:
+    doc = _record_doc()
+    return _write_sample(tmp_path, doc), doc
+
+
+def _sample_with_fixture(tmp_path, fixture_name) -> tuple[str, dict]:
+    doc = json.loads((RECORDS / fixture_name).read_text())
+    return _write_sample(tmp_path, doc), doc
 
 
 def test_missing_path_is_404(client):
@@ -77,6 +87,38 @@ def test_unanalysed_sample_is_200_with_a_named_error_not_a_404(client, tmp_path)
     assert "FID1A" in channel["error"]
 
 
+def test_unanalysed_sample_still_draws_a_populated_trace(client, tmp_path, monkeypatch):
+    """The whole point of the 200-with-error design: an unanalysed sample
+    still DRAWS, because the drawable signal and the recorded numbers are
+    independent sources. This is the endpoint's primary path, and until this
+    test existed, `RenderTrace(**trace.__dict__)` — the one line that puts
+    drawable data on the wire — was never executed by any test in this file:
+    every other test runs in a state where `trace is None`. It is a
+    name-coupled reflection bridge, so a field rename in `logic.render_trace
+    .Trace` would raise a ValidationError -> unhandled 500 here with nothing
+    else in the repo noticing.
+    """
+    xs = [i * 0.1 for i in range(50)]
+    ys = [float(i % 7) for i in range(50)]
+
+    def fake_read_signal(sample_path, detector=None):
+        return xs, ys, detector or "FID1A"
+
+    monkeypatch.setattr(render_trace, "read_signal", fake_read_signal)
+
+    sample = tmp_path / "SAMPLE.D"
+    sample.mkdir()
+    r = client.get("/api/render", params={"path": str(sample), "detector": "FID1A"})
+    assert r.status_code == 200
+    channel = r.json()["channel"]
+    assert channel["peaks"] == []
+    assert channel["error"]
+    trace = channel["trace"]
+    assert trace is not None
+    assert trace["points"] > 0
+    assert len(trace["rt_min"]) == len(trace["plot_y"]) == trace["points"]
+
+
 def test_unreadable_signal_still_returns_the_recorded_peaks(client, tmp_path):
     """The .D here holds a record but no .ch, so the trace fails and the peaks
     must survive."""
@@ -87,6 +129,37 @@ def test_unreadable_signal_still_returns_the_recorded_peaks(client, tmp_path):
     assert channel["trace"] is None
     assert len(channel["peaks"]) == len(doc["peaks"])
     assert channel["error"]
+
+
+def test_signal_path_falls_back_to_the_requested_path_when_source_d_is_gone(
+        client, tmp_path, monkeypatch):
+    """An archival record's `source_d` can name storage that has since moved.
+    The .D actually named in THIS request may still hold a perfectly readable
+    signal, and that must not be abandoned in favor of a dead recorded path —
+    precisely the records this feature exists to serve. `schema01.json` (the
+    default fixture used elsewhere in this file) has no `source_d` at all, so
+    this fallback branch is otherwise never exercised."""
+    doc = dict(_record_doc())
+    doc["source_d"] = str(tmp_path / "nowhere" / "GONE.D")  # does not exist
+    sample = _write_sample(tmp_path, doc)
+
+    xs = [i * 0.1 for i in range(20)]
+    ys = [float(i) for i in range(20)]
+    seen_paths = []
+
+    def fake_read_signal(sample_path, detector=None):
+        seen_paths.append(sample_path)
+        return xs, ys, detector or doc["detector"]
+
+    monkeypatch.setattr(render_trace, "read_signal", fake_read_signal)
+
+    r = client.get("/api/render", params={"path": sample, "detector": doc["detector"]})
+    assert r.status_code == 200
+    body = r.json()
+    # The requested path was used for the signal, not the dead source_d.
+    assert body["sample"]["signal_path"] == sample
+    assert body["channel"]["trace"] is not None
+    assert seen_paths == [sample]
 
 
 def test_corrupt_record_is_500_naming_the_path(client, tmp_path):
@@ -112,6 +185,18 @@ def test_peaks_have_exactly_the_contract_b_peak_keys(client, tmp_path):
     assert set(peak) == {"compound", "rt_apex", "rt_start", "rt_end",
                          "area", "raw_amount", "mol_percent"}
 
+    # Values, not just key names: pins the RecordPeak -> RenderPeak mapping
+    # seam. Before this, a bare `RenderPeak()` (every field at its None
+    # default), or `rt_start`/`rt_end` swapped, or `area` wired into
+    # `raw_amount`, would all still pass every assertion in this file.
+    doc_peak = doc["peaks"][0]
+    assert peak["compound"] == doc_peak["Compound ID"]
+    assert peak["rt_apex"] == doc_peak["retention_time"]
+    assert peak["rt_start"] == doc_peak["start_time"]
+    assert peak["rt_end"] == doc_peak["end_time"]
+    assert peak["area"] == doc_peak["area"]
+    assert peak["rt_start"] < peak["rt_apex"] < peak["rt_end"]
+
 
 def test_closure_percent_is_null(client, tmp_path):
     """Recorded compositions are already normalized to 100, so the gap is not
@@ -122,11 +207,32 @@ def test_closure_percent_is_null(client, tmp_path):
 
 
 def test_method_block_is_labelled_as_the_acquisition_method(client, tmp_path):
-    sample, doc = _sample_with_record(tmp_path)
+    """schema03.json (method='TC DEF_GC') is used here rather than the file's
+    default fixture: schema01.json's `method` is `""`, which would let
+    `method["name"] == doc.get("method")` pass as `"" == ""` regardless of
+    whether the route ever reads the field."""
+    sample, doc = _sample_with_fixture(tmp_path, "schema03.json")
+    assert doc["method"], "fixture must carry a non-empty method for this test to mean anything"
     r = client.get("/api/render", params={"path": sample, "detector": doc["detector"]})
     method = r.json()["channel"]["method"]
     assert method["source"] == "agilent_acquisition"
-    assert method["name"] == doc.get("method")
+    assert method["name"] == doc["method"] == "TC DEF_GC"
+
+
+def test_method_block_has_a_stable_shape_when_unanalysed(client, tmp_path):
+    """A consumer doing `channel['method']['source']` must not KeyError on
+    the common, not-yet-analysed path -- 442 of 453 real records carry no
+    quantitation at all, so a `method` that changes shape between "has a
+    record" and "doesn't" breaks on the majority of real samples. `source` is
+    null (not fabricated as "agilent_acquisition") because there is no
+    recorded name to attribute to Agilent."""
+    sample = tmp_path / "SAMPLE.D"
+    sample.mkdir()
+    r = client.get("/api/render", params={"path": str(sample), "detector": "FID1A"})
+    method = r.json()["channel"]["method"]
+    assert set(method) == {"name", "source"}
+    assert method["name"] is None
+    assert method["source"] is None
 
 
 def test_sample_block_carries_chromakit_context(client, tmp_path):
@@ -135,14 +241,27 @@ def test_sample_block_carries_chromakit_context(client, tmp_path):
     block = r.json()["sample"]
     assert block["detector"] == doc["detector"]
     assert block["record_path"].endswith(".json")
-    assert "signal_factor" in block
+
+    # The real value, not just key presence: under `response_model`, Pydantic
+    # always serializes every declared field, so `"signal_factor" in block`
+    # is true even for a route that never read `record.signal_factor` at
+    # all. schema01.json (this file's default fixture) has no `scaling`
+    # block, so the correctly-propagated value is None here -- which still
+    # fails if the route wires the wrong field into `signal_factor`.
+    scaling = (doc.get("processing_parameters") or {}).get("scaling") or {}
+    assert block["signal_factor"] == scaling.get("signal_factor")
 
 
-def test_the_route_does_not_touch_the_shared_data_handler(client, tmp_path):
+def test_the_route_does_not_touch_the_shared_data_handler(client, tmp_path, monkeypatch):
     """The module-level singleton's current_detector is overwritten by every
-    load; sharing it would let two tabs corrupt each other."""
+    load; sharing it would let two tabs corrupt each other. A sentinel that
+    this fixture's detector could never coincidentally equal is required
+    here: `DataHandler.current_detector` defaults to `"Unknown"`, which is
+    also this file's default fixture's `detector` value, so comparing
+    before/after against that shared default could never observe a
+    regression that reused the singleton."""
     from api.main import data_handler
-    before = data_handler.current_detector
+    monkeypatch.setattr(data_handler, "current_detector", "SENTINEL-XYZ")
     sample, doc = _sample_with_record(tmp_path)
     client.get("/api/render", params={"path": sample, "detector": doc["detector"]})
-    assert data_handler.current_detector == before
+    assert data_handler.current_detector == "SENTINEL-XYZ"
