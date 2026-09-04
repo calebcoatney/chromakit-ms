@@ -11,10 +11,13 @@ peak area from it — the recorded results are the source for all three.
 """
 from __future__ import annotations
 
+import logging
 import math
 import numbers
 import os
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_POINTS = 2000
 MAX_POINTS_CAP = 20000
@@ -148,6 +151,9 @@ def available_detectors(sample_path: str) -> list[str]:
         from logic.data_handler import DataHandler
         return list(DataHandler().get_available_detectors(sample_path))
     except Exception:
+        logger.warning(
+            "available_detectors failed for %r", sample_path, exc_info=True
+        )
         return []
 
 
@@ -163,7 +169,7 @@ def read_signal(sample_path: str, detector: str | None = None):
             from logic.c_folder import CFolder
             folder = CFolder.open(sample_path)
             data = folder.load_signal(signal_factor=1.0, detector=detector)
-            resolved = (data.get("metadata") or {}).get("detector") or detector or ""
+            resolved = (data.get("metadata") or {}).get("detector") or detector or "Unknown"
             return list(data["x"]), list(data["y"]), str(resolved)
 
         from logic.data_handler import DataHandler
@@ -173,6 +179,10 @@ def read_signal(sample_path: str, detector: str | None = None):
         chrom = data["chromatogram"]
         return list(chrom["x"]), list(chrom["y"]), str(handler.current_detector)
     except Exception:
+        logger.warning(
+            "read_signal failed for %r (detector=%r)", sample_path, detector,
+            exc_info=True,
+        )
         return None
 
 
