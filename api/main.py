@@ -55,6 +55,7 @@ from api.models import (
     MSBatchSearchRequest, MSBatchSearchResponse,
     MSSearchRequest, MSSearchHit, MSSearchResponse,
     QuantitateRequest, QuantitateResponse,
+    RenderResponse, RenderSample, RenderChannel, RenderTrace, RenderPeak,
 )
 from api.utils import serialize_numpy, convert_params_for_processor
 
@@ -171,6 +172,93 @@ async def get_detectors(path: str = Query(..., description="Path to .D directory
         return {"detectors": detectors, "current": data_handler.current_detector}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Read-only Render ─────────────────────────────────────────────────
+
+@app.get("/api/render", response_model=RenderResponse)
+async def render_sample(
+    path: str = Query(..., description="Path to a .D or .C sample directory"),
+    detector: Optional[str] = Query(default=None, description="Detector channel"),
+    max_points: int = Query(default=2000, ge=2, le=20000),
+):
+    """Render an already-analysed sample: numbers from its recorded results,
+    drawable signal from the raw file. Recomputes nothing and writes nothing.
+
+    Stateless by construction — it never touches the module-level data_handler,
+    whose mutable current_detector would otherwise let concurrent clients
+    corrupt one another.
+    """
+    from logic.render_trace import available_detectors, read_trace
+    from logic.result_record import RecordParseError, read_record
+
+    sample = Path(path)
+    if not sample.exists():
+        raise HTTPException(status_code=404, detail=f"Sample not found: {path}")
+    trimmed = path.rstrip("/\\")
+    if not (trimmed.endswith(".D") or trimmed.endswith(".C")):
+        raise HTTPException(
+            status_code=400, detail="Path must be an Agilent .D or a ChromaKit .C directory"
+        )
+
+    detectors = available_detectors(path)
+    resolved = detector or (detectors[0] if detectors else None)
+    if resolved is None:
+        raise HTTPException(
+            status_code=400, detail=f"No detector given and none found in {path}"
+        )
+
+    try:
+        record = read_record(path, resolved)
+    except RecordParseError as exc:
+        # The one data fault that is NOT degraded: a record that will not parse
+        # is a broken file or a bug, and rendering the sample as "not analysed"
+        # would hide it indefinitely.
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    signal_path = record.signal_path if record else path
+    trace, trace_error = read_trace(signal_path, detector=resolved, max_points=max_points)
+
+    errors = []
+    if record is None:
+        errors.append(f"no recorded results for detector {resolved}")
+    if trace_error:
+        errors.append(trace_error)
+
+    peaks = [
+        RenderPeak(
+            compound=p.compound, rt_apex=p.rt_apex, rt_start=p.rt_start,
+            rt_end=p.rt_end, area=p.area, raw_amount=p.raw_amount,
+            mol_percent=p.mol_percent,
+        )
+        for p in (record.peaks if record else [])
+    ]
+
+    return RenderResponse(
+        sample=RenderSample(
+            sample_id=record.sample_id if record else sample.name,
+            timestamp=record.timestamp if record else None,
+            detector=resolved,
+            available_detectors=detectors,
+            record_path=record.record_path if record else None,
+            signal_path=signal_path,
+            signal_factor=record.signal_factor if record else None,
+            acquisition_method=record.acquisition_method if record else None,
+            processing_parameters=record.processing_parameters if record else None,
+            quantitation=record.quantitation if record else None,
+        ),
+        channel=RenderChannel(
+            # `source` is deliberate: the recorded `method` is the AGILENT
+            # acquisition method, not the ChromaKit .chromethod. Labelling it
+            # stops a consumer reading it as the processing method.
+            method={"name": record.acquisition_method, "source": "agilent_acquisition"}
+                   if record else {},
+            trace=RenderTrace(**trace.__dict__) if trace else None,
+            peaks=peaks,
+            closure_percent=None,
+            error="; ".join(errors) if errors else None,
+        ),
+    )
 
 
 @app.get("/api/navigate/next", response_model=NavigationResponse)
