@@ -84,7 +84,7 @@ def test_integration_correct_when_corrected_y_has_no_nan():
     """Baseline case: no NaN in arrays. Integrator should give roughly the
     Gaussian area."""
     processed = _build_processed(include_nan=False, peak_height=100.0)
-    result = Integrator.integrate(processed, chemstation_area_factor=1.0,
+    result = Integrator.integrate(processed, area_factor=1.0,
                                   verbose=False)
     peaks = result['peaks']
     assert len(peaks) == 1
@@ -111,13 +111,13 @@ def test_integration_correct_when_corrected_y_has_nan():
     """
     expected_no_nan = Integrator.integrate(
         _build_processed(include_nan=False, peak_height=100.0),
-        chemstation_area_factor=1.0,
+        area_factor=1.0,
         verbose=False,
     )['peaks'][0].area
 
     result_with_nan = Integrator.integrate(
         _build_processed(include_nan=True, peak_height=100.0),
-        chemstation_area_factor=1.0,
+        area_factor=1.0,
         verbose=False,
     )
     peaks = result_with_nan['peaks']
@@ -167,7 +167,7 @@ def test_integration_small_peak_on_high_baseline_with_nan():
         ],
     }
 
-    result = Integrator.integrate(processed, chemstation_area_factor=1.0,
+    result = Integrator.integrate(processed, area_factor=1.0,
                                   verbose=False)
     peaks = result['peaks']
     assert len(peaks) == 1
