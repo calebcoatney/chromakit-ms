@@ -270,6 +270,59 @@ def test_sample_block_carries_chromakit_context(client, tmp_path):
     assert block["signal_factor"] == expected_signal_factor
 
 
+# --- trailing separator (FIX 2 regression) -----------------------------
+#
+# A bare tmp_path .D with no real .ch files returns [] from
+# available_detectors() whether or not the path carries a trailing
+# separator, so it can't tell the pre-fix and post-fix behavior apart.
+# This needs a sample with real, readable detector channels -- guarded the
+# same way as tests/logic/test_render_trace_read.py's real-sample sweep.
+#
+# Point it elsewhere with:  CHROMAKIT_RENDER_SAMPLE=/some/path pytest ...
+
+DEFAULT_REAL_SAMPLE = (
+    Path.home() / "Library/CloudStorage/OneDrive-NREL/GC-MS code development"
+    / "Hyewon's data" / "260224 GC1 R1 Run 311 outlet 25.D"
+)
+
+
+def _real_sample_path() -> Path:
+    override = os.environ.get("CHROMAKIT_RENDER_SAMPLE")
+    return Path(override) if override else DEFAULT_REAL_SAMPLE
+
+
+REAL_SAMPLE = _real_sample_path()
+
+
+@pytest.mark.skipif(not REAL_SAMPLE.is_dir(), reason="real render sample not present on this machine")
+def test_trailing_separator_gives_the_same_result_as_without_one_no_detector(client):
+    """Before the fix: no trailing slash auto-detects a channel and returns
+    200 with a trace; a trailing slash makes `rb.read` fail inside
+    `available_detectors`, so no detector is found and the route 400s."""
+    path = str(REAL_SAMPLE)
+    r_plain = client.get("/api/render", params={"path": path})
+    r_slash = client.get("/api/render", params={"path": path + "/"})
+
+    assert r_plain.status_code == r_slash.status_code == 200
+    assert r_plain.json() == r_slash.json()
+
+
+@pytest.mark.skipif(not REAL_SAMPLE.is_dir(), reason="real render sample not present on this machine")
+def test_trailing_separator_gives_the_same_result_as_without_one_explicit_detector(client):
+    """Before the fix: with a detector given, no trailing slash returns 200
+    with a populated trace; a trailing slash makes DataHandler's own '.D'
+    suffix check reject the path, so the route still 200s (bad DATA, not a
+    bad ARGUMENT) but with trace=None -- a silent quality regression with no
+    error naming the real cause."""
+    path = str(REAL_SAMPLE)
+    r_plain = client.get("/api/render", params={"path": path, "detector": "FID1A"})
+    r_slash = client.get("/api/render", params={"path": path + "/", "detector": "FID1A"})
+
+    assert r_plain.status_code == r_slash.status_code == 200
+    assert r_plain.json() == r_slash.json()
+    assert r_plain.json()["channel"]["trace"] is not None
+
+
 def test_the_route_does_not_touch_the_shared_data_handler(client, tmp_path, monkeypatch):
     """The module-level singleton's current_detector is overwritten by every
     load; sharing it would let two tabs corrupt each other. A sentinel that

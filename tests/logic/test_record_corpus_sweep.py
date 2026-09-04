@@ -38,7 +38,7 @@ SEARCH_ROOTS = ("julia", "GC-MS", "GC-MS code development",
 # permissive `checked > 0` floor.
 MIN_DEFAULT_CORPUS_RECORDS = 400
 
-USING_OVERRIDE = "CHROMAKIT_RECORD_CORPUS" in os.environ
+USING_OVERRIDE = bool(os.environ.get("CHROMAKIT_RECORD_CORPUS"))
 
 
 def _corpus_records():

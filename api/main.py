@@ -195,6 +195,13 @@ async def render_sample(
     whose mutable current_detector would otherwise let concurrent clients
     corrupt one another.
     """
+    # A trailing separator is an ordinary artifact of building this path from
+    # a directory listing (and on Windows, `os.path.normpath` also folds a
+    # forward slash from a web client onto the native `\\`). Normalizing once
+    # here means every downstream consumer -- the .D/.C suffix check,
+    # DataHandler, CFolder -- sees the same path a caller would get by typing
+    # it without the trailing slash.
+    path = os.path.normpath(path)
     sample = Path(path)
     if not sample.exists():
         raise HTTPException(status_code=404, detail=f"Sample not found: {path}")

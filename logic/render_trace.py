@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import math
 import numbers
-import os
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -56,7 +55,7 @@ def _finite_floats(values) -> list[float] | None:
     return out
 
 
-def envelope(xs: list[float], ys: list[float], width: int):
+def envelope(xs: list[float], ys: list[float], width: int) -> tuple[list[float], list[float]]:
     """Per bin of `width` samples, the lowest and highest signal, each still
     carrying its own real retention time.
 
@@ -80,8 +79,9 @@ def envelope(xs: list[float], ys: list[float], width: int):
     return out_x, out_y
 
 
-def build_trace(xs, ys, max_points: int = DEFAULT_MAX_POINTS) -> Trace | None:
-    """Validate and decimate. Bad DATA returns None; a bad ARGUMENT raises.
+def _validate_max_points(max_points: int) -> None:
+    """Shared by `build_trace` and `read_trace` so the rule cannot drift
+    between the two copies that used to exist here.
 
     Raises:
         ValueError: max_points is not an int in [2, MAX_POINTS_CAP]. Two is the
@@ -92,6 +92,16 @@ def build_trace(xs, ys, max_points: int = DEFAULT_MAX_POINTS) -> Trace | None:
         raise ValueError(
             f"max_points must be an int in [2, {MAX_POINTS_CAP}], got {max_points!r}"
         )
+
+
+def build_trace(xs, ys, max_points: int = DEFAULT_MAX_POINTS) -> Trace | None:
+    """Validate and decimate. Bad DATA returns None; a bad ARGUMENT raises.
+
+    Raises:
+        ValueError: max_points is not an int in [2, MAX_POINTS_CAP]. Two is the
+            floor because a bin emits a minimum and a maximum.
+    """
+    _validate_max_points(max_points)
 
     xs = list(xs)
     ys = list(ys)
@@ -138,8 +148,22 @@ def build_trace(xs, ys, max_points: int = DEFAULT_MAX_POINTS) -> Trace | None:
 # sample yield different values depending on which repo asked.
 
 
+def _normalize_sample_path(path: str) -> str:
+    """Strip a trailing path separator so the suffix checks below agree with
+    each other and with the actual directory name on disk.
+
+    Shared by `_is_c_folder` and `is_supported_sample_path`, which used to
+    strip differently -- `os.sep` only vs. `/` and `\\` -- and so disagreed
+    on a `.C` path with a trailing `/` on Windows (`os.sep == "\\"`), sending
+    it down the `.D` branch. Stripping both slash characters regardless of
+    platform is deliberate: paths reaching this module can originate from a
+    web client, not just the local OS.
+    """
+    return path.rstrip("/\\")
+
+
 def _is_c_folder(sample_path: str) -> bool:
-    return sample_path.rstrip(os.sep).endswith(".C")
+    return _normalize_sample_path(sample_path).endswith(".C")
 
 
 def is_supported_sample_path(path: str) -> bool:
@@ -151,7 +175,7 @@ def is_supported_sample_path(path: str) -> bool:
     encode inline for their own narrower purposes. Deliberately does not
     replace either: this only centralizes the rule for new callers.
     """
-    trimmed = path.rstrip("/\\")
+    trimmed = _normalize_sample_path(path)
     return trimmed.endswith(".D") or trimmed.endswith(".C")
 
 
@@ -170,12 +194,33 @@ def available_detectors(sample_path: str) -> list[str]:
         return []
 
 
-def read_signal(sample_path: str, detector: str | None = None):
+def _same_detector(requested: str, resolved: str) -> bool:
+    """Case-insensitive match, tolerant of an optional `.ch` suffix on either
+    side -- `FID1A`, `fid1a` and `FID1A.ch` all name the same channel
+    elsewhere in this codebase (see e.g. DataHandler.get_available_detectors,
+    which strips `.ch`)."""
+    def key(name: str) -> str:
+        name = name.strip()
+        if name.lower().endswith(".ch"):
+            name = name[:-3]
+        return name.lower()
+    return key(requested) == key(resolved)
+
+
+def read_signal(sample_path: str, detector: str | None = None) -> tuple[list[float], list[float], str] | None:
     """(xs, ys, resolved_detector) in raw counts, or None if unreadable.
 
     A fresh DataHandler per call: the module-level singleton in api/main.py has a
     mutable current_detector that every load overwrites, so sharing it would let
     two concurrent requests corrupt each other's detector invisibly.
+
+    Both DataHandler and the .C AgilentLoader silently fall back to a
+    different channel when the requested `.ch` is absent, rather than
+    raising -- so a caller-supplied `detector` is checked against what was
+    actually resolved, and a mismatch degrades to None here rather than
+    handing back another channel's trace under the requested detector's
+    name. This is the one guarantee this module's docstring makes: never
+    return a plausible wrong trace.
     """
     try:
         if _is_c_folder(sample_path):
@@ -183,14 +228,26 @@ def read_signal(sample_path: str, detector: str | None = None):
             folder = CFolder.open(sample_path)
             data = folder.load_signal(signal_factor=1.0, detector=detector)
             resolved = (data.get("metadata") or {}).get("detector") or detector or "Unknown"
-            return list(data["x"]), list(data["y"]), str(resolved)
+            resolved = str(resolved)
+            xs, ys = list(data["x"]), list(data["y"])
+        else:
+            from logic.data_handler import DataHandler
+            handler = DataHandler()
+            handler.signal_factor = 1.0
+            data = handler.load_data_directory(sample_path, detector=detector)
+            chrom = data["chromatogram"]
+            resolved = str(handler.current_detector)
+            xs, ys = list(chrom["x"]), list(chrom["y"])
 
-        from logic.data_handler import DataHandler
-        handler = DataHandler()
-        handler.signal_factor = 1.0
-        data = handler.load_data_directory(sample_path, detector=detector)
-        chrom = data["chromatogram"]
-        return list(chrom["x"]), list(chrom["y"]), str(handler.current_detector)
+        if detector is not None and not _same_detector(detector, resolved):
+            logger.warning(
+                "read_signal: requested detector %r not present in %r "
+                "(loader resolved to %r instead) -- refusing to return "
+                "another channel's trace", detector, sample_path, resolved,
+            )
+            return None
+
+        return xs, ys, resolved
     except Exception:
         logger.warning(
             "read_signal failed for %r (detector=%r)", sample_path, detector,
@@ -200,21 +257,19 @@ def read_signal(sample_path: str, detector: str | None = None):
 
 
 def read_trace(sample_path: str, detector: str | None = None,
-               max_points: int = DEFAULT_MAX_POINTS):
+               max_points: int = DEFAULT_MAX_POINTS) -> tuple[Trace | None, str | None]:
     """(Trace, None) on success, (None, reason) on any data failure.
 
     The argument check runs first and raises, so a mis-read max_points does not
     masquerade as an unreadable instrument file.
     """
-    if isinstance(max_points, bool) or not isinstance(max_points, int) \
-            or max_points < 2 or max_points > MAX_POINTS_CAP:
-        raise ValueError(
-            f"max_points must be an int in [2, {MAX_POINTS_CAP}], got {max_points!r}"
-        )
+    _validate_max_points(max_points)
 
     signal = read_signal(sample_path, detector=detector)
     if signal is None:
-        return None, f"could not read signal for detector {detector or '(auto)'}"
+        if detector:
+            return None, f"detector {detector} is not present in this sample"
+        return None, "no readable detector signal in this sample"
     xs, ys, _ = signal
     trace = build_trace(xs, ys, max_points=max_points)
     if trace is None:
