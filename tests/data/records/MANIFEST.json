@@ -1,0 +1,247 @@
+[
+  {
+    "fixture": "schema01.json",
+    "source": "cel2 - Unknown.json",
+    "peak_keys": [
+      "Compound ID",
+      "Qual",
+      "area",
+      "casno",
+      "end_time",
+      "integrator",
+      "is_saturated",
+      "peak_number",
+      "retention_time",
+      "saturation_level",
+      "start_time",
+      "width"
+    ],
+    "markers": [
+      "processing_parameters"
+    ]
+  },
+  {
+    "fixture": "schema02.json",
+    "source": "cel2 - Unknown.json",
+    "peak_keys": [
+      "Compound ID",
+      "Qual",
+      "area",
+      "casno",
+      "end_time",
+      "integrator",
+      "peak_number",
+      "retention_time",
+      "start_time",
+      "width"
+    ],
+    "markers": [
+      "processing_parameters"
+    ]
+  },
+  {
+    "fixture": "schema03.json",
+    "source": "SIG14227.D - TCD1A.json",
+    "peak_keys": [
+      "Compound ID",
+      "area",
+      "end_time",
+      "integrator",
+      "peak_number",
+      "retention_time",
+      "start_time",
+      "width"
+    ],
+    "markers": []
+  },
+  {
+    "fixture": "schema04.json",
+    "source": "260224 GC1 R1 Run 311 outlet 25 - FID1A.json",
+    "peak_keys": [
+      "Compound ID",
+      "area",
+      "end_time",
+      "integrator",
+      "peak_number",
+      "retention_time",
+      "start_time",
+      "width"
+    ],
+    "markers": [
+      "processing_parameters"
+    ]
+  },
+  {
+    "fixture": "schema05.json",
+    "source": "cel8 - Unknown.json",
+    "peak_keys": [
+      "Qual",
+      "area",
+      "casno",
+      "compound_id",
+      "end_time",
+      "integrator",
+      "is_convoluted",
+      "is_grouped",
+      "is_negative",
+      "is_saturated",
+      "is_shoulder",
+      "peak_number",
+      "quality_issues",
+      "retention_time",
+      "saturation_level",
+      "start_time",
+      "width"
+    ],
+    "markers": [
+      "processing_parameters"
+    ]
+  },
+  {
+    "fixture": "schema06.json",
+    "source": "std 2 - FID1A.json",
+    "peak_keys": [
+      "Qual",
+      "area",
+      "casno",
+      "compound_id",
+      "end_time",
+      "integrator",
+      "is_convoluted",
+      "is_grouped",
+      "is_negative",
+      "is_saturated",
+      "is_shoulder",
+      "peak_number",
+      "quality_issues",
+      "retention_time",
+      "start_time",
+      "width"
+    ],
+    "markers": [
+      "processing_parameters"
+    ]
+  },
+  {
+    "fixture": "schema07.json",
+    "source": "RK8879-4-21 - FID1A.json",
+    "peak_keys": [
+      "Qual",
+      "area",
+      "casno",
+      "compound_id",
+      "end_time",
+      "integrator",
+      "is_convoluted",
+      "is_grouped",
+      "is_negative",
+      "is_saturated",
+      "is_shoulder",
+      "peak_number",
+      "quality_issues",
+      "retention_time",
+      "start_time",
+      "width"
+    ],
+    "markers": [
+      "source_d",
+      "processing_parameters"
+    ]
+  },
+  {
+    "fixture": "schema08.json",
+    "source": "SIG15395.D - TCD1A.json",
+    "peak_keys": [
+      "area",
+      "composition_percent",
+      "compound_id",
+      "end_time",
+      "integrator",
+      "is_convoluted",
+      "is_grouped",
+      "is_negative",
+      "is_saturated",
+      "is_shoulder",
+      "mol_percent",
+      "peak_number",
+      "quality_issues",
+      "raw_amount",
+      "retention_time",
+      "start_time",
+      "width"
+    ],
+    "markers": [
+      "processing_parameters",
+      "quantitation"
+    ]
+  },
+  {
+    "fixture": "schema09.json",
+    "source": "8260-114-04 - FID1A.json",
+    "peak_keys": [
+      "area",
+      "compound_id",
+      "end_time",
+      "integrator",
+      "is_convoluted",
+      "is_grouped",
+      "is_negative",
+      "is_saturated",
+      "is_shoulder",
+      "mass_mg",
+      "mol",
+      "mol_C",
+      "mol_C_percent",
+      "mol_percent",
+      "num_carbons",
+      "peak_number",
+      "quality_issues",
+      "retention_time",
+      "start_time",
+      "width",
+      "wt_percent"
+    ],
+    "markers": [
+      "processing_parameters",
+      "quantitation"
+    ]
+  },
+  {
+    "fixture": "schema10.json",
+    "source": "SIG15199.D - TCD1A.json",
+    "peak_keys": [
+      "area",
+      "compound_id",
+      "end_time",
+      "integrator",
+      "is_convoluted",
+      "is_grouped",
+      "is_negative",
+      "is_saturated",
+      "is_shoulder",
+      "peak_number",
+      "quality_issues",
+      "retention_time",
+      "start_time",
+      "width"
+    ],
+    "markers": [
+      "processing_parameters"
+    ]
+  },
+  {
+    "fixture": "schema11.json",
+    "source": "cellulose - FID1A.json",
+    "peak_keys": [
+      "area",
+      "compound_id",
+      "end_time",
+      "integrator",
+      "peak_number",
+      "retention_time",
+      "start_time",
+      "width"
+    ],
+    "markers": []
+  }
+]

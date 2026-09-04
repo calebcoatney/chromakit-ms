@@ -1,0 +1,40 @@
+{
+  "sample_id": "cel2.D",
+  "timestamp": "13 Jan 25  09:45 am",
+  "method": "CFT_300_PY",
+  "detector": "FID1A",
+  "signal": "Signal: cellulose\\FID1A.ch",
+  "notebook": "cellulose",
+  "peaks": [
+    {
+      "compound_id": "Pregnane-3,8,12,14,17,20-hexol, (3.beta.,5.alpha.,12.beta.,14.beta.,17.alpha.,20S)-",
+      "peak_number": 1,
+      "retention_time": 3.6368014813598886,
+      "integrator": "py",
+      "width": 0.11025891938193766,
+      "area": 4081224.5449885204,
+      "start_time": 3.55804511037279,
+      "end_time": 3.6683040297547276
+    },
+    {
+      "compound_id": "Carbon dioxide",
+      "peak_number": 2,
+      "retention_time": 4.046334610492799,
+      "integrator": "py",
+      "width": 0.08225665414208061,
+      "area": 384341832.54860806,
+      "start_time": 3.9973306463230487,
+      "end_time": 4.079587300465129
+    },
+    {
+      "compound_id": "Propene",
+      "peak_number": 3,
+      "retention_time": 4.14609268040979,
+      "integrator": "py",
+      "width": 0.12250991042437498,
+      "area": 1789757724.8379931,
+      "start_time": 4.079587300465129,
+      "end_time": 4.202097210889504
+    }
+  ]
+}

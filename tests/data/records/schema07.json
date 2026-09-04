@@ -1,0 +1,97 @@
+{
+  "sample_id": "RK8879-4-21",
+  "timestamp": "07 Jul 26  09:54 AM",
+  "method": "Rtx-1701_FP_POLYARC",
+  "detector": "FID1A",
+  "source_d": "RK8879-4-21.D",
+  "ms_time_offset": 0.04583333333329165,
+  "ms_time_offset_source": "reprocess-2026-07-06 headless (harness xcorr / +0.05 fallback)",
+  "peaks": [
+    {
+      "compound_id": "Pyrido[2,3-d]pyrimidin-4(3H)-one, 3-(3-dimethylaninopropyl)-",
+      "peak_number": 1,
+      "retention_time": 6.825833333333334,
+      "integrator": "py",
+      "width": 0.47250000000000014,
+      "area": 4388988332.583023,
+      "start_time": 6.524166666666667,
+      "end_time": 6.996666666666667,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "Qual": 0.7741833058270541,
+      "casno": "1000264-17-8"
+    },
+    {
+      "compound_id": "Pyrido[2,3-d]pyrimidin-4(3H)-one, 3-(3-dimethylaninopropyl)-",
+      "peak_number": 2,
+      "retention_time": 7.024166666666667,
+      "integrator": "py",
+      "width": 0.009166666666666323,
+      "area": 29856.523850598038,
+      "start_time": 7.019166666666667,
+      "end_time": 7.028333333333333,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "Qual": 0.7741833058270541,
+      "casno": "1000264-17-8"
+    },
+    {
+      "compound_id": "Pyrido[2,3-d]pyrimidin-4(3H)-one, 3-(3-dimethylaninopropyl)-",
+      "peak_number": 3,
+      "retention_time": 7.496666666666667,
+      "integrator": "py",
+      "width": 0.4391666666666669,
+      "area": 20820832634.389336,
+      "start_time": 7.0675,
+      "end_time": 7.506666666666667,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "Qual": 0.7741833058270541,
+      "casno": "1000264-17-8"
+    }
+  ],
+  "processing_parameters": {
+    "peak_detection": {
+      "mode": "classical",
+      "min_prominence": 1e-05
+    },
+    "scaling": {
+      "signal_factor": 7730.9,
+      "area_factor": 597.0
+    },
+    "baseline": {
+      "method": "arpls",
+      "lambda": 10000.0,
+      "asymmetry": 0.01
+    }
+  },
+  "ms_search_settings": {
+    "search_method": "vector",
+    "similarity": "composite",
+    "weighting": "NIST_GC",
+    "unmatched": "keep_all",
+    "top_k_clusters": 10,
+    "top_n": 5,
+    "extraction_method": "apex",
+    "tic_weight": true,
+    "subtract_enabled": true,
+    "subtraction_method": "min_tic",
+    "subtract_weight": 1.0,
+    "intensity_power": 0.6,
+    "mz_shift": 28,
+    "library": "NIST14",
+    "reprocess": "2026-07-06"
+  }
+}

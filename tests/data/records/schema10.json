@@ -1,0 +1,92 @@
+{
+  "sample_id": "SIG15199.D",
+  "timestamp": "18-May-26, 09:32:21",
+  "method": "TC DEF_GC",
+  "detector": "TCD1A",
+  "signal": "Signal: SIG15199.D\\TCD1A.ch",
+  "notebook": "SIG15199.D",
+  "peaks": [
+    {
+      "compound_id": "Hydrogen",
+      "peak_number": 1,
+      "retention_time": 0.3488499168155825,
+      "integrator": "py",
+      "width": 0.08911284437859329,
+      "area": 31.629219497380856,
+      "start_time": 0.3168686521082824,
+      "end_time": 0.4059814964868757,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": []
+    },
+    {
+      "compound_id": "Oxygen",
+      "peak_number": 2,
+      "retention_time": 0.612772975079709,
+      "integrator": "py",
+      "width": 0.2712197545808409,
+      "area": 10.63232672609513,
+      "start_time": 0.5300253338710151,
+      "end_time": 0.801245088451856,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": []
+    },
+    {
+      "compound_id": "Nitrogen",
+      "peak_number": 3,
+      "retention_time": 1.0044658433152334,
+      "integrator": "py",
+      "width": 0.44571947075076923,
+      "area": 32.48748921791525,
+      "start_time": 0.8459567594989552,
+      "end_time": 1.2916762302497244,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": []
+    }
+  ],
+  "processing_parameters": {
+    "smoothing": {
+      "enabled": true,
+      "method": "whittaker",
+      "median_prefilter": true,
+      "median_kernel": 21,
+      "lambda": 10,
+      "diff_order": 1
+    },
+    "baseline": {
+      "method": "arpls",
+      "lambda": 100000000,
+      "asymmetry": 0.01,
+      "baseline_offset": 0.0,
+      "align_tic": false
+    },
+    "peak_detection": {
+      "enabled": true,
+      "mode": "classical",
+      "min_prominence": 0.001,
+      "min_height": 0.0,
+      "min_width": 0.0
+    },
+    "negative_peaks": {
+      "enabled": false
+    },
+    "shoulders": {
+      "enabled": false
+    },
+    "scaling": {
+      "signal_factor": 1.0,
+      "area_factor": 1.0
+    }
+  }
+}

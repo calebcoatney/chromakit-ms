@@ -1,0 +1,122 @@
+{
+  "sample_id": "SIG15395.D",
+  "timestamp": "30-Jul-26, 16:31:10",
+  "method": "TC DEF_GC",
+  "detector": "TCD1A",
+  "signal": "Signal: SIG15395.D\\TCD1A.ch",
+  "notebook": "SIG15395.D",
+  "ms_time_offset": 0.0,
+  "ms_time_offset_source": null,
+  "peaks": [
+    {
+      "compound_id": "Hydrogen",
+      "peak_number": 1,
+      "retention_time": 0.3740057322753074,
+      "integrator": "py",
+      "width": 0.1193333329956836,
+      "area": 385.85896094265524,
+      "start_time": 0.305672399135321,
+      "end_time": 0.4250057321310046,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "mol_percent": 86.861041422174,
+      "raw_amount": 0.741551602687964,
+      "composition_percent": 86.861041422174
+    },
+    {
+      "compound_id": "Oxygen",
+      "peak_number": 2,
+      "retention_time": 0.5880057316698015,
+      "integrator": "py",
+      "width": 0.2349999993350752,
+      "area": 1.9521116130347012,
+      "start_time": 0.5223390651889366,
+      "end_time": 0.7573390645240118,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "mol_percent": 4.213359124347878,
+      "raw_amount": 0.03597036323999818,
+      "composition_percent": 4.213359124347878
+    },
+    {
+      "compound_id": "Nitrogen",
+      "peak_number": 3,
+      "retention_time": 0.9423390640005606,
+      "integrator": "py",
+      "width": 0.39633333221192135,
+      "area": 3.7022426971974913,
+      "start_time": 0.7966723977460528,
+      "end_time": 1.1930057299579742,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "mol_percent": 8.925599453478139,
+      "raw_amount": 0.0761997838306815,
+      "composition_percent": 8.925599453478139
+    }
+  ],
+  "processing_parameters": {
+    "smoothing": {
+      "enabled": true,
+      "method": "savgol",
+      "median_prefilter": true,
+      "median_kernel": 21,
+      "savgol_window": 17,
+      "savgol_polyorder": 1
+    },
+    "baseline": {
+      "method": "arpls",
+      "lambda": 1000000000.0,
+      "asymmetry": 0.01,
+      "baseline_offset": 0.0
+    },
+    "peak_detection": {
+      "enabled": true,
+      "mode": "classical",
+      "min_prominence": 3e-05,
+      "min_height": 0.0,
+      "min_width": 0.0
+    },
+    "negative_peaks": {
+      "enabled": false
+    },
+    "shoulders": {
+      "enabled": false
+    },
+    "scaling": {
+      "signal_factor": 1.0,
+      "area_factor": 1.0
+    }
+  },
+  "quantitation": {
+    "strategy": "rf_table",
+    "rf_unit": "area_per_mol_pct",
+    "composition_basis": "mol%",
+    "normalized": true,
+    "rf_table": [
+      {
+        "compound": "Hydrogen",
+        "response_factor": 520.34
+      },
+      {
+        "compound": "Oxygen",
+        "response_factor": 54.27
+      },
+      {
+        "compound": "Nitrogen",
+        "response_factor": 48.586
+      }
+    ]
+  }
+}

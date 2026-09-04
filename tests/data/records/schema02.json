@@ -1,0 +1,75 @@
+{
+  "sample_id": "cel2",
+  "timestamp": "2026-03-25T11:23:48.954781",
+  "method": "",
+  "detector": "Unknown",
+  "signal": "",
+  "notebook": "cel2",
+  "peaks": [
+    {
+      "Compound ID": "7-Chloro-3-[2,4-dichlorophenyl]-3,4-dihydro-10-hydroxy-1,9(2H,10H)-acridinedione, 1-(N,N-dimethyl)hydrazone",
+      "peak_number": 1,
+      "retention_time": 3.6368014813598886,
+      "integrator": "py",
+      "width": 0.6598033747141341,
+      "area": 17469801.510944944,
+      "start_time": 3.318275714256513,
+      "end_time": 3.978079088970647,
+      "Qual": 0.2824417562223971,
+      "casno": "102-19-2-55-2"
+    },
+    {
+      "Compound ID": "Carbon dioxide",
+      "peak_number": 2,
+      "retention_time": 4.046334610492799,
+      "integrator": "py",
+      "width": 0.08225665414208061,
+      "area": 384309466.58524793,
+      "start_time": 3.9973306463230487,
+      "end_time": 4.079587300465129,
+      "Qual": 0.9950389266014099,
+      "casno": "000124-38-9"
+    },
+    {
+      "Compound ID": "Propene",
+      "peak_number": 3,
+      "retention_time": 4.14609268040979,
+      "integrator": "py",
+      "width": 0.12250991042437498,
+      "area": 1789903043.0896208,
+      "start_time": 4.079587300465129,
+      "end_time": 4.202097210889504,
+      "Qual": 0.9476640434826121,
+      "casno": "000115-07-1"
+    }
+  ],
+  "processing_parameters": {
+    "smoothing": {
+      "enabled": false
+    },
+    "baseline": {
+      "method": "arpls",
+      "lambda": 10000,
+      "asymmetry": 0.01,
+      "baseline_offset": 0.0,
+      "align_tic": false
+    },
+    "peak_detection": {
+      "enabled": true,
+      "mode": "classical",
+      "min_prominence": 1000000000.0,
+      "min_height": 0.0,
+      "min_width": 0.0
+    },
+    "negative_peaks": {
+      "enabled": false
+    },
+    "shoulders": {
+      "enabled": false
+    },
+    "scaling": {
+      "signal_factor": 7680.0,
+      "area_factor": 0.0784
+    }
+  }
+}

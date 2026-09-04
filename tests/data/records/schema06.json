@@ -1,0 +1,94 @@
+{
+  "sample_id": "std 2",
+  "timestamp": "25 Mar 26  01:42 pm",
+  "method": "Rtx-1701_FP_POLYARC",
+  "detector": "FID1A",
+  "signal": "Signal: std 2\\FID1A.ch",
+  "notebook": "std 2",
+  "ms_time_offset": 0.0,
+  "ms_time_offset_source": null,
+  "peaks": [
+    {
+      "compound_id": "2-Butanone",
+      "peak_number": 1,
+      "retention_time": 9.611000600060006,
+      "integrator": "py",
+      "width": 0.31198919891989263,
+      "area": 1131292.352946278,
+      "start_time": 9.507004200420042,
+      "end_time": 9.818993399339934,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "Qual": 0.812041699886322,
+      "casno": "000078-93-3"
+    },
+    {
+      "compound_id": "Methyl formate",
+      "peak_number": 2,
+      "retention_time": 11.500268526852686,
+      "integrator": "py",
+      "width": 0.6499774977497754,
+      "area": 15349655.357321827,
+      "start_time": 11.396272127212722,
+      "end_time": 12.046249624962497,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "Qual": 0.9336299896240234,
+      "casno": "000107-31-3"
+    },
+    {
+      "compound_id": "Furan, 2,5-dimethyl-",
+      "peak_number": 3,
+      "retention_time": 12.124246924692471,
+      "integrator": "py",
+      "width": 0.2773237323732367,
+      "area": 231192.405996156,
+      "start_time": 12.046249624962497,
+      "end_time": 12.323573357335734,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "Qual": 0.8728836178779602,
+      "casno": "000625-86-5"
+    }
+  ],
+  "processing_parameters": {
+    "smoothing": {
+      "enabled": false
+    },
+    "baseline": {
+      "method": "arpls",
+      "lambda": 10000,
+      "asymmetry": 0.01,
+      "baseline_offset": 0.0
+    },
+    "peak_detection": {
+      "enabled": true,
+      "mode": "classical",
+      "min_prominence": 0.005,
+      "min_height": 0.0,
+      "min_width": 0.0
+    },
+    "negative_peaks": {
+      "enabled": false
+    },
+    "shoulders": {
+      "enabled": false
+    },
+    "scaling": {
+      "signal_factor": 7730.9,
+      "area_factor": 597.0
+    }
+  }
+}
