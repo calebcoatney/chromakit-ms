@@ -55,8 +55,12 @@ class SpectrumExtractor:
             # Extract spectrum at that index
             spectrum = ms.data[rt_index, :].astype(float)
             
-            # Create m/z values
-            mz_values = np.arange(len(spectrum)) + 1  # m/z values start at 1
+            # Get m/z values from the file's m/z axis (parsed by rainbow).
+            # ms.ylabels is the actual axis of m/z bins stored in data.ms — on
+            # instruments that scan a sub-range (e.g. low_mass=20) or store only
+            # above-threshold m/z bins, this axis is sparse and non-contiguous,
+            # so column index + 1 is the WRONG m/z label.
+            mz_values = np.asarray(ms.ylabels)
             
             # Filter low intensity values
             if intensity_threshold > 0:
@@ -416,8 +420,12 @@ class SpectrumExtractor:
             max_intensity = max(spectrum) if np.max(spectrum) > 0 else 1.0
             threshold = intensity_threshold * max_intensity
             
-            # Create mz array (assuming 1-based indices for m/z values)
-            mz_values = np.arange(len(spectrum)) + 1
+            # Get m/z values from the file's m/z axis (parsed by rainbow).
+            # ms.ylabels is the actual axis of m/z bins stored in data.ms — on
+            # instruments that scan a sub-range (e.g. low_mass=20) or store only
+            # above-threshold m/z bins, this axis is sparse and non-contiguous,
+            # so column index + 1 is the WRONG m/z label.
+            mz_values = np.asarray(ms.ylabels)
             
             # Apply threshold and get only positive values
             mask = (spectrum > threshold) & (spectrum > 0)

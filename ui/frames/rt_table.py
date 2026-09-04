@@ -19,8 +19,15 @@ GCXGC_COLUMN_HEADERS = [
 
 
 class AddToRTTableDialog(QDialog):
-    """Dialog for adding a peak to the RT table."""
-    
+    """Dialog for adding a peak to the RT table.
+
+    Strict NIST-backed selection: the Save/OK button is disabled until the user
+    picks a compound name from the dropdown of NIST library entries. If the user
+    types an exact case-insensitive match and clicks Save, the name is
+    auto-promoted to the canonical NIST entry. If no NIST library is loaded,
+    the dialog is read-only with an explanatory message.
+    """
+
     def __init__(self, parent=None, peak_data=None, library_compounds=None):
         super().__init__(parent)
         self.peak_data = peak_data
@@ -28,123 +35,160 @@ class AddToRTTableDialog(QDialog):
         self.selected_compound = None
         self.setWindowTitle("Add Peak to RT Table")
         self.setModal(True)
-        self.resize(500, 400)
-        
-        # Create layout
+        self.resize(500, 420)
+
+        # Build layout
         layout = QVBoxLayout(self)
-        
-        # Peak information display
+
+        # Peak info group
         info_group = QGroupBox("Peak Information")
         info_layout = QFormLayout(info_group)
-        
         if peak_data:
             info_layout.addRow("Start RT:", QLabel(f"{peak_data['start_time']:.3f} min"))
             info_layout.addRow("Apex RT:", QLabel(f"{peak_data['retention_time']:.3f} min"))
             info_layout.addRow("End RT:", QLabel(f"{peak_data['end_time']:.3f} min"))
             if 'peak_number' in peak_data:
                 info_layout.addRow("Peak Number:", QLabel(str(peak_data['peak_number'])))
-        
         layout.addWidget(info_group)
-        
-        # Compound name input with autocomplete
+
+        # Compound identification group
         compound_group = QGroupBox("Compound Identification")
         compound_layout = QVBoxLayout(compound_group)
-        
+
+        # Helper text — explains the strict-selection requirement.
+        helper = QLabel(
+            "Type to search the loaded NIST library. You must select a compound\n"
+            "from the dropdown to enable Save."
+        )
+        helper.setStyleSheet("color: #666; font-size: 10px;")
+        compound_layout.addWidget(helper)
+
         # Search input
         input_layout = QFormLayout()
         self.compound_name_edit = QLineEdit()
-        if self.library_compounds:
-            self.compound_name_edit.setPlaceholderText("Enter compound name or start typing to search...")
-        else:
-            self.compound_name_edit.setPlaceholderText("Enter compound name...")
+        self.compound_name_edit.setPlaceholderText("Type 3+ characters to search...")
         input_layout.addRow("Compound Name:", self.compound_name_edit)
         compound_layout.addLayout(input_layout)
-        
-        # Results list for autocomplete (initially hidden)
-        if self.library_compounds:
-            self.results_list = QListWidget()
-            self.results_list.itemClicked.connect(self.on_item_selected)
-            self.results_list.setMaximumHeight(120)
-            self.results_list.hide()  # Initially hidden
-            compound_layout.addWidget(self.results_list)
-            
-            # Set up autocomplete functionality
-            self._setup_autocomplete()
-        
+
+        # Results list
+        self.results_list = QListWidget()
+        self.results_list.itemClicked.connect(self.on_item_selected)
+        self.results_list.setMaximumHeight(150)
+        compound_layout.addWidget(self.results_list)
+
+        # No-library banner (shown only when library is empty)
+        self.no_library_label = QLabel(
+            "⚠ MS library not loaded. Load a library first to add compounds to the RT table."
+        )
+        self.no_library_label.setStyleSheet("color: #CC6600; font-weight: bold;")
+        self.no_library_label.setWordWrap(True)
+        self.no_library_label.setVisible(False)
+        compound_layout.addWidget(self.no_library_label)
+
         layout.addWidget(compound_group)
-        
-        # Buttons
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-        
-        # Set focus to compound name input
+
+        # Standard Ok/Cancel button box
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+        # Wire input change handler
+        self._setup_autocomplete()
+
+        # Initial state
+        if not self.library_compounds:
+            self._set_no_library_mode()
+        else:
+            self.button_box.button(QDialogButtonBox.Ok).setEnabled(False)
+
         self.compound_name_edit.setFocus()
-    
+
+    def _set_no_library_mode(self):
+        """Disable input when no NIST library is available."""
+        self.compound_name_edit.setEnabled(False)
+        self.results_list.setEnabled(False)
+        self.no_library_label.setVisible(True)
+        self.button_box.button(QDialogButtonBox.Ok).setEnabled(False)
+
     def _setup_autocomplete(self):
-        """Set up autocomplete functionality."""
+        """Set up filter-on-type with a debounce timer."""
         from PySide6.QtCore import QTimer
-        
-        # Create a timer for delayed filtering
+
         self.filter_timer = QTimer()
         self.filter_timer.setSingleShot(True)
         self.filter_timer.timeout.connect(self.filter_compounds)
-        
-        # Connect text changes to delayed filtering
+
         self.compound_name_edit.textChanged.connect(self.on_text_changed)
-    
+
     def on_text_changed(self):
-        """Handle text changes with delayed filtering."""
-        if not hasattr(self, 'filter_timer'):
-            return
-            
+        """Restart filter timer on each keystroke; disable Save until reselected."""
+        # Any typing invalidates the current selection — re-disable Save
+        self.selected_compound = None
+        self.button_box.button(QDialogButtonBox.Ok).setEnabled(False)
+
         self.filter_timer.stop()
-        if len(self.compound_name_edit.text()) >= 3:  # Start filtering after 3 characters
-            self.filter_timer.start(300)  # 300ms delay
+        if len(self.compound_name_edit.text()) >= 3:
+            self.filter_timer.start(300)
         else:
-            if hasattr(self, 'results_list'):
-                self.results_list.clear()
-                self.results_list.hide()
-    
-    def filter_compounds(self):
-        """Filter compounds based on search text."""
-        if not self.library_compounds or not hasattr(self, 'results_list'):
-            return
-            
-        text = self.compound_name_edit.text().lower().strip()
-        if len(text) < 3:
             self.results_list.clear()
-            self.results_list.hide()
-            return
-            
-        # Filter compounds that contain the search text
-        matching_compounds = [comp for comp in self.library_compounds 
-                             if text in comp.lower()]
-        
-        # Update results list
+
+    def filter_compounds(self):
+        """Show matching compounds in the results list."""
+        text = self.compound_name_edit.text().lower().strip()
         self.results_list.clear()
-        if matching_compounds:
-            self.results_list.addItems(matching_compounds[:25])  # Limit to 25 matches
-            self.results_list.show()
-            
-            # Auto-select if exact match
-            if text in [comp.lower() for comp in self.library_compounds]:
-                self.selected_compound = next(comp for comp in self.library_compounds if comp.lower() == text)
-        else:
-            self.results_list.hide()
-    
+        if len(text) < 3:
+            return
+
+        matching = [c for c in self.library_compounds if text in c.lower()]
+        self.results_list.addItems(matching[:25])
+
     def on_item_selected(self, item):
-        """Handle selection from the results list."""
-        if hasattr(self, 'results_list'):
-            selected_text = item.text()
-            self.compound_name_edit.setText(selected_text)
-            self.selected_compound = selected_text
-            self.results_list.hide()
-    
+        """Picked an item from the dropdown — enable Save."""
+        self.compound_name_edit.blockSignals(True)
+        self.compound_name_edit.setText(item.text())
+        self.compound_name_edit.blockSignals(False)
+        self.selected_compound = item.text()
+        self.button_box.button(QDialogButtonBox.Ok).setEnabled(True)
+
+    def accept(self):
+        """Override accept to support exact-match auto-promotion.
+
+        If the user typed a name that's an exact case-insensitive match for a
+        library entry but didn't click it, promote to that entry and accept.
+        Otherwise refuse to close (the Save button should already be disabled,
+        but this guards programmatic accept() calls).
+        """
+        if self.selected_compound:
+            super().accept()
+            return
+
+        # Exact case-insensitive match auto-promotion
+        if self.library_compounds:
+            typed = self.compound_name_edit.text().strip().lower()
+            exact = [c for c in self.library_compounds if c.lower() == typed]
+            if len(exact) == 1:
+                # Block signals so setText doesn't re-trigger on_text_changed
+                # and wipe selected_compound back to None.
+                self.compound_name_edit.blockSignals(True)
+                self.compound_name_edit.setText(exact[0])
+                self.compound_name_edit.blockSignals(False)
+                self.selected_compound = exact[0]
+                super().accept()
+                return
+
+        # No selection and no exact match — refuse with a warning
+        QMessageBox.warning(
+            self,
+            "Selection Required",
+            "Please select a compound from the dropdown list. The RT table only\n"
+            "accepts compound names that exist in the loaded NIST library."
+        )
+        # Do NOT call super().accept() — dialog stays open
+
     def get_compound_name(self):
-        """Get the entered compound name."""
-        return self.compound_name_edit.text().strip()
+        """Return the selected compound name (always a NIST library key when set)."""
+        return self.selected_compound or ""
 
 
 class RTTableFrame(QWidget):
@@ -162,6 +206,11 @@ class RTTableFrame(QWidget):
         
         # RT table data
         self.rt_table_data = None
+
+        # NIST library compound list for load-time validation (set by the main app)
+        self._library_compounds = []
+        # Compound names in the RT table that don't match the loaded NIST library
+        self._library_mismatches = set()
         
         # Create main layout
         self.layout = QVBoxLayout(self)
@@ -174,6 +223,17 @@ class RTTableFrame(QWidget):
         # Add stretch at the end
         self.layout.addStretch()
     
+    def set_library_compounds(self, library_compounds):
+        """Set the NIST library compound list for load-time validation.
+
+        Called by the main app whenever the MS library is (re)loaded. Revalidates
+        the currently loaded RT table so the warning reflects the library actually
+        in memory, not the one present at import time.
+        """
+        self._library_compounds = list(library_compounds or [])
+        if self.rt_table_data is not None:
+            self._mark_library_mismatches()
+
     def _init_file_controls(self):
         """Initialize file loading controls."""
         file_group = QGroupBox("RT Table File")
@@ -317,6 +377,20 @@ class RTTableFrame(QWidget):
         )
         self.high_priority_checkbox.toggled.connect(self._on_settings_changed)
         settings_layout.addRow(self.high_priority_checkbox)
+
+        # Duplicate-match policy (2026-06-22 spec follow-up)
+        self.allow_duplicates_checkbox = QCheckBox(
+            "Allow duplicate matches (multiple peaks → same compound)"
+        )
+        self.allow_duplicates_checkbox.setChecked(True)  # permissive default
+        self.allow_duplicates_checkbox.setToolTip(
+            "When ON, multiple peaks can match the same RT-table compound\n"
+            "(useful for isomers, shoulders, or overlapping windows).\n\n"
+            "When OFF, only the peak closest to the table apex keeps the\n"
+            "compound name; other matches revert to 'Unknown'."
+        )
+        self.allow_duplicates_checkbox.toggled.connect(self._on_settings_changed)
+        settings_layout.addRow(self.allow_duplicates_checkbox)
         
         # RT Matching Mode Selection
         self.matching_mode_combo = QComboBox()
@@ -413,6 +487,7 @@ class RTTableFrame(QWidget):
         """Enable or disable the settings controls."""
         self.enable_checkbox.setEnabled(enabled)
         self.high_priority_checkbox.setEnabled(enabled and self.enable_checkbox.isChecked())
+        self.allow_duplicates_checkbox.setEnabled(enabled and self.enable_checkbox.isChecked())
         self.matching_mode_combo.setEnabled(enabled and self.enable_checkbox.isChecked())
         self.tolerance_spin.setEnabled(enabled and self.enable_checkbox.isChecked())
         self.weight_group.setEnabled(enabled and self.enable_checkbox.isChecked())
@@ -498,6 +573,24 @@ class RTTableFrame(QWidget):
         self.rt_table.set_dataframe(df)
         self.rt_table_data = self.rt_table.get_dataframe()
 
+        # Warn about compounds the loaded NIST library does not contain: they are
+        # skipped during quantitation, which is otherwise a silent omission.
+        self._mark_library_mismatches()
+        if self._library_mismatches:
+            mismatch_list = sorted(self._library_mismatches)
+            preview = "\n".join(f"  \u2022 {name}" for name in mismatch_list[:10])
+            more = (f"\n  ... and {len(mismatch_list) - 10} more"
+                    if len(mismatch_list) > 10 else "")
+            QMessageBox.warning(
+                self,
+                "RT Table Compounds Not in NIST Library",
+                f"{len(mismatch_list)} compound(s) in this RT table do not match\n"
+                f"the loaded NIST library and will be skipped during quantitation:\n\n"
+                f"{preview}{more}\n\n"
+                f"Edit the RT table or re-add these compounds via the (NIST-backed)\n"
+                f"Add to RT Table dialog."
+            )
+
         # Enable controls now that we have data.
         self._set_settings_enabled(True)
         self.clear_button.setEnabled(True)
@@ -582,6 +675,20 @@ class RTTableFrame(QWidget):
             )
 
         return df
+
+    def _mark_library_mismatches(self):
+        """Identify RT table compounds absent from the loaded NIST library.
+
+        Populates ``self._library_mismatches``. A compound the library does not
+        contain cannot be quantitated, and that failure is otherwise silent.
+        """
+        self._library_mismatches = set()
+        if not self._library_compounds or self.rt_table_data is None:
+            return
+        library_set = set(self._library_compounds)
+        for compound in self.rt_table_data['Compound']:
+            if compound not in library_set:
+                self._library_mismatches.add(compound)
 
     def _clear_rt_table(self):
         """Clear the loaded RT table."""
@@ -703,6 +810,7 @@ class RTTableFrame(QWidget):
         
         # Update dependent controls
         self.high_priority_checkbox.setEnabled(enabled)
+        self.allow_duplicates_checkbox.setEnabled(enabled)
         self.matching_mode_combo.setEnabled(enabled)
         self.tolerance_spin.setEnabled(enabled)
         self.weight_group.setEnabled(enabled)
@@ -724,6 +832,7 @@ class RTTableFrame(QWidget):
         settings = {
             'enabled': enabled,
             'high_priority': self.high_priority_checkbox.isChecked(),
+            'allow_duplicates': self.allow_duplicates_checkbox.isChecked(),
             'matching_mode': self.matching_mode_combo.currentIndex(),
             'tolerance': self.tolerance_spin.value(),
             'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),
@@ -733,26 +842,46 @@ class RTTableFrame(QWidget):
         
         self.rt_table_changed.emit(settings)
     
+    def _resolve_library_compounds_for_dialog(self):
+        """Return the NIST library compound names for the Add-to-RT-Table dialog.
+
+        Primary source: ``self._library_compounds``, populated by
+        ``set_library_compounds()`` whenever the main app detects a library
+        (re)load.
+
+        Fallback: walk up to the parent ChromaKitApp and read
+        ``ms_frame.ms_toolkit.library.keys()`` directly, for the case where the
+        library was loaded just before the user right-clicked a peak and the
+        wiring has not fired yet.
+
+        Returns an empty list when no library is available; the dialog treats
+        that as its "MS library not loaded" mode.
+        """
+        if self._library_compounds:
+            return list(self._library_compounds)
+        try:
+            parent_app = self.parent()
+            while parent_app and not hasattr(parent_app, 'ms_frame'):
+                parent_app = parent_app.parent()
+            if parent_app and hasattr(parent_app, 'ms_frame'):
+                tk = getattr(parent_app.ms_frame, 'ms_toolkit', None)
+                if tk and hasattr(tk, 'library') and tk.library:
+                    keys = list(tk.library.keys())
+                    # Cache for future calls and trigger any pending revalidation.
+                    self.set_library_compounds(keys)
+                    return keys
+        except Exception:
+            pass
+        return []
+
     def add_peak_to_rt_table(self, peak_data):
         """Add a peak to the RT table with user input for compound name."""
         if self.rt_table_data is None:
             # Create new RT table if none exists
             self.rt_table_data = pd.DataFrame(columns=['Compound', 'Start', 'Apex', 'End'])
-        
-        # Get library compounds for autocomplete if available
-        library_compounds = []
-        try:
-            # Try to get library compounds from parent app
-            parent_app = self.parent()
-            while parent_app and not hasattr(parent_app, 'ms_frame'):
-                parent_app = parent_app.parent()
-            
-            if parent_app and hasattr(parent_app, 'ms_frame') and hasattr(parent_app.ms_frame, 'library_compounds'):
-                library_compounds = parent_app.ms_frame.library_compounds
-        except Exception:
-            # If we can't get compounds, just continue without autocomplete
-            pass
-        
+
+        library_compounds = self._resolve_library_compounds_for_dialog()
+
         # Show dialog to get compound name
         dialog = AddToRTTableDialog(self, peak_data, library_compounds)
         if dialog.exec() == QDialog.Accepted:
@@ -843,6 +972,7 @@ class RTTableFrame(QWidget):
         return {
             'enabled': self.is_enabled(),
             'high_priority': self.high_priority_checkbox.isChecked(),
+            'allow_duplicates': self.allow_duplicates_checkbox.isChecked(),
             'matching_mode': self.matching_mode_combo.currentIndex(),
             'tolerance': self.tolerance_spin.value(),
             'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),
