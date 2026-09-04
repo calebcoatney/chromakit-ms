@@ -1,0 +1,127 @@
+{
+  "sample_id": "8260-114-04",
+  "timestamp": "16 Jun 26  02:02 pm",
+  "method": "Rapid acetone wash A",
+  "detector": "FID1A",
+  "signal": "Signal: 8260-114-04\\FID1A.ch",
+  "notebook": "8260-114-04",
+  "ms_time_offset": 0.0,
+  "ms_time_offset_source": null,
+  "peaks": [
+    {
+      "compound_id": "Propanoic acid",
+      "peak_number": 1,
+      "retention_time": 2.3114727066332375,
+      "integrator": "py",
+      "width": 0.3507791228864532,
+      "area": 2.230911130423808,
+      "start_time": 2.09395901471238,
+      "end_time": 2.4447381375988333,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "mol_C": 4.917188121898636e-06,
+      "mol_C_percent": 3.113510820691084,
+      "num_carbons": 3,
+      "mol": 1.6390627072995452e-06,
+      "mass_mg": 0.12129064034016634,
+      "mol_percent": 5.174705132033964,
+      "wt_percent": 3.771123415591996
+    },
+    {
+      "compound_id": "Butanoic acid",
+      "peak_number": 3,
+      "retention_time": 3.552219822519819,
+      "integrator": "py",
+      "width": 0.8026561589192198,
+      "area": 8.868111567085649,
+      "start_time": 3.0743024149190625,
+      "end_time": 3.8769585738382824,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "mol_C": 1.954635138382296e-05,
+      "mol_C_percent": 12.376540215643487,
+      "num_carbons": 4,
+      "mol": 4.88658784595574e-06,
+      "mass_mg": 0.43001973044410513,
+      "mol_percent": 15.427506886703096,
+      "wt_percent": 13.37001330107826
+    },
+    {
+      "compound_id": "Pentanoic acid",
+      "peak_number": 5,
+      "retention_time": 4.975249539382331,
+      "integrator": "py",
+      "width": 0.647945716074104,
+      "area": 46.62108943502275,
+      "start_time": 4.454442108022531,
+      "end_time": 5.102387824096635,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "mol_C": 0.0001027583143378365,
+      "mol_C_percent": 65.065463365533,
+      "num_carbons": 5,
+      "mol": 2.05516628675673e-05,
+      "mass_mg": 2.0962696124918647,
+      "mol_percent": 64.88390885779374,
+      "wt_percent": 65.17643405040326
+    }
+  ],
+  "processing_parameters": {
+    "smoothing": {
+      "enabled": false
+    },
+    "baseline": {
+      "method": "arpls",
+      "lambda": 100000.0,
+      "asymmetry": 0.01,
+      "baseline_offset": 0.0
+    },
+    "peak_detection": {
+      "enabled": true,
+      "mode": "classical",
+      "min_prominence": 0.01,
+      "min_height": 0.0,
+      "min_width": 0.0
+    },
+    "negative_peaks": {
+      "enabled": false
+    },
+    "shoulders": {
+      "enabled": false
+    },
+    "scaling": {
+      "signal_factor": 1.0,
+      "area_factor": 1.0
+    }
+  },
+  "quantitation": {
+    "enabled": true,
+    "method": "Polyarc + Internal Standard",
+    "internal_standard": {
+      "compound": "Nonane",
+      "formula": "C9H20",
+      "MW": 128.0,
+      "density": 0.718,
+      "volume_uL": 2.0,
+      "mol_C": 0.00010096875
+    },
+    "sample": {
+      "volume_uL": 4.0,
+      "density": 0.9,
+      "mass_mg": 3.6000000000000005
+    },
+    "overwrite_results": true
+  }
+}

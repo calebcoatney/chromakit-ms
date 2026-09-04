@@ -1,0 +1,40 @@
+{
+  "sample_id": "SIG14227.D",
+  "timestamp": "05-Feb-26, 15:19:03",
+  "method": "TC DEF_GC",
+  "detector": "TCD1A",
+  "signal": "Signal: SIG14227.D\\TCD1A.ch",
+  "notebook": "SIG14227.D",
+  "peaks": [
+    {
+      "Compound ID": "Hydrogen",
+      "peak_number": 1,
+      "retention_time": 0.3653722692195808,
+      "integrator": "py",
+      "width": 0.08707704085449358,
+      "area": 431.1204021245104,
+      "start_time": 0.3378011788351284,
+      "end_time": 0.42487821968962197
+    },
+    {
+      "Compound ID": "Oxygen",
+      "peak_number": 2,
+      "retention_time": 0.6787702750284642,
+      "integrator": "py",
+      "width": 0.21084941783217925,
+      "area": 466.60070400851697,
+      "start_time": 0.5938751190245388,
+      "end_time": 0.8047245368567181
+    },
+    {
+      "Compound ID": "Nitrogen",
+      "peak_number": 3,
+      "retention_time": 1.1986539289683906,
+      "integrator": "py",
+      "width": 0.4328066130854331,
+      "area": 1359.954917321894,
+      "start_time": 1.0090283001371927,
+      "end_time": 1.4418349132226258
+    }
+  ]
+}

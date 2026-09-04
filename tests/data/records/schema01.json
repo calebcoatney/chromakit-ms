@@ -1,0 +1,69 @@
+{
+  "sample_id": "cel2",
+  "timestamp": "2026-03-25T11:23:48.946282",
+  "method": "",
+  "detector": "Unknown",
+  "signal": "",
+  "notebook": "cel2",
+  "peaks": [
+    {
+      "Compound ID": "5-Isoxazolepropanamine, N-methyl-3-(4-nitrophenyl)-",
+      "peak_number": 1,
+      "retention_time": 3.5125405901141833,
+      "integrator": "py",
+      "width": 0.5250425047504685,
+      "area": 25793386.180008244,
+      "start_time": 3.3042737298964973,
+      "end_time": 3.829316234646966,
+      "Qual": 0.1299218619799512,
+      "casno": "157-17-0-19-9"
+    },
+    {
+      "Compound ID": "Carbon dioxide",
+      "peak_number": 2,
+      "retention_time": 4.044583661594658,
+      "integrator": "py",
+      "width": 0.08400680076007472,
+      "area": 374731445.90643036,
+      "start_time": 3.995579694484614,
+      "end_time": 4.079586495244689,
+      "Qual": 0.9980450570583344,
+      "casno": "000124-38-9"
+    },
+    {
+      "Compound ID": "Propene",
+      "peak_number": 3,
+      "retention_time": 4.1373411707672405,
+      "integrator": "py",
+      "width": 0.10850878431509692,
+      "area": 1311972401.5175133,
+      "start_time": 4.079586495244689,
+      "end_time": 4.188095279559786
+    }
+  ],
+  "processing_parameters": {
+    "smoothing": {
+      "enabled": false
+    },
+    "baseline": {
+      "method": "arpls",
+      "lambda": 10000,
+      "asymmetry": 0.01,
+      "baseline_offset": 0.0,
+      "align_tic": false
+    },
+    "peak_detection": {
+      "enabled": true,
+      "mode": "classical",
+      "min_prominence": 1000000000.0,
+      "min_height": 0.0,
+      "min_width": 0.0
+    },
+    "negative_peaks": {
+      "enabled": false
+    },
+    "shoulders": {
+      "enabled": false
+    }
+  }
+}

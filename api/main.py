@@ -39,6 +39,11 @@ from logic.quantitation_runner import (
 )
 from logic.rt_matching import apply_rt_matching
 from logic.rf_quantitation import quantitate_rf
+from logic.render_trace import (
+    available_detectors, read_trace, is_supported_sample_path,
+    canonical_detector, DEFAULT_MAX_POINTS, MAX_POINTS_CAP,
+)
+from logic.result_record import RecordParseError, read_record
 from functools import partial
 from api.models import (
     BrowseResponse, FileEntry,
@@ -55,6 +60,8 @@ from api.models import (
     MSBatchSearchRequest, MSBatchSearchResponse,
     MSSearchRequest, MSSearchHit, MSSearchResponse,
     QuantitateRequest, QuantitateResponse,
+    RenderResponse, RenderSample, RenderChannel, RenderTrace, RenderPeak,
+    RenderMethod,
 )
 from api.utils import serialize_numpy, convert_params_for_processor
 
@@ -171,6 +178,120 @@ async def get_detectors(path: str = Query(..., description="Path to .D directory
         return {"detectors": detectors, "current": data_handler.current_detector}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Read-only Render ─────────────────────────────────────────────────
+
+@app.get("/api/render", response_model=RenderResponse)
+async def render_sample(
+    path: str = Query(..., description="Path to a .D or .C sample directory"),
+    detector: Optional[str] = Query(default=None, description="Detector channel"),
+    max_points: int = Query(default=DEFAULT_MAX_POINTS, ge=2, le=MAX_POINTS_CAP),
+):
+    """Render an already-analysed sample: numbers from its recorded results,
+    drawable signal from the raw file. Recomputes nothing and writes nothing.
+
+    Stateless by construction — it never touches the module-level data_handler,
+    whose mutable current_detector would otherwise let concurrent clients
+    corrupt one another.
+    """
+    # A trailing separator is an ordinary artifact of building this path from
+    # a directory listing (and on Windows, `os.path.normpath` also folds a
+    # forward slash from a web client onto the native `\\`). Normalizing once
+    # here means every downstream consumer -- the .D/.C suffix check,
+    # DataHandler, CFolder -- sees the same path a caller would get by typing
+    # it without the trailing slash.
+    path = os.path.normpath(path)
+    sample = Path(path)
+    if not sample.exists():
+        raise HTTPException(status_code=404, detail=f"Sample not found: {path}")
+    if not is_supported_sample_path(path):
+        raise HTTPException(
+            status_code=400, detail="Path must be an Agilent .D or a ChromaKit .C directory"
+        )
+
+    detectors = available_detectors(path)
+    resolved = detector or (detectors[0] if detectors else None)
+    if resolved is None:
+        raise HTTPException(
+            status_code=400, detail=f"No detector given and none found in {path}"
+        )
+    # Canonicalize once, before `resolved` is used for anything: a caller can
+    # spell a detector any way the loaders themselves already tolerate
+    # (`fid1a`, `TCD3C.ch`), but result_record.find_record compares against
+    # the recorded `detector` field exactly. Rewriting here -- rather than in
+    # each half separately -- is what keeps the record lookup and the signal
+    # read agreeing on one name. A name absent from (or an empty) `detectors`
+    # passes through unchanged, so a CSV-backed .C profile with no enumerable
+    # detectors is unaffected.
+    resolved = canonical_detector(resolved, detectors)
+
+    try:
+        record = read_record(path, resolved)
+    except RecordParseError as exc:
+        # The one data fault that is NOT degraded: a record that will not parse
+        # is a broken file or a bug, and rendering the sample as "not analysed"
+        # would hide it indefinitely.
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Prefer the requested `path` whenever the record's own `signal_path`
+    # (verbatim from the record's `source_d`) doesn't point at anything on
+    # disk. An archival record's source data can move; the .D actually named
+    # in this request may still hold a perfectly readable signal, and that
+    # must not be abandoned in favor of a dead recorded path.
+    signal_path = path
+    if record and record.signal_path and Path(record.signal_path).exists():
+        signal_path = record.signal_path
+    trace, trace_error = read_trace(signal_path, detector=resolved, max_points=max_points)
+
+    errors = []
+    if record is None:
+        errors.append(f"no recorded results for detector {resolved}")
+    if trace_error:
+        errors.append(trace_error)
+
+    peaks = [
+        RenderPeak(
+            compound=p.compound, rt_apex=p.rt_apex, rt_start=p.rt_start,
+            rt_end=p.rt_end, area=p.area, raw_amount=p.raw_amount,
+            mol_percent=p.mol_percent,
+        )
+        for p in (record.peaks if record else [])
+    ]
+
+    # `name` is the recorded (AGILENT acquisition) method, or None when there
+    # is no record. `source` is set only when `name` is truthy, so neither a
+    # missing record NOR a record with an empty `method: ""` (3 of 11
+    # distilled real records carry one) claims a provenance it doesn't have.
+    # This keeps `method`'s shape stable across all cases — a consumer doing
+    # `channel["method"]["source"]` must not KeyError on the common,
+    # not-yet-analysed path.
+    method_name = record.acquisition_method if record else None
+
+    return RenderResponse(
+        sample=RenderSample(
+            sample_id=record.sample_id if record else sample.name,
+            timestamp=record.timestamp if record else None,
+            detector=resolved,
+            available_detectors=detectors,
+            record_path=record.record_path if record else None,
+            signal_path=signal_path,
+            signal_factor=record.signal_factor if record else None,
+            acquisition_method=record.acquisition_method if record else None,
+            processing_parameters=record.processing_parameters if record else None,
+            quantitation=record.quantitation if record else None,
+        ),
+        channel=RenderChannel(
+            method=RenderMethod(
+                name=method_name,
+                source="agilent_acquisition" if method_name else None,
+            ),
+            trace=RenderTrace(**trace.__dict__) if trace else None,
+            peaks=peaks,
+            closure_percent=None,
+            error="; ".join(errors) if errors else None,
+        ),
+    )
 
 
 @app.get("/api/navigate/next", response_model=NavigationResponse)

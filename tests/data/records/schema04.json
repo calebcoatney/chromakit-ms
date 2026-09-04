@@ -1,0 +1,88 @@
+{
+  "sample_id": "260224 GC1 R1 Run 311 outlet 25.D",
+  "timestamp": "24 Feb 26  04:23 pm",
+  "method": "GC1_HC-FID_Auto-Start-40m for Sequence-new macro",
+  "detector": "FID1A",
+  "signal": "Signal: 260224 GC1 R1 Run 311 outlet 25\\FID1A.ch",
+  "notebook": "260224 GC1 R1 Run 311 outlet 25",
+  "peaks": [
+    {
+      "Compound ID": "Unknown (8.241)",
+      "peak_number": 1,
+      "retention_time": 8.241151351840823,
+      "integrator": "py",
+      "width": 0.2082538254674997,
+      "area": 347.46182652347443,
+      "start_time": 8.171733410018325,
+      "end_time": 8.379987235485824
+    },
+    {
+      "Compound ID": "Unknown (8.727)",
+      "peak_number": 2,
+      "retention_time": 8.727076944598323,
+      "integrator": "py",
+      "width": 0.1674197420424992,
+      "area": 111.96836414723163,
+      "start_time": 8.665825819460824,
+      "end_time": 8.833245561503324
+    },
+    {
+      "Compound ID": "Unknown (9.221)",
+      "peak_number": 3,
+      "retention_time": 9.221169354040825,
+      "integrator": "py",
+      "width": 0.1960036004399992,
+      "area": 56.329124846327616,
+      "start_time": 9.168085045588324,
+      "end_time": 9.364088646028323
+    }
+  ],
+  "processing_parameters": {
+    "smoothing": {
+      "enabled": true,
+      "method": "whittaker",
+      "median_prefilter": true,
+      "median_kernel": 5,
+      "lambda": 0.1,
+      "diff_order": 1
+    },
+    "baseline": {
+      "method": "arpls",
+      "lambda": 1000000,
+      "asymmetry": 0.01,
+      "baseline_offset": 50.0,
+      "align_tic": false
+    },
+    "peak_detection": {
+      "enabled": true,
+      "mode": "deconvolution",
+      "min_prominence": 1000.0,
+      "min_height": 0.0,
+      "min_width": 0.0
+    },
+    "deconvolution": {
+      "splitting_method": "geometric",
+      "heatmap_threshold": 0.36,
+      "pre_fit_signal_threshold": 0.001,
+      "min_area_frac": 0.15,
+      "valley_threshold_frac": 0.48,
+      "windows": [
+        [
+          20.0,
+          40.0
+        ]
+      ],
+      "dedup_rt_tolerance": 0.005
+    },
+    "negative_peaks": {
+      "enabled": false
+    },
+    "shoulders": {
+      "enabled": false
+    },
+    "scaling": {
+      "signal_factor": 7680.0,
+      "area_factor": 0.0784
+    }
+  }
+}

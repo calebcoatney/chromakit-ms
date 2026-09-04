@@ -429,3 +429,61 @@ class QuantitateResponse(BaseModel):
     total_analyte_mass_mg: Optional[float]
     carbon_balance_percent: Optional[float]
     warnings: List[str] = Field(default_factory=list)
+
+
+# ─── Render (read-only) ───────────────────────────────────────────────
+
+class RenderTrace(BaseModel):
+    """A min/max envelope for DRAWING. rt_min[i] is the retention time OF
+    plot_y[i]. Plot it; do not integrate it."""
+    rt_min: List[float]
+    plot_y: List[float]
+    points: int
+    decimation: int
+
+
+class RenderPeak(BaseModel):
+    """RAPIDS Contract B peak shape, exactly."""
+    compound: Optional[str] = None
+    rt_apex: Optional[float] = None
+    rt_start: Optional[float] = None
+    rt_end: Optional[float] = None
+    area: Optional[float] = None
+    raw_amount: Optional[float] = None
+    mol_percent: Optional[float] = None
+
+
+class RenderMethod(BaseModel):
+    """RAPIDS Contract B method block. Stable two-key shape regardless of
+    whether a record exists: `source` is set only when `name` is non-null,
+    so an absent method never carries a false Agilent-acquisition claim."""
+    name: Optional[str] = None
+    source: Optional[str] = None
+
+
+class RenderChannel(BaseModel):
+    """RAPIDS Contract B channel block, verbatim. No ChromaKit vocabulary here."""
+    method: RenderMethod = Field(default_factory=RenderMethod)
+    trace: Optional[RenderTrace] = None
+    peaks: List[RenderPeak] = Field(default_factory=list)
+    closure_percent: Optional[float] = None
+    error: Optional[str] = None
+
+
+class RenderSample(BaseModel):
+    """ChromaKit-side context. RAPIDS ignores this block."""
+    sample_id: Optional[str] = None
+    timestamp: Optional[str] = None
+    detector: Optional[str] = None
+    available_detectors: List[str] = Field(default_factory=list)
+    record_path: Optional[str] = None
+    signal_path: Optional[str] = None
+    signal_factor: Optional[float] = None
+    acquisition_method: Optional[str] = None
+    processing_parameters: Optional[dict] = None
+    quantitation: Optional[dict] = None
+
+
+class RenderResponse(BaseModel):
+    sample: RenderSample
+    channel: RenderChannel

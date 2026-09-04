@@ -1,0 +1,87 @@
+{
+  "sample_id": "cel8",
+  "timestamp": "2026-03-25T11:23:22.952737",
+  "method": "",
+  "detector": "Unknown",
+  "signal": "",
+  "notebook": "cel8",
+  "peaks": [
+    {
+      "compound_id": "Hydrazinecarboxamide",
+      "peak_number": 1,
+      "retention_time": 3.55694394820878,
+      "integrator": "py",
+      "width": 0.6280495388852265,
+      "area": 13260.024019580298,
+      "start_time": 3.320769330522135,
+      "end_time": 3.9488188694073614,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "Qual": 0.39395007491111755,
+      "casno": "000057-56-7"
+    },
+    {
+      "compound_id": "(2-Aziridinylethyl)amine",
+      "peak_number": 2,
+      "retention_time": 4.032792066807057,
+      "integrator": "py",
+      "width": 0.08397319739969555,
+      "area": 319893.2678936633,
+      "start_time": 3.989056026494716,
+      "end_time": 4.0730292238944115,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": [],
+      "Qual": 0.9734703302383423,
+      "casno": "004025-37-0"
+    },
+    {
+      "compound_id": "Propene",
+      "peak_number": 3,
+      "retention_time": 4.1412574467816645,
+      "integrator": "py",
+      "width": 0.12421035448705009,
+      "area": 2075575.2442453129,
+      "start_time": 4.0730292238944115,
+      "end_time": 4.1972395783814616,
+      "is_shoulder": false,
+      "is_negative": false,
+      "is_convoluted": false,
+      "is_saturated": false,
+      "is_grouped": false,
+      "quality_issues": []
+    }
+  ],
+  "processing_parameters": {
+    "smoothing": {
+      "enabled": false
+    },
+    "baseline": {
+      "method": "arpls",
+      "lambda": 10000.0,
+      "asymmetry": 0.01,
+      "baseline_offset": 0.0,
+      "align_tic": false
+    },
+    "peak_detection": {
+      "enabled": true,
+      "mode": "classical",
+      "min_prominence": 100000.0,
+      "min_height": 0.0,
+      "min_width": 0.0
+    },
+    "negative_peaks": {
+      "enabled": false
+    },
+    "shoulders": {
+      "enabled": false
+    }
+  }
+}
