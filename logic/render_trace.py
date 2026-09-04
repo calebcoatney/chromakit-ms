@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import numbers
+import os
 from dataclasses import dataclass
 
 DEFAULT_MAX_POINTS = 2000
@@ -120,3 +121,79 @@ def build_trace(xs, ys, max_points: int = DEFAULT_MAX_POINTS) -> Trace | None:
     width = max(2, -(-keep // bins))        # ceil division
     out_x, out_y = envelope(all_xs, all_ys, width)
     return Trace(rt_min=out_x, plot_y=out_y, points=len(out_x), decimation=width)
+
+
+# --- signal reading -------------------------------------------------------
+#
+# ChromaKit opens the signal its own way rather than reusing rapids-bridge's
+# reader, because that reader goes straight to rainbow's `acq.datafiles` and has
+# no .C support at all — and `source_d` records live in .C trees. The envelope
+# above is shared; the file-opening legitimately is not.
+#
+# signal_factor is pinned to 1.0 everywhere here: the wire carries RAW COUNTS
+# and the factor travels alongside as a number. Baking it in would make the same
+# sample yield different values depending on which repo asked.
+
+
+def _is_c_folder(sample_path: str) -> bool:
+    return sample_path.rstrip(os.sep).endswith(".C")
+
+
+def available_detectors(sample_path: str) -> list[str]:
+    """Detector channel names in a .D or .C sample. Empty list on any failure."""
+    try:
+        if _is_c_folder(sample_path):
+            from logic.c_folder import CFolder
+            return list(CFolder.open(sample_path).get_available_detectors())
+        from logic.data_handler import DataHandler
+        return list(DataHandler().get_available_detectors(sample_path))
+    except Exception:
+        return []
+
+
+def read_signal(sample_path: str, detector: str | None = None):
+    """(xs, ys, resolved_detector) in raw counts, or None if unreadable.
+
+    A fresh DataHandler per call: the module-level singleton in api/main.py has a
+    mutable current_detector that every load overwrites, so sharing it would let
+    two concurrent requests corrupt each other's detector invisibly.
+    """
+    try:
+        if _is_c_folder(sample_path):
+            from logic.c_folder import CFolder
+            folder = CFolder.open(sample_path)
+            data = folder.load_signal(signal_factor=1.0, detector=detector)
+            resolved = (data.get("metadata") or {}).get("detector") or detector or ""
+            return list(data["x"]), list(data["y"]), str(resolved)
+
+        from logic.data_handler import DataHandler
+        handler = DataHandler()
+        handler.signal_factor = 1.0
+        data = handler.load_data_directory(sample_path, detector=detector)
+        chrom = data["chromatogram"]
+        return list(chrom["x"]), list(chrom["y"]), str(handler.current_detector)
+    except Exception:
+        return None
+
+
+def read_trace(sample_path: str, detector: str | None = None,
+               max_points: int = DEFAULT_MAX_POINTS):
+    """(Trace, None) on success, (None, reason) on any data failure.
+
+    The argument check runs first and raises, so a mis-read max_points does not
+    masquerade as an unreadable instrument file.
+    """
+    if isinstance(max_points, bool) or not isinstance(max_points, int) \
+            or max_points < 2 or max_points > MAX_POINTS_CAP:
+        raise ValueError(
+            f"max_points must be an int in [2, {MAX_POINTS_CAP}], got {max_points!r}"
+        )
+
+    signal = read_signal(sample_path, detector=detector)
+    if signal is None:
+        return None, f"could not read signal for detector {detector or '(auto)'}"
+    xs, ys, _ = signal
+    trace = build_trace(xs, ys, max_points=max_points)
+    if trace is None:
+        return None, f"signal for detector {detector or '(auto)'} failed validation"
+    return trace, None
