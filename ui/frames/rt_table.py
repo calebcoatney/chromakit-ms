@@ -206,6 +206,11 @@ class RTTableFrame(QWidget):
         
         # RT table data
         self.rt_table_data = None
+
+        # NIST library compound list for load-time validation (set by the main app)
+        self._library_compounds = []
+        # Compound names in the RT table that don't match the loaded NIST library
+        self._library_mismatches = set()
         
         # Create main layout
         self.layout = QVBoxLayout(self)
@@ -218,6 +223,17 @@ class RTTableFrame(QWidget):
         # Add stretch at the end
         self.layout.addStretch()
     
+    def set_library_compounds(self, library_compounds):
+        """Set the NIST library compound list for load-time validation.
+
+        Called by the main app whenever the MS library is (re)loaded. Revalidates
+        the currently loaded RT table so the warning reflects the library actually
+        in memory, not the one present at import time.
+        """
+        self._library_compounds = list(library_compounds or [])
+        if self.rt_table_data is not None:
+            self._mark_library_mismatches()
+
     def _init_file_controls(self):
         """Initialize file loading controls."""
         file_group = QGroupBox("RT Table File")
@@ -542,6 +558,24 @@ class RTTableFrame(QWidget):
         self.rt_table.set_dataframe(df)
         self.rt_table_data = self.rt_table.get_dataframe()
 
+        # Warn about compounds the loaded NIST library does not contain: they are
+        # skipped during quantitation, which is otherwise a silent omission.
+        self._mark_library_mismatches()
+        if self._library_mismatches:
+            mismatch_list = sorted(self._library_mismatches)
+            preview = "\n".join(f"  \u2022 {name}" for name in mismatch_list[:10])
+            more = (f"\n  ... and {len(mismatch_list) - 10} more"
+                    if len(mismatch_list) > 10 else "")
+            QMessageBox.warning(
+                self,
+                "RT Table Compounds Not in NIST Library",
+                f"{len(mismatch_list)} compound(s) in this RT table do not match\n"
+                f"the loaded NIST library and will be skipped during quantitation:\n\n"
+                f"{preview}{more}\n\n"
+                f"Edit the RT table or re-add these compounds via the (NIST-backed)\n"
+                f"Add to RT Table dialog."
+            )
+
         # Enable controls now that we have data.
         self._set_settings_enabled(True)
         self.clear_button.setEnabled(True)
@@ -626,6 +660,20 @@ class RTTableFrame(QWidget):
             )
 
         return df
+
+    def _mark_library_mismatches(self):
+        """Identify RT table compounds absent from the loaded NIST library.
+
+        Populates ``self._library_mismatches``. A compound the library does not
+        contain cannot be quantitated, and that failure is otherwise silent.
+        """
+        self._library_mismatches = set()
+        if not self._library_compounds or self.rt_table_data is None:
+            return
+        library_set = set(self._library_compounds)
+        for compound in self.rt_table_data['Compound']:
+            if compound not in library_set:
+                self._library_mismatches.add(compound)
 
     def _clear_rt_table(self):
         """Clear the loaded RT table."""

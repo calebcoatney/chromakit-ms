@@ -87,3 +87,47 @@ class TestStrictNistSelection:
         assert dlg.compound_name_edit.isEnabled() is False
         ok = _get_ok_button(dlg)
         assert ok.isEnabled() is False
+
+
+import pandas as pd
+from ui.frames.rt_table import RTTableFrame
+
+
+class TestRTTableFrameValidation:
+    def test_mark_library_mismatches_identifies_missing_names(self, qtbot):
+        frame = RTTableFrame()
+        qtbot.addWidget(frame)
+        frame.rt_table_data = pd.DataFrame({
+            'Compound': ['Propanoic acid', 'Nonsense Compound', 'Nonane'],
+            'Start': [2.0, 3.0, 4.0],
+            'Apex': [2.1, 3.1, 4.1],
+            'End': [2.2, 3.2, 4.2],
+        })
+        frame._library_compounds = ['Propanoic acid', 'Nonane', 'Decane']
+        frame._mark_library_mismatches()
+        assert frame._library_mismatches == {'Nonsense Compound'}
+
+    def test_mark_library_mismatches_empty_when_library_unloaded(self, qtbot):
+        frame = RTTableFrame()
+        qtbot.addWidget(frame)
+        frame.rt_table_data = pd.DataFrame({
+            'Compound': ['Anything'],
+            'Start': [1.0], 'Apex': [1.1], 'End': [1.2],
+        })
+        frame._library_compounds = []
+        frame._mark_library_mismatches()
+        assert frame._library_mismatches == set()
+
+    def test_set_library_compounds_triggers_revalidation(self, qtbot):
+        frame = RTTableFrame()
+        qtbot.addWidget(frame)
+        frame.rt_table_data = pd.DataFrame({
+            'Compound': ['Foo', 'Bar'],
+            'Start': [1.0, 2.0], 'Apex': [1.1, 2.1], 'End': [1.2, 2.2],
+        })
+        # Initially no library
+        frame.set_library_compounds([])
+        assert frame._library_mismatches == set()
+        # Set a library missing 'Bar'
+        frame.set_library_compounds(['Foo'])
+        assert frame._library_mismatches == {'Bar'}
