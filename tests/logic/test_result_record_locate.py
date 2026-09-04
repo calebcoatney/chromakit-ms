@@ -1,6 +1,7 @@
 # tests/logic/test_result_record_locate.py
 """Finding the record, and reading its sample-level half."""
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -134,5 +135,15 @@ def test_signal_factor_comes_from_processing_parameters(tmp_path):
 
 def test_signal_factor_is_none_when_unrecorded(tmp_path):
     doc = {k: v for k, v in _fixture().items() if k != "processing_parameters"}
+    sample = _make_d(tmp_path, doc)
+    assert read_record(str(sample), doc["detector"]).signal_factor is None
+
+
+def test_signal_factor_non_finite_becomes_none(tmp_path):
+    """NaN/Infinity must never reach the wire: json.dumps emits a bare NaN
+    that JSON.parse (JS) and encoding/json (Go) both reject, blanking the
+    whole document for every consumer -- not just this one number."""
+    doc = dict(_fixture())
+    doc["processing_parameters"] = {"scaling": {"signal_factor": math.nan}}
     sample = _make_d(tmp_path, doc)
     assert read_record(str(sample), doc["detector"]).signal_factor is None

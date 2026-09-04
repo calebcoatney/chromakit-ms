@@ -51,11 +51,29 @@ def test_missing_bounds_are_none_never_the_apex():
     assert peak.rt_end is None
 
 
+def test_unusable_first_alias_does_not_fall_through_to_a_second():
+    """A present-but-unusable `retention_time` must stop the search, not fall
+    through to the also-present `rt_apex` alias -- the peak said which field
+    it meant, and falling through would answer with another field's value."""
+    peak = normalize_peak({"retention_time": "13.31", "rt_apex": 8.24})
+    assert peak.rt_apex is None
+
+
+def test_compound_id_takes_precedence_over_compound_id_with_a_space():
+    peak = normalize_peak({"compound_id": "Hydrogen", "Compound ID": "Methane (CH4)"})
+    assert peak.compound == "Hydrogen"
+
+
 def test_rf_table_vocabulary_populates_raw_amount_and_mol_percent():
+    """`mol_percent` and `composition_percent` are DIFFERENT values here on
+    purpose: an implementation that read mol_percent from the wrong key would
+    still pass if the two happened to match, as they did in the original
+    fixture value for this test."""
     peak = normalize_peak({"compound_id": "Hydrogen", "raw_amount": 0.749,
-                           "mol_percent": 88.955, "composition_percent": 88.955})
+                           "mol_percent": 88.955, "composition_percent": 91.2})
     assert peak.raw_amount == 0.749
     assert peak.mol_percent == 88.955
+    assert peak.extras["composition_percent"] == 91.2
 
 
 def test_polyarc_vocabulary_populates_mol_percent_and_keeps_its_own_fields():

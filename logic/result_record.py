@@ -35,7 +35,7 @@ class ResultRecord:
     signal_factor: Optional[float]
     processing_parameters: Optional[dict]
     quantitation: Optional[dict]
-    peaks: list = field(default_factory=list)
+    peaks: list[RecordPeak] = field(default_factory=list)
 
 
 _START_KEYS = ("rt_start", "start_time", "start")
@@ -155,18 +155,6 @@ def find_record(sample_path: str, detector: str) -> Optional[str]:
     return None
 
 
-def _as_number(value: Any) -> Optional[float]:
-    """Whitelist on numbers.Real: admits numpy scalars, rejects str/bytes.
-
-    bool is excluded because True/False are instances of numbers.Real.
-    """
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, numbers.Real):
-        return float(value)
-    return None
-
-
 def _signal_factor(doc: dict) -> Optional[float]:
     processing_parameters = doc.get("processing_parameters")
     if not isinstance(processing_parameters, dict):
@@ -174,7 +162,7 @@ def _signal_factor(doc: dict) -> Optional[float]:
     scaling = processing_parameters.get("scaling")
     if not isinstance(scaling, dict):
         return None
-    return _as_number(scaling.get("signal_factor"))
+    return _number(scaling.get("signal_factor"))
 
 
 def read_record(sample_path: str, detector: str) -> Optional[ResultRecord]:
