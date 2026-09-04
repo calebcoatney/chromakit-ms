@@ -12,6 +12,7 @@ each other -- a bound the record does not have is None, never the apex.
 from __future__ import annotations
 
 import json
+import math
 import numbers
 import os
 from dataclasses import dataclass, field
@@ -35,6 +36,75 @@ class ResultRecord:
     processing_parameters: Optional[dict]
     quantitation: Optional[dict]
     peaks: list = field(default_factory=list)
+
+
+_START_KEYS = ("rt_start", "start_time", "start")
+_END_KEYS = ("rt_end", "end_time", "end")
+_APEX_KEYS = ("retention_time", "rt_apex", "apex")
+
+# Consumed into named fields; everything else rides along in `extras`.
+_MAPPED_KEYS = frozenset({
+    "compound_id", "Compound ID", "retention_time", "rt_apex", "apex",
+    "rt_start", "start_time", "start", "rt_end", "end_time", "end",
+    "area", "raw_amount", "mol_percent",
+})
+
+
+@dataclass(frozen=True)
+class RecordPeak:
+    compound: Optional[str]
+    rt_apex: Optional[float]
+    rt_start: Optional[float]
+    rt_end: Optional[float]
+    area: Optional[float]
+    raw_amount: Optional[float]
+    mol_percent: Optional[float]
+    extras: dict = field(default_factory=dict)
+
+
+def _number(value: Any) -> Optional[float]:
+    """A plain finite float, or None.
+
+    Whitelisted on numbers.Real, which admits every numpy scalar and rejects
+    str/bytes -- float("13.31") would otherwise become a convincing retention
+    time. bool is excluded because True is Real and 1.0 mol% is not what a flag
+    meant.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _first(peak: dict, keys) -> Optional[float]:
+    """The first of `keys` present with a usable number.
+
+    A key that is present but unusable stops the search: the peak said which
+    field it meant, and falling through would answer with another field.
+    """
+    for key in keys:
+        if peak.get(key) is not None:
+            return _number(peak[key])
+    return None
+
+
+def normalize_peak(peak: dict) -> RecordPeak:
+    """One on-disk peak, in any of the nine schemas, as one shape."""
+    if not isinstance(peak, dict):
+        peak = {}
+    compound = peak.get("compound_id")
+    if compound is None:
+        compound = peak.get("Compound ID")     # 33 older records spell it this way
+    return RecordPeak(
+        compound=None if compound is None else str(compound),
+        rt_apex=_first(peak, _APEX_KEYS),
+        rt_start=_first(peak, _START_KEYS),
+        rt_end=_first(peak, _END_KEYS),
+        area=_first(peak, ("area",)),
+        raw_amount=_first(peak, ("raw_amount",)),
+        mol_percent=_first(peak, ("mol_percent",)),
+        extras={k: v for k, v in peak.items() if k not in _MAPPED_KEYS},
+    )
 
 
 def _candidate_dir(sample_path: str) -> Path:
@@ -138,5 +208,5 @@ def read_record(sample_path: str, detector: str) -> Optional[ResultRecord]:
         signal_factor=_signal_factor(doc),
         processing_parameters=doc.get("processing_parameters"),
         quantitation=doc.get("quantitation"),
-        peaks=[],                          # populated in Task 5
+        peaks=[normalize_peak(p) for p in peaks if isinstance(p, dict)],
     )
