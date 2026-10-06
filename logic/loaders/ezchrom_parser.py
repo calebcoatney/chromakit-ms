@@ -413,8 +413,14 @@ def _cross_check_acaml(inj: EZChromInjection, summary: dict) -> list[str]:
             and summary["sample_name"] != inj.sample_name:
         problems.append(f"sample name: .dat {inj.sample_name!r} vs ACAML {summary['sample_name']!r}")
     if summary.get("created") and inj.injection_time_utc is not None:
-        acaml_t = _dt.datetime.strptime(summary["created"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_dt.timezone.utc)
-        if abs((acaml_t - inj.injection_time_utc).total_seconds()) > 1:
+        try:
+            acaml_t = _dt.datetime.fromisoformat(summary["created"].replace("Z", "+00:00"))
+        except ValueError:
+            acaml_t = None
+            problems.append(f"unreadable ACAML CreatedDate {summary['created']!r}")
+        if acaml_t is not None and acaml_t.tzinfo is None:
+            acaml_t = acaml_t.replace(tzinfo=_dt.timezone.utc)
+        if acaml_t is not None and abs((acaml_t - inj.injection_time_utc).total_seconds()) > 1:
             problems.append(f"injection time: .dat {inj.injection_time_utc.isoformat()} vs ACAML {summary['created']}")
     for sig in summary.get("signals", []):
         number = (sig.get("trace_id") or "").split("_")[0]
@@ -467,8 +473,8 @@ def convert_dat(dat_path: str, output_dir: str, *, acam_path: str | None = None,
     if c_name is None:
         c_name = f"{seq_id}_{stem}" if seq_id else stem
     c_path = os.path.join(output_dir, c_name + ".C")
-    if os.path.commonpath([c_path, rslt_dir]) == rslt_dir:
-        raise ValueError("output_dir must not be inside the source result-set folder")
+    if rslt_name.lower().endswith(".rslt") and os.path.commonpath([c_path, rslt_dir]) == rslt_dir:
+        raise ValueError("output_dir must not be inside the source result-set (.rslt) folder")
     if os.path.exists(c_path):
         if not overwrite:
             return c_path

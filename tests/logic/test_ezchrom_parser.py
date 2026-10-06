@@ -229,6 +229,14 @@ def test_convert_dat_refuses_output_inside_source(fake_rslt):
         ez.convert_dat(str(dat), str(rslt / "out"))
 
 
+def test_lone_dat_may_convert_beside_itself(tmp_path, monkeypatch):
+    dat = tmp_path / "run.dat"
+    dat.write_bytes(b"placeholder")
+    monkeypatch.setattr(ez, "read_ezchrom_dat", lambda path: ez.read_ezchrom_streams(_streams()))
+    c_path = ez.convert_dat(str(dat), str(tmp_path))
+    assert os.path.basename(c_path) == "run.C" and dat.exists()
+
+
 def test_convert_dat_keeps_existing_c_folder(fake_rslt, tmp_path):
     rslt, dat = fake_rslt
     c_path = ez.convert_dat(str(dat), str(tmp_path / "out"))
