@@ -126,3 +126,60 @@ def test_apply_rt_matching_skips_spectral_features():
     # Must NOT raise AttributeError on peak.retention_time
     apply_rt_matching([sf], rt_df, RTMatchingParams())
     assert not hasattr(sf, "compound_id") or getattr(sf, "compound_id", None) is None
+
+
+# ---- allow_duplicates=False: one peak per compound, nearest the apex ----
+def _window_df():
+    return pd.DataFrame(
+        [["Methane", 1.0, 1.10, 1.2], ["Ethane", 2.0, 2.10, 2.2]],
+        columns=["Compound", "Start", "Apex", "End"],
+    )
+
+
+def test_default_keeps_duplicates():
+    peaks = [_peak(1.02, peak_number=1), _peak(1.11, peak_number=2)]
+    apply_rt_matching(peaks, _window_df(), RTMatchingParams(matching_mode=0))
+    assert [p.compound_id for p in peaks] == ["Methane", "Methane"]
+
+
+def test_no_duplicates_keeps_nearest_apex():
+    peaks = [_peak(1.02, peak_number=1), _peak(1.11, peak_number=2), _peak(1.19, peak_number=3)]
+    apply_rt_matching(peaks, _window_df(), RTMatchingParams(matching_mode=0, allow_duplicates=False))
+    assert peaks[1].compound_id == "Methane" and peaks[1].rt_assignment is True
+    for loser in (peaks[0], peaks[2]):
+        assert loser.compound_id == f"Unknown ({loser.retention_time:.3f})"
+        assert loser.rt_assignment is False
+        assert loser.rt_assignment_source is None
+        assert loser.rt_match_available == "Methane"
+
+
+def test_no_duplicates_compounds_are_independent():
+    peaks = [_peak(1.05), _peak(1.10), _peak(2.03), _peak(2.15)]
+    apply_rt_matching(peaks, _window_df(), RTMatchingParams(matching_mode=0, allow_duplicates=False))
+    assert [p.compound_id for p in peaks] == [
+        "Unknown (1.050)", "Methane", "Unknown (2.030)", "Ethane"]
+
+
+def test_no_duplicates_tie_keeps_earlier_peak():
+    # binary-exact times so the two distances to the apex really are equal
+    df = pd.DataFrame([["Methane", 0.75, 1.25, 1.75]], columns=["Compound", "Start", "Apex", "End"])
+    peaks = [_peak(1.0, peak_number=1), _peak(1.5, peak_number=2)]
+    apply_rt_matching(peaks, df, RTMatchingParams(matching_mode=0, allow_duplicates=False))
+    assert peaks[0].compound_id == "Methane"
+    assert peaks[1].compound_id == "Unknown (1.500)"
+
+
+def test_no_duplicates_ignores_non_rt_names():
+    # An MS-search name is not an RT assignment and is never reverted.
+    peaks = [_peak(1.02, compound_id="Methane"), _peak(1.11)]
+    apply_rt_matching(peaks, _window_df(), RTMatchingParams(matching_mode=0, allow_duplicates=False))
+    assert peaks[0].compound_id == "Methane"
+    assert getattr(peaks[0], "rt_assignment", False) is False
+    assert peaks[1].compound_id == "Methane" and peaks[1].rt_assignment is True
+
+
+def test_no_duplicates_with_closest_apex_mode():
+    peaks = [_peak(1.07), _peak(1.11)]
+    apply_rt_matching(peaks, _window_df(),
+                      RTMatchingParams(matching_mode=1, tolerance=0.05, allow_duplicates=False))
+    assert [p.compound_id for p in peaks] == ["Unknown (1.070)", "Methane"]

@@ -1001,6 +1001,7 @@ class RTTableFrame(QWidget):
             self.tolerance_spin.setValue(p.tolerance)
             self.window_expansion_spin.setValue(p.window_expansion)
             self.high_priority_checkbox.setChecked(p.high_priority)
+            self.allow_duplicates_checkbox.setChecked(p.allow_duplicates)
             self.normalized_weights = {
                 "start": p.weights.start, "apex": p.weights.apex, "end": p.weights.end,
             }
@@ -1039,6 +1040,7 @@ class RTTableFrame(QWidget):
             tolerance=self.tolerance_spin.value(),
             window_expansion=self.window_expansion_spin.value(),
             weights=RTMatchingWeights(**w),
+            allow_duplicates=self.allow_duplicates_checkbox.isChecked(),
             high_priority=self.high_priority_checkbox.isChecked(),
         )
 

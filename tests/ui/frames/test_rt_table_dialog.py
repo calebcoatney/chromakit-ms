@@ -195,33 +195,12 @@ class TestApplyRTMatchingDedup:
         return p
 
     def _run_dedup(self, frame, peaks):
-        """Run the dedup block from _apply_rt_matching_to_peaks against
-        the given frame state. Kept in sync with ui/app.py."""
-        if frame.allow_duplicates_checkbox.isChecked():
+        """Run the dedup ui/app.py::_apply_rt_matching_to_peaks now delegates to
+        (logic.rt_matching.dedup_rt_assignments), driven by the frame state."""
+        from logic.rt_matching import dedup_rt_assignments
+        if frame.get_matching_params().allow_duplicates:
             return  # no-op
-        by_compound = {}
-        for peak in peaks:
-            if not getattr(peak, 'rt_assignment', False):
-                continue
-            cid = getattr(peak, 'compound_id', None)
-            if not cid:
-                continue
-            window = frame.get_rt_window(cid)
-            if not window:
-                continue
-            dist = abs(peak.retention_time - window[1])
-            by_compound.setdefault(cid, []).append((peak, dist))
-        for cid, candidates in by_compound.items():
-            if len(candidates) <= 1:
-                continue
-            candidates.sort(key=lambda x: x[1])
-            for peak, dist in candidates[1:]:
-                placeholder = f"Unknown ({peak.retention_time:.3f})"
-                peak.compound_id = placeholder
-                peak.Compound_ID = placeholder
-                peak.rt_assignment = False
-                peak.rt_assignment_source = None
-                peak.Qual = None
+        dedup_rt_assignments(peaks, frame.rt_table_data)
 
     def _make_frame_with_rt_table(self, qtbot):
         """Build an RTTableFrame with the user's actual mixed-acids RT table."""
@@ -432,3 +411,23 @@ class TestResolveLibraryCompoundsForDialog:
 
         result = frame._resolve_library_compounds_for_dialog()
         assert result == []
+
+
+class TestAllowDuplicatesMethodRoundTrip:
+    """The checkbox and ChromaMethod.rt_matching.allow_duplicates stay in sync."""
+
+    def test_matching_params_carry_the_checkbox(self, qtbot):
+        frame = RTTableFrame()
+        qtbot.addWidget(frame)
+        assert frame.get_matching_params().allow_duplicates is True
+        frame.allow_duplicates_checkbox.setChecked(False)
+        assert frame.get_matching_params().allow_duplicates is False
+
+    def test_apply_method_sets_the_checkbox(self, qtbot):
+        from logic.method import ChromaMethod, RTMatchingParams
+        frame = RTTableFrame()
+        qtbot.addWidget(frame)
+        m = ChromaMethod(name="m", signal_type="gc",
+                         rt_matching=RTMatchingParams(allow_duplicates=False))
+        frame.apply_method(m)
+        assert frame.allow_duplicates_checkbox.isChecked() is False
