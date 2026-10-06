@@ -876,7 +876,8 @@ async def run_pipeline(request: RunRequest):
 
             # 4c. Quantitate — RF-table strategy only (Phase 1a).
             if method.quant_strategy == "rf_table" and method.rf_table:
-                rf_summary = quantitate_rf(peaks, method.rf_table, rf_unit=method.rf_unit, normalize=True)
+                rf_summary = quantitate_rf(peaks, method.rf_table, rf_unit=method.rf_unit,
+                                           normalize=method.rf_normalize)
                 run_quant_summary = RunQuantSummary(
                     strategy=rf_summary.strategy,
                     peaks_quantitated=rf_summary.peaks_quantitated,

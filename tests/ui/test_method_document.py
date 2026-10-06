@@ -270,3 +270,39 @@ def test_params_writeback_preserves_scaling(qtbot):
     assert app.current_method.signal_factor == 7700.0
     assert app.current_method.area_factor == 600.0
     assert app.current_method.detector == "TCD3C"
+
+
+def test_rf_dispatch_honours_rf_normalize_false(qtbot):
+    from logic.method import RFTableEntry
+    app = _make(qtbot)
+    app.current_method.quant_strategy = "rf_table"
+    app.current_method.rf_normalize = False
+    app.current_method.rf_table = [RFTableEntry(compound="Hydrogen", response_factor=1000.0)]
+    app.integrated_peaks = [_FakePeak("Hydrogen", 3000.0, 1.0)]
+    app.run_quantitation_for_current_strategy()
+    assert app.integrated_peaks[0].raw_amount == 3.0
+    assert app.integrated_peaks[0].mol_percent is None
+
+
+def test_rf_dispatch_passes_method_rf_unit(qtbot):
+    from logic.method import RFTableEntry
+    app = _make(qtbot)
+    app.current_method.quant_strategy = "rf_table"
+    app.current_method.rf_unit = "area_per_wt_pct"
+    app.current_method.rf_table = [RFTableEntry(compound="Hydrogen", response_factor=1000.0)]
+    app.integrated_peaks = [_FakePeak("Hydrogen", 3000.0, 1.0)]
+    app.run_quantitation_for_current_strategy()
+    # wt% basis: composition_percent is written, mol_percent is not
+    assert app.integrated_peaks[0].mol_percent is None
+    assert getattr(app.integrated_peaks[0], "composition_percent", None) == 100.0
+
+
+def test_params_writeback_preserves_rf_unit_and_normalize(qtbot):
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    app.current_method = ChromaMethod(name="X", signal_type="gc",
+                                      rf_unit="area_per_wt_pct", rf_normalize=False)
+    app._loading_method = False
+    app._on_params_writeback(app.parameters_frame.current_params)
+    assert app.current_method.rf_unit == "area_per_wt_pct"
+    assert app.current_method.rf_normalize is False

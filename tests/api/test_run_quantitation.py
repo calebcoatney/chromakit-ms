@@ -149,3 +149,34 @@ def test_run_legacy_rf_unit_unspecified_null_basis_with_warning(client, tmp_path
     body_legacy = resp.json()
     assert body_legacy["quantitation"]["composition_basis"] is None
     assert any("unspecified" in w.lower() for w in body_legacy["quantitation"]["warnings"])
+
+
+def test_run_rf_normalize_false_reports_raw_amount_only(client, tmp_path):
+    m = ChromaMethod(name="uGC", signal_type="gc", quant_strategy="rf_table", rf_normalize=False)
+    m.rt_table = [RTTableEntry(compound="Hydrogen", start=1.0, apex=1.1, end=1.2),
+                  RTTableEntry(compound="Carbon monoxide", start=2.0, apex=2.1, end=2.2)]
+    m.rf_table = [RFTableEntry(compound="Hydrogen", response_factor=100.0),
+                  RFTableEntry(compound="Carbon monoxide", response_factor=200.0)]
+    method_path = str(tmp_path / "m.chromethod")
+    m.to_file(method_path)
+    with patch("api.main.data_handler.load_data_directory", return_value=_fake_data()), \
+         patch("api.main.data_handler.current_detector", "FID1A", create=True), \
+         patch("api.main.processor.process", return_value={}), \
+         patch("api.main.processor.integrate_peaks",
+               return_value={"peaks": _fake_peaks()}):
+        resp = client.post("/api/run", json={
+            "data_path": "/fake.D", "method_path": method_path, "write_output": False,
+        })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["quantitation"]["normalized"] is False
+    assert sorted(p["raw_amount"] for p in body["peaks"]) == pytest.approx([10.0, 10.0])
+    assert not any("mol_percent" in p or "composition_percent" in p for p in body["peaks"])
+
+
+def test_rf_normalize_defaults_true_and_round_trips(tmp_path):
+    assert ChromaMethod(name="x", signal_type="gc").rf_normalize is True
+    m = ChromaMethod(name="x", signal_type="gc", rf_normalize=False)
+    p = tmp_path / "m.chromethod"
+    m.to_file(str(p))
+    assert ChromaMethod.from_file(str(p)).rf_normalize is False

@@ -391,6 +391,8 @@ class ChromaKitApp(QMainWindow):
         updated.rf_table = self.current_method.rf_table
         updated.rt_matching = self.current_method.rt_matching
         updated.quant_strategy = self.current_method.quant_strategy
+        updated.rf_unit = self.current_method.rf_unit
+        updated.rf_normalize = self.current_method.rf_normalize
         # Preserve provenance/metadata that from_gui_params would otherwise reset
         updated.created_at = self.current_method.created_at
         updated.version = self.current_method.version
@@ -3601,7 +3603,11 @@ class ChromaKitApp(QMainWindow):
         peaks = getattr(self, "integrated_peaks", None)
         if not peaks:
             return
-        summary = rf_quant.quantitate_rf(peaks, self.current_method.rf_table)
+        summary = rf_quant.quantitate_rf(
+            peaks, self.current_method.rf_table,
+            rf_unit=self.current_method.rf_unit,
+            normalize=self.current_method.rf_normalize,
+        )
         self.quantitation_frame.update_rf_status(summary)
         if hasattr(self, "update_results_view"):
             self.update_results_view()
