@@ -95,11 +95,15 @@ def apply_rt_matching(
 ) -> None:
     """Assign peak.compound_id (and peak.Compound_ID when present) in place.
 
-    Mirrors ui/app.py::_apply_rt_matching_to_peaks verbatim: high-priority
-    overrides any existing assignment; low-priority fills only Unknown/None;
-    sets rt_assignment / rt_assignment_source, clears Qual/casno/CAS_Number;
-    matched-but-not-applied peaks record rt_match_available. No dedup — the GUI
-    method performs none, and allow_duplicates is not consumed by matching.
+    ui/app.py::_apply_rt_matching_to_peaks delegates here, so the GUI and the
+    headless API share one implementation: high-priority overrides any
+    existing assignment; low-priority fills only Unknown/None; sets
+    rt_assignment / rt_assignment_source, clears Qual/casno/CAS_Number;
+    matched-but-not-applied peaks record rt_match_available.
+
+    With ``params.allow_duplicates`` False (default True = no dedup), each
+    compound keeps only the RT-assigned peak nearest its table apex; see
+    dedup_rt_assignments.
     """
     if rt_table is None or len(rt_table) == 0:
         return
@@ -141,3 +145,44 @@ def apply_rt_matching(
                 peak.CAS_Number = None
         else:
             peak.rt_match_available = rt_compound
+
+    if not params.allow_duplicates:
+        dedup_rt_assignments(peaks, rt_table)
+
+
+def dedup_rt_assignments(peaks: list, rt_table: pd.DataFrame) -> None:
+    """Keep one RT-assigned peak per compound: the one nearest the table apex.
+
+    Only peaks with ``rt_assignment`` True whose compound is in *rt_table*
+    take part. Every other peak named that compound reverts to
+    ``Unknown (<rt>)`` with ``rt_assignment`` False, and records the compound
+    it lost in ``rt_match_available``. Ties keep the earlier peak.
+    """
+    if rt_table is None or len(rt_table) == 0:
+        return
+    apex = {}
+    for name, a in zip(rt_table["Compound"], rt_table["Apex"]):
+        apex.setdefault(name, float(a))
+
+    by_compound: dict = {}
+    for peak in peaks:
+        if not getattr(peak, "rt_assignment", False):
+            continue
+        cid = getattr(peak, "compound_id", None)
+        if cid not in apex:
+            continue
+        by_compound.setdefault(cid, []).append(peak)
+
+    for cid, candidates in by_compound.items():
+        if len(candidates) <= 1:
+            continue
+        candidates = sorted(candidates, key=lambda p: abs(p.retention_time - apex[cid]))
+        for peak in candidates[1:]:
+            placeholder = f"Unknown ({peak.retention_time:.3f})"
+            peak.compound_id = placeholder
+            if hasattr(peak, "Compound_ID"):
+                peak.Compound_ID = placeholder
+            peak.rt_assignment = False
+            peak.rt_assignment_source = None
+            peak.Qual = None
+            peak.rt_match_available = cid

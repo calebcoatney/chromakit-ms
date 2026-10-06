@@ -15,7 +15,7 @@ class CFolder:
 
     Layout:
       manifest.json   — signal_type, source_format, sample metadata
-      data/           — raw source (CSV file or .D folder)
+      data/           — raw source (CSV file, .D folder, or EZChrom .dat copy)
       results/        — features.json and features.csv
     """
 
@@ -143,8 +143,26 @@ class CFolder:
         from logic.signal_profiles import SignalProfileRegistry
         return SignalProfileRegistry.get(self.get_manifest()["signal_type"])
 
+    def _source_format_loader(self):
+        """Loader class fixed by the manifest's source_format, or None.
+
+        The profile (signal_type) says what kind of signal this is; for most
+        sources it also implies the reader. A source_format listed here
+        overrides that, so e.g. an EZChrom micro-GC trace is still a "gc"
+        sample (same processing, methods and automation) but is read by its
+        own loader instead of AgilentLoader.
+        """
+        fmt = self.get_manifest().get("source_format")
+        if fmt == "ezchrom_dat":
+            from logic.loaders.ezchrom_loader import EZChromLoader
+            return EZChromLoader
+        return None
+
     def get_available_detectors(self) -> list:
         """Return detector channel names if the underlying source supports them."""
+        source_loader = self._source_format_loader()
+        if source_loader is not None:
+            return source_loader().get_available_detectors(self.path)
         from logic.loaders.agilent_loader import AgilentLoader
         if issubclass(self.profile.loader_class, AgilentLoader):
             loader = AgilentLoader()
@@ -156,8 +174,13 @@ class CFolder:
 
         CSVLoader needs column names from the manifest; all other loaders
         are instantiated with no arguments. AgilentLoader accepts signal_factor
-        and an optional detector channel name.
+        and an optional detector channel name, as do source-format loaders
+        (see _source_format_loader).
         """
+        source_loader = self._source_format_loader()
+        if source_loader is not None:
+            return source_loader(signal_factor=signal_factor).load(self.path, detector=detector)
+
         profile = self.profile
         manifest = self.get_manifest()
 

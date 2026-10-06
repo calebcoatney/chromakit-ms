@@ -216,6 +216,12 @@ class ChromaMethod(BaseModel):
         default="unspecified",
         description="RF response-factor unit code (see logic.rf_quantitation.RF_UNITS)",
     )
+    rf_normalize: bool = Field(
+        default=True,
+        description="RF-table quant: also normalize the quantitated peaks to 100 % "
+                    "(composition_percent / mol_percent). False reports raw_amount "
+                    "(area / RF) only, e.g. for trace species in a balance gas.",
+    )
     signal_factor: Optional[float] = Field(
         default=None,
         description="Multiplier on raw detector signal at load. None or 0 => x1 (no scaling).",

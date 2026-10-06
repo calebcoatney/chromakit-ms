@@ -32,6 +32,7 @@ setup(
         "fastapi",
         "pydantic",
         "openpyxl",
+        "olefile",
     ],
     extras_require={
         "ms": ["ms-toolkit-nrel"],
