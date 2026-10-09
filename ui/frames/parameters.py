@@ -1826,10 +1826,13 @@ class ParametersFrame(QWidget):
         clearing the layout and re-running them is sufficient to restore
         the full widget state.
         """
-        # Remove all existing widgets from params_layout
+        # Remove all existing widgets from params_layout. Hide each one now: deleteLater() only runs
+        # once control returns to an event loop, and until then a removed group stays a visible
+        # child of params_widget at its old place (in GCxGC mode the 1D groups showed through).
         while self.params_layout.count():
             item = self.params_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
 
         # Rebuild title

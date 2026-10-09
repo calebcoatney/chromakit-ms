@@ -300,6 +300,25 @@ def test_apply_method_restores_gcxgc_widgets(qtbot):
     assert pf.gcxgc_apex_window_spin.value() == 7
 
 
+def _show_parameters_tab(app):
+    """Show the window on the Parameters tab and process events WITHOUT running deferred deletes
+    (qtbot.wait would run them), as a script or a test that only pumps processEvents() does."""
+    from PySide6.QtWidgets import QApplication
+    app.resize(1700, 1050)
+    app.show()
+    app.right_tabs.setCurrentWidget(app.parameters_frame)
+    QApplication.processEvents()
+
+
+def _assert_only_gcxgc_groups_visible(pf):
+    """Every visible QGroupBox anywhere under the parameters frame (not just params_layout)."""
+    from PySide6.QtWidgets import QGroupBox
+    assert pf.isVisible()
+    visible = [g for g in pf.findChildren(QGroupBox) if g.isVisible()]
+    expected = [pf.section_groups[k] for k in ("gcxgc_layout", "gcxgc_baseline", "gcxgc_peaks")]
+    assert set(visible) == set(expected), [g.title() for g in visible]
+
+
 def test_gcxgc_mode_hides_every_1d_group(gcxgc_app):
     app, _ = gcxgc_app
     pf = app.parameters_frame
@@ -311,6 +330,27 @@ def test_gcxgc_mode_hides_every_1d_group(gcxgc_app):
         w = pf.params_layout.itemAt(i).widget()
         if w is not None and w not in groups and w.isVisibleTo(pf):
             assert w.text() == "Integration Parameters", w     # the panel title is the only extra
+    # Task 8 walkthrough: the groups the startup rebuild replaced stayed visible outside params_layout.
+    _show_parameters_tab(app)
+    _assert_only_gcxgc_groups_visible(pf)
+
+
+def test_shown_panel_shows_only_gcxgc_groups_after_load_method(qtbot, tmp_path):
+    """Load Method rebuilds the panel again while a GCxGC run is shown: the replaced GCxGC and 1D
+    groups must not linger on screen."""
+    from PySide6.QtWidgets import QApplication
+    from logic.method import ChromaMethod, GCxGCParams
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    _show_parameters_tab(app)
+    app.on_file_selected(str(synth.build_run(tmp_path, synth.Scene(duration_min=2.0))))
+    app.right_tabs.setCurrentWidget(app.parameters_frame)
+    QApplication.processEvents()
+    _assert_only_gcxgc_groups_visible(app.parameters_frame)
+    app.current_method = ChromaMethod(name="g", signal_type="gcxgc", gcxgc=GCxGCParams(phase_shift_s=2.2))
+    app._apply_method_to_frames()
+    QApplication.processEvents()
+    _assert_only_gcxgc_groups_visible(app.parameters_frame)
 
 
 # ── Carried from the Task 3 and Task 4 reviews ──────────────────────────────
