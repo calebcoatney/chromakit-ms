@@ -43,12 +43,25 @@ class HdrInfo:
     method_name: str | None
 
 
-def parse_hdr_text(text: str) -> HdrInfo:
-    """Pull the fields ChromaKit needs out of HDR text. Missing fields are None."""
+def parse_hdr_text(text: str, path: str = "<hdr text>") -> HdrInfo:
+    """Pull the fields ChromaKit needs out of HDR text. Missing fields are None.
+
+    A value that should be a number but is not raises SepSolveFormatError. HDR is text,
+    so the error's ``offset`` is 0 and the message names the 1-based line instead.
+    ``path`` is only used in that error; read_hdr passes the real file.
+    """
     pm = fid = tof = name = None
     section = None
     in_fid_signal = False
-    for raw in text.splitlines():
+
+    def num(val: str, what: str, line_no: int) -> float:
+        try:
+            return float(val)
+        except ValueError:
+            raise SepSolveFormatError(
+                path, 0, f"line {line_no}: {what} is {val!r}, not a number") from None
+
+    for line_no, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if line.startswith("[") and line.endswith("]"):
             section, in_fid_signal = line[1:-1], False
@@ -62,13 +75,16 @@ def parse_hdr_text(text: str) -> HdrInfo:
         if section == "INSIGHT Modulator" and pm is None and re.fullmatch(r"Valve\d+ Change0", key):
             fields = val.split(",")
             if len(fields) >= 2:
-                pm = float(fields[1])          # PM, flush ms, hold min (field 1 unknown)
+                # Fields: <unknown>, PM s, flush ms, hold min.
+                pm = num(fields[1], f"modulation period (field 2 of {key})", line_no)
         elif key == "Details":
             in_fid_signal = "(FID)" in val
         elif key == "Data Rate" and in_fid_signal and fid is None:
-            fid = float(val)
-        elif key == "scanset period" and tof is None and float(val) > 0:
-            tof = 1e6 / float(val)             # µs per TOF spectrum
+            fid = num(val, "FID Data Rate", line_no)
+        elif key == "scanset period" and tof is None:
+            period_us = num(val, "scanset period", line_no)   # µs per TOF spectrum
+            if period_us > 0:
+                tof = 1e6 / period_us
         elif section == "TOF-DS Method" and key == "Name" and name is None:
             name = val
     return HdrInfo(pm, fid, tof, name)
@@ -76,7 +92,7 @@ def parse_hdr_text(text: str) -> HdrInfo:
 
 def read_hdr(path) -> HdrInfo:
     with open(path, encoding="utf-8", errors="replace") as f:
-        return parse_hdr_text(f.read())
+        return parse_hdr_text(f.read(), path)
 
 
 # ── .rsd ────────────────────────────────────────────────────────────────────
@@ -129,11 +145,13 @@ def read_rsd(path) -> tuple[np.ndarray, RsdInfo]:
     if rate <= 0:
         raise SepSolveFormatError(path, chan_off, f"non-positive data rate {rate}")
     chunks = []
+    terminated = False
     while p < len(b):
         if p + 8 > len(b):
             raise SepSolveFormatError(path, p, "truncated block header")
         (selfptr,) = struct.unpack_from("<Q", b, p)
         if selfptr == 0:                    # u64 0 terminator
+            terminated = True
             break
         if selfptr != p + 8 or p + 12 > len(b):
             raise SepSolveFormatError(path, p, f"block self-pointer {selfptr} != {p + 8}")
@@ -143,6 +161,9 @@ def read_rsd(path) -> tuple[np.ndarray, RsdInfo]:
             raise SepSolveFormatError(path, p, f"block of {n} values runs past end of file")
         chunks.append(np.frombuffer(b, "<f8", count=n, offset=p + 12))
         p = end
+    if not terminated:
+        raise SepSolveFormatError(
+            path, p, f"no u64 0 terminator after {len(chunks)} blocks; the file is truncated")
     signal = np.concatenate(chunks).astype(np.float64) if chunks else np.empty(0)
     return signal, RsdInfo(float(rate), len(signal), len(chunks))
 
@@ -204,7 +225,9 @@ class LscFile:
         tag, size, di_off = struct.unpack_from("<4sIQ", mm, 0)
         if tag != b"FT04" or size != 16:
             raise SepSolveFormatError(self.path, 0, f"expected FT04 header, found {tag!r} (size {size})")
-        if 0 < di_off < len(mm):
+        if di_off:
+            # A directory pointer is present: it must be valid. Never fall back to walking,
+            # which would silently return fewer scans from a truncated or damaged file.
             self.index = self._read_directory(di_off)
         else:
             log.warning("%s: no DI02 scan directory; walking blocks sequentially", self.path)
@@ -250,7 +273,10 @@ class LscFile:
 
     def _walk_chunks(self) -> dict:
         mm, p, found = self._mm, 16, {}
-        while p + 8 <= len(mm):
+        while p < len(mm):
+            if p + 8 > len(mm):
+                raise SepSolveFormatError(
+                    self.path, p, f"{len(mm) - p} trailing bytes after the last chunk (truncated file?)")
             tag, size = struct.unpack_from("<4sI", mm, p)
             if size < 8 or p + size > len(mm):
                 raise SepSolveFormatError(self.path, p, f"chunk {tag!r} has impossible size {size}")

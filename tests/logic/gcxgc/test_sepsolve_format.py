@@ -146,3 +146,106 @@ def test_real_8260_readers(real_gcxgc_run):
         ts = lsc.timestamps
         assert (ts[-1] - ts[0]) / (len(ts) - 1) == pytest.approx(0.02, abs=1e-6)
         assert int(np.count_nonzero(lsc.flags & 0xF0000000)) == 122
+
+
+# ── fix round 1: strict structure checks ────────────────────────────────────
+
+def _sd04_offsets(path):
+    with LscFile(path) as lsc:
+        return [int(o) for o in lsc.index["SD04"]]
+
+
+def _write_three(path, **kw):
+    synth.write_lsc(path, _three_scans(), **kw)
+    return path
+
+
+@pytest.mark.parametrize("di_off", [10**9, 16, 17])
+def test_lsc_bad_directory_pointer_raises_not_walks(tmp_path, caplog, di_off):
+    # A non-zero DI02 pointer past EOF (or not at a DI02 chunk) is damage, never "no directory".
+    p = _write_three(tmp_path / "a.lsc")
+    raw = bytearray(p.read_bytes())
+    raw[8:16] = di_off.to_bytes(8, "little")
+    p.write_bytes(bytes(raw))
+    with caplog.at_level(logging.WARNING), pytest.raises(SepSolveFormatError):
+        LscFile(p)
+    assert "walking" not in caplog.text
+
+
+@pytest.mark.parametrize("keep", ["after_header", "mid_scans", "last_scan_start", "before_directory"])
+def test_lsc_truncated_with_directory_raises(tmp_path, keep):
+    # Truncation at chunk boundaries (or inside the 24-byte head) must not open with fewer scans.
+    p = _write_three(tmp_path / "a.lsc")
+    raw = p.read_bytes()
+    offs = _sd04_offsets(p)
+    di_off = int.from_bytes(raw[8:16], "little")
+    cut = {"after_header": 16, "mid_scans": offs[1], "last_scan_start": offs[2],
+           "before_directory": di_off}[keep]
+    (tmp_path / "t.lsc").write_bytes(raw[:cut])
+    with pytest.raises(SepSolveFormatError):
+        LscFile(tmp_path / "t.lsc")
+
+
+@pytest.mark.parametrize("keep", [0, 4, 15])
+def test_lsc_truncated_inside_ft04_header_raises(tmp_path, keep):
+    p = _write_three(tmp_path / "a.lsc")
+    (tmp_path / "t.lsc").write_bytes(p.read_bytes()[:keep])
+    with pytest.raises(SepSolveFormatError):
+        LscFile(tmp_path / "t.lsc")
+
+
+def test_lsc_directoryless_truncated_mid_chunk_raises(tmp_path):
+    p = _write_three(tmp_path / "a.lsc", with_directory=False)
+    raw = p.read_bytes()
+    (tmp_path / "t.lsc").write_bytes(raw[:-5])           # cuts into the last (MD01) chunk
+    with pytest.raises(SepSolveFormatError):
+        LscFile(tmp_path / "t.lsc")
+
+
+@pytest.mark.parametrize("extra", [1, 4, 7])
+def test_lsc_directoryless_trailing_partial_header_raises(tmp_path, extra):
+    p = _write_three(tmp_path / "a.lsc", with_directory=False)
+    (tmp_path / "t.lsc").write_bytes(p.read_bytes() + b"\x00" * extra)
+    with pytest.raises(SepSolveFormatError, match="trailing"):
+        LscFile(tmp_path / "t.lsc")
+
+
+def _hdr_with(old, new):
+    text = synth.hdr_text()
+    assert old in text
+    return text.replace(old, new, 1)
+
+
+@pytest.mark.parametrize("old,new,needle", [
+    ("Data Rate=50", "Data Rate=abc", "FID Data Rate"),
+    ("scanset period=20000", "scanset period=xx", "scanset period"),
+    ("Valve1 Change0=1,4,300,999.00", "Valve1 Change0=1,zz,3", "modulation period"),
+])
+def test_hdr_non_numeric_value_raises_format_error(tmp_path, old, new, needle):
+    text = _hdr_with(old, new)
+    with pytest.raises(SepSolveFormatError, match=needle) as exc:
+        parse_hdr_text(text)
+    assert exc.value.path == "<hdr text>" and exc.value.offset == 0
+    assert "line " in str(exc.value)
+    p = tmp_path / "bad.HDR"
+    p.write_text(text, encoding="utf-8")
+    with pytest.raises(SepSolveFormatError, match=needle) as exc:
+        read_hdr(p)
+    assert exc.value.path == str(p)                      # read_hdr names the file
+    assert str(p) in str(exc.value)
+
+
+def test_hdr_non_positive_scanset_period_is_still_just_missing():
+    assert parse_hdr_text(synth.hdr_text(tof_scanset_us=0)).tof_rate_hz is None
+
+
+def test_rsd_truncated_at_block_boundary_raises(tmp_path):
+    p = tmp_path / "a.rsd"
+    offsets = synth.write_rsd(p, np.arange(20.0), block=4)          # 5 blocks + terminator
+    raw = p.read_bytes()
+    assert read_rsd(p)[1].n_blocks == 5
+    # Cut at the start of every block (header-only file included) and just before the terminator.
+    for cut in offsets + [len(raw) - 8]:
+        (tmp_path / "t.rsd").write_bytes(raw[:cut])
+        with pytest.raises(SepSolveFormatError):
+            read_rsd(tmp_path / "t.rsd")
