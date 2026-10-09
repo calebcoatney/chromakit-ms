@@ -30,6 +30,7 @@ def dotnet_str(s: str) -> bytes:
 
 
 def hdr_text(*, pm_s=4.0, fid_hz=50.0, tof_scanset_us=20000, method="Synthetic", insight=True) -> str:
+    """tof_scanset_us=None leaves the "scanset period" line out (no TOF rate in the HDR)."""
     lines = ["; TOF MS Header File", "[TOF-DS Method]", f"Name={method}", ""]
     if insight:
         lines += ["[INSIGHT Modulator]", "Name=INSIGHT Modulator", "Valve1Type=Backflush",
@@ -37,8 +38,10 @@ def hdr_text(*, pm_s=4.0, fid_hz=50.0, tof_scanset_us=20000, method="Synthetic",
     lines += ['[GC 1 (GC): "Agilent 8890"]', "_Signals", "_Signal #1:  Front Signal",
               "Description=Front Signal", "Details=Front Signal (FID)", "Save=On",
               f"Data Rate={fid_hz:g}", "_Signal #2:", "Description=None", "Data Rate=10", "",
-              "[BenchTOF Acquisition]", "scans per scanset=194",
-              f"scanset period={tof_scanset_us}", "",
+              "[BenchTOF Acquisition]", "scans per scanset=194"]
+    if tof_scanset_us is not None:
+        lines.append(f"scanset period={tof_scanset_us}")
+    lines += ["",
               # Decoys: the inactive TOF calibrant block the old loader misread as the period.
               "[Mass Calibration Settings 70eV]", "cal modulation period=   10.000000",
               "cal modulation pulse=    0.500000", "cal modulation active=0", ""]
@@ -74,8 +77,11 @@ def write_rsd(path, signal, *, rate_hz=50, block=97) -> list[int]:
 
 
 def write_lsc(path, spectra, *, rate_hz=50.0, t0_unix=1_700_000_000.0, flags=None,
-              view=None, with_directory=True) -> None:
-    """spectra: list of (mz array, intensity array), one per scan."""
+              view=None, with_directory=True, timestamps=None) -> None:
+    """spectra: list of (mz array, intensity array), one per scan.
+
+    timestamps: optional scan times in unix seconds, one per scan (default t0_unix + k / rate_hz).
+    """
     out = bytearray(struct.pack("<4sIQ", b"FT04", 16, 0))
     offsets = {"PD01": [], "SM01": [], "SD04": [], "MD01": []}
 
@@ -97,7 +103,8 @@ def write_lsc(path, spectra, *, rate_hz=50.0, t0_unix=1_700_000_000.0, flags=Non
         rec = np.zeros(len(mz), dtype=REC)
         rec["mz1000"] = np.round(mz * 1000).astype(np.uint32)
         rec["inten"] = inten
-        ts = int(round((t0_unix + k / rate_hz) * 2 ** 32))
+        t = t0_unix + k / rate_hz if timestamps is None else float(timestamps[k])
+        ts = int(round(t * 2 ** 32))
         chunk("SD04", struct.pack("<QII", ts, flags[k], len(mz)) + rec.tobytes() + struct.pack("<I", 0))
     chunk("MD01", b"; TOF MS Header File\r\n")
     if with_directory:

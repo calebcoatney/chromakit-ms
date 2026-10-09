@@ -60,6 +60,20 @@ class SpectrumResult:
     saturated: bool
 
 
+def _rate_from_timestamps(lsc: LscFile) -> float:
+    """Scan rate from the mean timestamp step, rounded to 3 decimals.
+
+    Not the median: real timestamps are quantised to 7.63 us and jitter by ~0.3 ms, so the median
+    step sits a quantum off (50.008 Hz on a 50 Hz run, which rejects every whole-second period).
+    """
+    ts = lsc.timestamps
+    span = float(ts[-1] - ts[0]) if len(ts) >= 2 else 0.0
+    if not span > 0:
+        raise ValueError(f"{lsc.path}: {len(ts)} scan timestamps cannot give a TOF rate "
+                         "and the HDR has no scanset period")
+    return round((len(ts) - 1) / span, 3)
+
+
 def _pick(names, pred):
     hits = sorted(n for n in names if pred(n.lower()))
     return hits[0] if hits else None
@@ -112,7 +126,11 @@ class GCxGCRun:
             if hdr_info.fid_rate_hz and hdr_info.fid_rate_hz != rsd_info.rate_hz:
                 log.warning("%s: HDR FID rate %g Hz differs from the .rsd's %g Hz; using the .rsd",
                             c_path, hdr_info.fid_rate_hz, rsd_info.rate_hz)
-            tof_hz = hdr_info.tof_rate_hz or round(1.0 / float(np.median(np.diff(ref.timestamps))), 6)
+            tof_hz = hdr_info.tof_rate_hz
+            if not tof_hz:
+                tof_hz = _rate_from_timestamps(ref)
+                log.info("%s: no TOF rate (scanset period) in the HDR; %g Hz from the .lsc scan "
+                         "timestamps (mean step)", c_path, tof_hz)
             if hdr_info.modulation_period_s is not None:
                 file_period = (hdr_info.modulation_period_s, "hdr")
             elif ref.view.modulation_period_s is not None:

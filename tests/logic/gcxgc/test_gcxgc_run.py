@@ -231,6 +231,33 @@ def test_empty_dbc_scan_falls_back_to_raw(tmp_path):
     assert res.source == "lsc" and res.mz.tolist() == [40]
 
 
+def _quantised_jittered_times(n, rate_hz=50.0, t0=1_700_000_000.0, jitter_s=3e-4, seed=1):
+    """Scan times like the real .lsc's: +-0.3 ms jitter, then 32.32 fixed point with the low 15 bits
+    zero (7.63 us steps), so the median step lands one quantum off 1 / rate_hz."""
+    t = t0 + np.arange(n) / rate_hz + np.random.default_rng(seed).uniform(-jitter_s, jitter_s, n)
+    return np.round(t * 2 ** 17) / 2 ** 17
+
+
+def test_tof_rate_from_timestamps_is_the_mean_step(tmp_path, caplog):
+    import logging
+    from logic.loaders.sepsolve_format import LscFile
+    scene = synth.Scene(duration_min=4.0)
+    c = synth.build_run(tmp_path, scene)
+    data = c / "data"
+    synth.write_hdr(data / "Synth.HDR", tof_scanset_us=None)          # no "scanset period"
+    ts = _quantised_jittered_times(scene.n_tof())
+    view = {"pm": scene.pm_s, "phase": scene.phase_s}
+    synth.write_lsc(data / "Synth.lsc", scene.spectra(background=True), view=view, timestamps=ts)
+    synth.write_lsc(data / "Synth_0.5_secs.dbc.lsc", scene.spectra(background=False), view=view,
+                    timestamps=ts)
+    with LscFile(data / "Synth.lsc") as lsc:                            # the trap the median fell into
+        assert round(1.0 / float(np.median(np.diff(lsc.timestamps))), 3) != 50.0
+    with caplog.at_level(logging.INFO, logger="logic.gcxgc_run"):
+        run = GCxGCRun.from_c_folder(c)                                # a 4 s period loads
+    assert run.tof_hz == 50.0
+    assert run.modulation_period_s == 4.0 and run.frame("tic").N == 200
+    assert "timestamps" in caplog.text
+
 @pytest.mark.realdata
 def test_real_8260_run_layout_and_offset(real_gcxgc_run):
     run = GCxGCRun.from_c_folder(real_gcxgc_run)
