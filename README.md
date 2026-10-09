@@ -8,7 +8,7 @@ ChromaKit-MS is a Python application for inspecting and processing GC-MS (Gas Ch
 * **Peak integration** – integrate detected peaks; export results to JSON, CSV, and Excel.
 * **Mass spectrum search** – search against spectral libraries using `ms-toolkit-nrel` (single peak or batch).
 * **Peak deconvolution** – 1D U-Net neural network for resolving overlapping peaks (requires `torch`).
-* **GCxGC-TOFMS/FID** – SepSolve/Markes runs: 2D peaks on the FID or DBC TIC, spectra and library IDs, CSV/JSON/MSP export (see [docs/gcxgc.md](docs/gcxgc.md)).
+* **GCxGC-TOFMS/FID** – SepSolve/Markes runs: 2D peaks on the FID or DBC TIC, spectra and library IDs, CSV/JSON/MSP/MGF export (see [docs/gcxgc.md](docs/gcxgc.md)).
 * **Batch automation** – process directories of data files without manual interaction.
 * **Quantitation** – Polyarc + internal standard method for compound quantitation.
 * **Interactive plots** – inspect chromatograms, TIC traces, heatmaps, and mass spectra with Matplotlib.
@@ -58,7 +58,7 @@ pip install -r api/requirements.txt
 
 ## GCxGC-TOFMS/FID
 
-Supported: SepSolve/Markes runs (`.HDR`, `.rsd`, `.lsc`, `.dbc.lsc`) converted with Tools → Batch Convert to .C…, with 2D peak detection on the FID or DBC TIC, spectra and library IDs, and CSV/JSON/MSP export. The how-to is in [docs/gcxgc.md](docs/gcxgc.md).
+Supported: SepSolve/Markes runs (`.HDR`, `.rsd`, `.lsc`, `.dbc.lsc`) converted with Tools → Batch Convert to .C…, with 2D peak detection on the FID or DBC TIC, spectra and library IDs, and CSV/JSON/MSP/MGF export. The how-to is in [docs/gcxgc.md](docs/gcxgc.md).
 
 Not yet: region/stencil drawing and group-type (PIONA) wt%, deconvolution, retention indices, multi-sample alignment, and batch processing of GCxGC runs.
 

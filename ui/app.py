@@ -1799,7 +1799,7 @@ class ChromaKitApp(QMainWindow):
             self.view_results_button.setVisible(False)
 
     def _export_gcxgc(self, interactive: bool) -> None:
-        """Write the GCxGC CSV/JSON/MSP results into the run's results/ folder.
+        """Write the GCxGC CSV/JSON/MSP/MGF results into the run's results/ folder.
 
         The JSON describes the processing that produced the current peaks (the parameter
         snapshot taken at Integrate, and the library search recorded by MS Search All),
@@ -1825,7 +1825,8 @@ class ChromaKitApp(QMainWindow):
                 QMessageBox.critical(self, "GCxGC export failed", str(e))
             return
         self.status_bar.showMessage(
-            f"GCxGC results written to {results_dir}: {paths.csv.name}, {paths.json.name}, {paths.msp.name}")
+            f"GCxGC results written to {results_dir}: {paths.csv.name}, {paths.json.name}, "
+            f"{paths.msp.name}, {paths.mgf.name}")
 
     def _show_gcxgc_results_button(self, peaks: list) -> None:
         """Show/update the 'View Results' button in the status bar for GCxGC peaks."""

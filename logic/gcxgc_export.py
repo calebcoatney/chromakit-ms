@@ -1,4 +1,4 @@
-"""Write GCxGC results to <run>.C/results/: ChromSpace-layout CSV, full JSON record, MSP spectra."""
+"""Write GCxGC results to <run>.C/results/: ChromSpace-layout CSV, full JSON record, MSP and MGF spectra."""
 from __future__ import annotations
 
 import csv
@@ -24,6 +24,7 @@ class GCxGCExportPaths:
     csv: Path
     json: Path
     msp: Path
+    mgf: Path
 
 
 def safe_name(name: str) -> str:
@@ -87,6 +88,24 @@ def _write_msp(f, peaks, spectra) -> None:
         f.write("\n")
 
 
+def _write_mgf(f, peaks, spectra) -> None:
+    """One MGF entry per peak with a spectrum; no retention time (FEATURE_ID links to the CSV/JSON)."""
+    for p in peaks:
+        spec = spectra.get(p.peak_number)
+        if not spec:
+            continue
+        title = f"Peak {p.peak_number}" + (f" - {p.compound_name}" if p.compound_name else "")
+        f.write("BEGIN IONS\n")
+        f.write(f"TITLE={title}\n")
+        f.write(f"FEATURE_ID={p.peak_number}\n")
+        f.write(f"SCANS={p.peak_number}\n")
+        f.write("PEPMASS=0\n")          # EI spectra have no precursor ion
+        f.write("MSLEVEL=1\n")
+        for mz, inten in spec:
+            f.write(f"{int(mz)} {float(inten):.6g}\n")
+        f.write("END IONS\n\n")
+
+
 def _record(peaks, percents, run, settings, library, search_method) -> dict:
     off = run.offset()
     return {
@@ -114,18 +133,20 @@ def _record(peaks, percents, run, settings, library, search_method) -> dict:
 
 def export_gcxgc_results(peaks, run, results_dir, *, settings: dict, get_spectrum,
                          library=None, search_method=None) -> GCxGCExportPaths:
-    """Write the three result files; get_spectrum(peak) -> [(mz, intensity)] | None."""
+    """Write the four result files; get_spectrum(peak) -> [(mz, intensity)] | None."""
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
     stem = safe_name(run.sample_id or "sample")
     paths = GCxGCExportPaths(results_dir / f"{stem} - GCxGC peaks.csv",
                              results_dir / f"{stem} - GCxGC peaks.json",
-                             results_dir / f"{stem} - GCxGC spectra.msp")
+                             results_dir / f"{stem} - GCxGC spectra.msp",
+                             results_dir / f"{stem} - GCxGC spectra.mgf")
     peaks = sorted(peaks, key=lambda p: p.peak_number)
     spectra = {p.peak_number: s for p in peaks if (s := get_spectrum(p))}
     percents = area_percents(peaks)
     _atomic_write(paths.csv, lambda f: _write_csv(f, peaks, percents))
     _atomic_write(paths.msp, lambda f: _write_msp(f, peaks, spectra))
+    _atomic_write(paths.mgf, lambda f: _write_mgf(f, peaks, spectra))
     record = _record(peaks, percents, run, settings, library, search_method)
     _atomic_write(paths.json, lambda f: json.dump(record, f, indent=1, default=_json_default))
     return paths

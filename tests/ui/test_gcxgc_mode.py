@@ -101,14 +101,15 @@ def test_ms_search_all_keeps_top_hits(gcxgc_app):
     assert (p.compound_name, p.casno) == ("Benzene", format_casno("71432"))
 
 
-def test_export_button_writes_three_files(gcxgc_app):
+def test_export_button_writes_all_result_files(gcxgc_app):
     app, c = gcxgc_app
     app.button_frame.integrate_button.click()
     for f in (c / "results").glob("*"):
         f.unlink()                                    # clear any auto-export
     app.button_frame.export_button.click()
     assert sorted(f.name for f in (c / "results").iterdir()) == [
-        "Synth - GCxGC peaks.csv", "Synth - GCxGC peaks.json", "Synth - GCxGC spectra.msp"]
+        "Synth - GCxGC peaks.csv", "Synth - GCxGC peaks.json",
+        "Synth - GCxGC spectra.mgf", "Synth - GCxGC spectra.msp"]
 
 
 def test_numeric_item_sorts_by_value(qtbot):

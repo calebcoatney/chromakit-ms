@@ -61,7 +61,7 @@ Layout and detection settings take effect when you click Integrate.
 
 ## Export
 
-Export (or "Export…" in View Peak Results) writes three files to `<run>.C/results/`:
+Export (or "Export…" in View Peak Results) writes four files to `<run>.C/results/`:
 
 - `<run> - GCxGC peaks.csv`: ChromSpace's Area-percent layout (2tR in minutes). Use it to compare
   ChromaKit's peaks side by side with a ChromSpace export (see below), or to paste peak rows into a
@@ -75,10 +75,15 @@ Export (or "Export…" in View Peak Results) writes three files to `<run>.C/resu
   take the spectra into library-search and spectral tools that read NIST MSP, such as MZmine. The
   import has not been tested in any of them, so check your tool's MSP options. Peaks with no spectrum are
   left out.
+- `<run> - GCxGC spectra.mgf`: the same spectra in MGF, one `BEGIN IONS … END IONS` block per peak,
+  for spectral-networking tools such as GNPS. It carries no retention time; `FEATURE_ID` (= the peak
+  number) links each spectrum to its 1tR/2tR in the CSV and JSON. `PEPMASS=0` and `MSLEVEL=1` mark EI
+  spectra with no precursor. The exact fields a given networking workflow expects have not been checked
+  against a reference file yet.
 
 By default Integrate and MS Search All also write these files; Settings → Export Settings controls
 that. Run Integrate before Export; the files describe the peaks and settings of the last Integrate.
-A run with no peaks still gets a header-only CSV, an empty MSP and a JSON with an empty peak list.
+A run with no peaks still gets a header-only CSV, an empty MSP and MGF, and a JSON with an empty peak list.
 
 Volume (the CSV's Area) is in detector counts × samples and is not calibrated. Compare peaks with Area %.
 

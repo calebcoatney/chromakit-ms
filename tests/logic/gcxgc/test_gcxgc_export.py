@@ -91,3 +91,42 @@ def test_zero_peaks_still_writes_files(tmp_path):
 def test_safe_name():
     assert safe_name('a/b:c*?') == "a_b_c__"
     assert safe_name("  ") == "sample"
+
+
+def _read_mgf(path):
+    """Minimal MGF reader for tests: list of (headers dict, [(mz, intensity)])."""
+    entries, headers, peaks, inside = [], {}, [], False
+    for raw in open(path, encoding="utf-8"):
+        line = raw.strip()
+        if line == "BEGIN IONS":
+            headers, peaks, inside = {}, [], True
+        elif line == "END IONS":
+            entries.append((headers, peaks))
+            inside = False
+        elif inside and "=" in line and not line[0].isdigit():
+            key, _, val = line.partition("=")
+            headers[key] = val
+        elif inside and line:
+            mz, inten = line.split()
+            peaks.append((float(mz), float(inten)))
+    return entries
+
+
+def test_mgf_has_one_entry_per_spectrum_and_no_retention_time(tmp_path):
+    paths = _export(tmp_path, [_peak(1, 14.3, 0.44, 100.0, name="Heptane"),
+                               _peak(2, 17.2, 1.12, 300.0), _peak(3, 20.0, 2.0, 50.0)])
+    assert paths.mgf.name == "8260-110 SAF - GCxGC spectra.mgf"
+    entries = _read_mgf(paths.mgf)
+    assert [h["FEATURE_ID"] for h, _ in entries] == ["1", "2"]          # peak 3 had no spectrum
+    h1, p1 = entries[0]
+    assert h1["TITLE"] == "Peak 1 - Heptane" and h1["SCANS"] == "1"
+    assert h1["PEPMASS"] == "0" and h1["MSLEVEL"] == "1"
+    assert p1 == [(57.0, 100.0), (71.0, 40.0)]
+    text = paths.mgf.read_text()
+    assert "RTINSECONDS" not in text and "RTINMINUTES" not in text
+    assert text.count("BEGIN IONS") == text.count("END IONS") == 2
+
+
+def test_zero_peaks_writes_an_empty_mgf(tmp_path):
+    paths = _export(tmp_path, [])
+    assert paths.mgf.read_text() == ""
