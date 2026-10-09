@@ -1900,12 +1900,15 @@ class ParametersFrame(QWidget):
         self.set_gcxgc_dbc_available(run.dbc_lsc is not None)
 
     def set_gcxgc_dbc_available(self, available: bool) -> None:
-        """Enable or disable DBC controls based on whether a .dbc.lsc file was found."""
+        """Enable or disable DBC controls based on whether a .dbc.lsc file was found.
+
+        Disabling leaves "Use DBC spectra" checked as the method has it: loading a run never
+        rewrites or dirties the method (GCxGCProcessor ignores use_dbc for a run without a
+        .dbc.lsc). The TIC display falls back to Raw, which is display state only."""
         self.gcxgc_use_dbc.setEnabled(available)
         self.gcxgc_tic_dbc.setEnabled(available)
         if not available:
-            self.gcxgc_use_dbc.setChecked(False)
-            self.gcxgc_use_dbc.setToolTip("No .dbc.lsc file found for this sample.")
+            self.gcxgc_use_dbc.setToolTip("No .dbc.lsc file found for this sample; spectra come from the raw .lsc.")
             self.gcxgc_tic_raw.setChecked(True)
             self.gcxgc_tic_dbc.setToolTip("No .dbc.lsc file found for this sample.")
         else:

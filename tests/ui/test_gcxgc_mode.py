@@ -444,3 +444,26 @@ def test_unavailable_detection_signal_is_reported_not_raised(qtbot, tmp_path):
     assert app._gcxgc_peaks == [] and app._gcxgc_proc is None
     assert "processing error" in app.status_bar.currentMessage()
     assert combo.currentData() == "fid"                     # the run info put the combo back
+
+
+def test_no_dbc_run_does_not_rewrite_the_methods_dbc_choice(qtbot, tmp_path):
+    """Controller ruling (T5): a run without a .dbc.lsc disables "Use DBC spectra" but leaves it
+    checked, so loading it neither rewrites use_dbc_spectra nor dirties the method."""
+    from logic.method import ChromaMethod, GCxGCParams
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    app.current_method = ChromaMethod(name="g", signal_type="gcxgc", gcxgc=GCxGCParams(use_dbc_spectra=True))
+    app._apply_method_to_frames()
+    pf = app.parameters_frame
+    emitted = []
+    pf.parameters_changed.connect(lambda _p: emitted.append(True))
+    dirty_before = app._method_dirty
+    app.on_file_selected(str(synth.build_run(tmp_path, synth.Scene(duration_min=2.0), name="NoDbc", dbc=False)))
+    assert app._gcxgc_run.dbc_lsc is None
+    assert app.current_method.gcxgc.use_dbc_spectra is True
+    assert pf.current_params["gcxgc"]["use_dbc_spectra"] is True
+    assert pf.gcxgc_use_dbc.isChecked() and not pf.gcxgc_use_dbc.isEnabled()
+    assert app._method_dirty == dirty_before and emitted == []
+    app.on_file_selected(str(synth.build_run(tmp_path, synth.Scene(duration_min=2.0), name="WithDbc")))
+    assert pf.gcxgc_use_dbc.isEnabled() and pf.gcxgc_use_dbc.isChecked()
+    assert pf.gcxgc_tic_dbc.isEnabled()
