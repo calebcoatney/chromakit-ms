@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 pytest.importorskip("pytestqt")
@@ -133,3 +135,113 @@ def test_auto_export_follows_integrate_and_ms_search(gcxgc_app, monkeypatch):
     app.ms_frame.search_options = {"search_method": "vector", "top_n": 1}
     app.run_batch_ms_search()
     assert "Benzene" in csv_path.read_text()
+
+
+def _clear_results(c):
+    for f in (c / "results").glob("*"):
+        f.unlink()
+
+
+def _record(c):
+    return json.load(open(c / "results" / "Synth - GCxGC peaks.json"))
+
+
+def _fake_search(app):
+    class FakeToolkit:
+        library = {}
+        mz_shift = 0
+
+        def search_vector(self, spectrum, top_n=1, **kw):
+            return [("Benzene", 0.91)][:top_n]
+
+        search_w2v = search_hybrid = search_vector
+
+    class Settings:                       # never write the real ms/library_path
+        def value(self, key, default=None, **kw):
+            return "/libs/NIST14.json" if key == "ms/library_path" else default
+
+    app.ms_frame.settings = Settings()
+    app.ms_frame.ms_toolkit = FakeToolkit()
+    app.ms_frame.library_loaded = True
+    app.ms_frame.search_options = {"search_method": "vector", "top_n": 1}
+
+
+def test_export_records_the_settings_that_produced_the_peaks(gcxgc_app):
+    app, c = gcxgc_app
+    app.button_frame.integrate_button.click()
+    app.parameters_frame.gcxgc_prominence_entry.setText("9999")   # edited, never re-integrated
+    _clear_results(c)
+    app.button_frame.export_button.click()
+    settings = _record(c)["settings"]
+    assert settings["min_prominence"] == 50.0 and settings["detection_signal"] == "fid"
+
+
+def test_search_provenance_is_recorded_only_after_a_search(gcxgc_app):
+    app, c = gcxgc_app
+    app.button_frame.integrate_button.click()
+    _clear_results(c)
+    app.button_frame.export_button.click()
+    rec = _record(c)
+    assert rec["search_method"] is None and rec["library"] is None
+
+    _fake_search(app)
+    app.run_batch_ms_search()
+    _clear_results(c)
+    app.button_frame.export_button.click()
+    rec = _record(c)
+    assert rec["search_method"] == "vector" and rec["library"] == "NIST14.json"
+
+    app.button_frame.integrate_button.click()            # a new peak set has had no search
+    _clear_results(c)
+    app.button_frame.export_button.click()
+    rec = _record(c)
+    assert rec["search_method"] is None and rec["library"] is None
+
+
+def test_layout_change_without_detection_drops_stale_peaks(gcxgc_app):
+    app, c = gcxgc_app
+    app.button_frame.integrate_button.click()
+    assert app._gcxgc_peaks and not app.view_results_button.isHidden()
+    _clear_results(c)
+    pf = app.parameters_frame
+    pf.gcxgc_baseline_enabled.setChecked(False)
+    pf.gcxgc_peaks_enabled.setChecked(False)
+    pf.gcxgc_phase_entry.setText("-1.0")
+    app.button_frame.integrate_button.click()
+    assert app._gcxgc_run.phase_shift_s == -1.0           # the new layout was applied ...
+    assert app._gcxgc_peaks == [] and app._gcxgc_proc is None      # ... so the old peaks are gone
+    assert app.integrated_peaks == [] and app.plot_frame._gcxgc_peaks == []
+    assert app.view_results_button.isHidden()
+    app.button_frame.export_button.click()
+    assert list((c / "results").glob("*")) == []
+    assert "Run Integrate" in app.status_bar.currentMessage()
+
+
+def test_processing_failure_drops_stale_peaks(gcxgc_app, monkeypatch):
+    app, _ = gcxgc_app
+    app.button_frame.integrate_button.click()
+    assert app._gcxgc_peaks
+
+    def boom(self, **kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("logic.gcxgc_processor.GCxGCProcessor.detect_peaks", boom)
+    app.button_frame.integrate_button.click()
+    assert app._gcxgc_peaks == [] and app._gcxgc_proc is None
+    assert "boom" in app.status_bar.currentMessage()
+
+
+def test_auto_export_failure_is_a_status_message_not_a_dialog(gcxgc_app, monkeypatch):
+    app, _ = gcxgc_app
+    monkeypatch.setattr(app.export_manager, "should_export_json", lambda trigger: True)
+    shown = []
+    monkeypatch.setattr("ui.app.QMessageBox.critical", lambda *a, **k: shown.append(a))
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("logic.gcxgc_export.export_gcxgc_results", boom)
+    app.button_frame.integrate_button.click()
+    assert not shown and "disk full" in app.status_bar.currentMessage()
+    app.button_frame.export_button.click()               # the Export button does warn
+    assert shown and "disk full" in str(shown[0][2])

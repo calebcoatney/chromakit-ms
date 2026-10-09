@@ -62,6 +62,10 @@ class ChromaKitApp(QMainWindow):
         self._gcxgc_proc = None
         self._gcxgc_peaks: list = []
         self._gcxgc_run = None
+        # Provenance of the current peak set, for the JSON record: the parameters that produced
+        # the peaks, and the library search (if any) that annotated them.
+        self._gcxgc_export_settings: dict = {}
+        self._gcxgc_search_info: dict = {"library": None, "search_method": None}
         
         # Load scaling factors from settings
         # self.signal_factor / self.area_factor are numeric mirrors (never None) of
@@ -893,6 +897,8 @@ class ChromaKitApp(QMainWindow):
                 self._gcxgc_run = data['metadata']['gcxgc_run']
                 self._gcxgc_proc = None
                 self._gcxgc_peaks = []
+                self._gcxgc_export_settings = {}
+                self._gcxgc_search_info = {"library": None, "search_method": None}
                 run = self._gcxgc_run
                 self.parameters_frame.set_gcxgc_dbc_available(run.dbc_lsc is not None)
                 self.parameters_frame.gcxgc_pm_entry.setText(f"{run.modulation_period_s:g}")
@@ -1714,11 +1720,13 @@ class ChromaKitApp(QMainWindow):
             return
         self._render_gcxgc_frames()
         if not params['baseline_enabled'] and not params['peaks_enabled']:
+            self._clear_gcxgc_results()       # the layout just changed under the old peaks
             self.status_bar.showMessage("GCxGC: heatmap updated (baseline and peak detection disabled)")
             return
         signal = params.get('detection_signal', 'fid')
+        apex_window = params.get('apex_window', 10)
         proc = GCxGCProcessor(run.frame(signal), run, use_dbc=params.get('use_dbc', True),
-                              apex_window=params.get('apex_window', 10))
+                              apex_window=apex_window)
         try:
             if params['baseline_enabled']:
                 self.status_bar.showMessage("GCxGC: applying 2D baseline correction…")
@@ -1735,11 +1743,14 @@ class ChromaKitApp(QMainWindow):
                     min_sub_peaks=params['min_sub_peaks'],
                 )
         except Exception as e:
+            self._clear_gcxgc_results()       # the layout was applied; the old peaks no longer match it
             self.status_bar.showMessage(f"GCxGC processing error: {e}")
             import traceback; traceback.print_exc()
             return
         self._gcxgc_proc = proc
         self._gcxgc_peaks = peaks
+        self._gcxgc_export_settings = dict(params, detection_signal=signal, apex_window=apex_window)
+        self._gcxgc_search_info = {"library": None, "search_method": None}   # a new peak set has no search yet
         self.integrated_peaks = peaks
         self.plot_frame._gcxgc_peaks = peaks
         self.plot_frame.overlay_gcxgc_peaks(peaks)
@@ -1752,8 +1763,25 @@ class ChromaKitApp(QMainWindow):
         if peaks and self.export_manager.should_export_json('integration'):
             self._export_gcxgc(interactive=False)
 
+    def _clear_gcxgc_results(self) -> None:
+        """Forget the processed peaks: the run's layout changed (or processing failed), so they
+        no longer describe it. Export then asks for a fresh Integrate."""
+        self._gcxgc_proc = None
+        self._gcxgc_peaks = []
+        self._gcxgc_export_settings = {}
+        self._gcxgc_search_info = {"library": None, "search_method": None}
+        self.integrated_peaks = []
+        self.plot_frame._gcxgc_peaks = []
+        self.plot_frame.overlay_gcxgc_peaks([])
+        if hasattr(self, 'view_results_button'):
+            self.view_results_button.setVisible(False)
+
     def _export_gcxgc(self, interactive: bool) -> None:
-        """Write the GCxGC CSV/JSON/MSP results into the run's results/ folder."""
+        """Write the GCxGC CSV/JSON/MSP results into the run's results/ folder.
+
+        The JSON describes the processing that produced the current peaks (the parameter
+        snapshot taken at Integrate, and the library search recorded by MS Search All),
+        not whatever the widgets show now."""
         from logic.gcxgc_export import export_gcxgc_results
         if self._gcxgc_run is None or self._gcxgc_proc is None:
             if interactive:
@@ -1761,17 +1789,15 @@ class ChromaKitApp(QMainWindow):
             return
         base = self.current_cf.path if getattr(self, 'current_cf', None) else self.current_directory_path
         results_dir = os.path.join(base, "results")
-        options = getattr(self.ms_frame, 'search_options', {}) or {}
-        library = None
-        if getattr(self.ms_frame, 'library_loaded', False):
-            library = os.path.basename(self.ms_frame.settings.value("ms/library_path", "") or "") or None
+        search = self._gcxgc_search_info
         try:
             paths = export_gcxgc_results(
                 self._gcxgc_peaks, self._gcxgc_run, results_dir,
-                settings=self.parameters_frame.get_gcxgc_params(),
+                settings=self._gcxgc_export_settings,
                 get_spectrum=self._gcxgc_proc.extract_spectrum,
-                library=library, search_method=options.get('search_method'))
+                library=search.get('library'), search_method=search.get('search_method'))
         except Exception as e:
+            import traceback; traceback.print_exc()
             self.status_bar.showMessage(f"GCxGC export failed: {e}")
             if interactive:
                 QMessageBox.critical(self, "GCxGC export failed", str(e))
@@ -1870,6 +1896,7 @@ class ChromaKitApp(QMainWindow):
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
 
+        searched = False
         for i, peak in enumerate(peaks):
             if progress.wasCanceled():
                 break
@@ -1879,6 +1906,7 @@ class ChromaKitApp(QMainWindow):
             spectrum = self._gcxgc_proc.extract_spectrum(peak)
             if not spectrum:
                 continue
+            searched = True
             try:
                 if method == 'w2v':
                     results = toolkit.search_w2v(
@@ -1920,6 +1948,9 @@ class ChromaKitApp(QMainWindow):
                 print(f"MS search error for peak {peak.peak_number}: {e}")
 
         progress.setValue(len(peaks))
+        if searched:
+            library = os.path.basename(self.ms_frame.settings.value("ms/library_path", "") or "") or None
+            self._gcxgc_search_info = {"library": library, "search_method": method}
         self.status_bar.showMessage(
             f"GCxGC MS search complete ({method}): "
             f"{sum(1 for p in peaks if p.compound_name)} / {len(peaks)} peaks matched"
