@@ -59,6 +59,17 @@ class GCxGC2DPeak(Feature):
         self.mol_percent = None
         self.wt_percent = None
 
+        # Provenance and spectrum flags, filled by GCxGCProcessor
+        self.detection_signal = "fid"     # "fid" | "tic" | "dbc_tic"
+        self.apex_scan = None             # apex column in its frame
+        self.apex_raw_index = None        # apex sample index in the detection signal
+        self.spectrum_scan = None         # TOF scan the spectrum came from
+        self.spectrum_source = None       # "dbc" | "lsc"
+        self.apex_found = None
+        self.apex_distance_scans = None
+        self.saturated = None
+        self.top_hits = []                # [(name, score, casno), ...], best first
+
     def as_dict(self) -> dict:
         return {
             "peak_number": self.peak_number,
@@ -81,6 +92,14 @@ class GCxGC2DPeak(Feature):
             "mass_mg": self.mass_mg,
             "mol_percent": self.mol_percent,
             "wt_percent": self.wt_percent,
+            "detection_signal": self.detection_signal,
+            "apex_raw_index": self.apex_raw_index,
+            "spectrum_scan": self.spectrum_scan,
+            "spectrum_source": self.spectrum_source,
+            "apex_found": self.apex_found,
+            "apex_distance_scans": self.apex_distance_scans,
+            "saturated": self.saturated,
+            "top_hits": [{"name": n, "score": s, "casno": c} for n, s, c in self.top_hits],
         }
 
 

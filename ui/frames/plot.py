@@ -1204,15 +1204,11 @@ class PlotFrame(QWidget):
         # Emit signal to request adding peak to RT table
         self.add_to_rt_table_requested.emit(peak_index)
     
-    def render_gcxgc(self, fid_2d, tic_2d, pm: float, hz: float) -> None:
-        """Replace line-plot axes with two stacked GCxGC heatmaps.
+    def render_gcxgc(self, fid_frame, tic_frame) -> None:
+        """Two stacked GCxGC heatmaps (TIC on top, FID below) from Frame2D objects.
 
-        Top axis: TIC (identification context)
-        Bottom axis: FID (quantitation signal)
-        Both use linear normalization clipped at the 99th percentile, matching
-        the Gemini reference visualization so that near-zero background appears
-        dark rather than colored.
-        X: 1st dim RT (min), Y: 2nd dim RT (s), origin at bottom-left.
+        Linear colour scale clipped at the 99th percentile. X: 1tR (min) from each frame's
+        row times; Y: 2tR (s), origin bottom-left.
         """
         import numpy as np
 
@@ -1221,37 +1217,29 @@ class PlotFrame(QWidget):
         ax_tic = self.figure.add_subplot(2, 1, 1)
         ax_fid = self.figure.add_subplot(2, 1, 2, sharex=ax_tic, sharey=ax_tic)
 
-        n_mods = fid_2d.shape[0]
-        t1_max = n_mods * pm / 60.0
-        t2_max = pm
-        extent = [0, t1_max, 0, t2_max]
+        def extent(f):
+            if len(f.t1_min) == 0:
+                return [0.0, 1.0, 0.0, f.N / f.hz]
+            return [f.t1_min[0], f.t1_min[-1] + f.N / f.hz / 60.0, 0.0, f.N / f.hz]
 
-        def _vmax(data):
-            """99th-percentile clip — keeps peaks visible without log distortion."""
-            return float(np.percentile(data, 99))
+        def vmax(data):
+            return float(np.percentile(data, 99)) if data.size else 1.0
 
-        ax_tic.imshow(
-            tic_2d.T, aspect='auto', origin='lower',
-            cmap='viridis', vmin=0, vmax=_vmax(tic_2d), extent=extent,
-        )
+        ax_tic.imshow(tic_frame.data.T, aspect='auto', origin='lower', cmap='viridis',
+                      vmin=0, vmax=vmax(tic_frame.data), extent=extent(tic_frame))
         ax_tic.set_ylabel("2D RT (s)")
-        ax_tic.set_title("TIC")
+        ax_tic.set_title("DBC TIC" if tic_frame.signal == "dbc_tic" else "TIC")
         ax_tic.tick_params(labelbottom=False)
-
-        im = ax_fid.imshow(
-            fid_2d.T, aspect='auto', origin='lower',
-            cmap='viridis', vmin=0, vmax=_vmax(fid_2d), extent=extent,
-        )
+        im = ax_fid.imshow(fid_frame.data.T, aspect='auto', origin='lower', cmap='viridis',
+                           vmin=0, vmax=vmax(fid_frame.data), extent=extent(fid_frame))
         ax_fid.set_xlabel("1st Dimension RT (min)")
         ax_fid.set_ylabel("2D RT (s)")
         ax_fid.set_title("FID")
-
         self.figure.colorbar(im, ax=[ax_tic, ax_fid], label="Intensity")
         self.canvas.draw()
-
         self._gcxgc_ax_tic = ax_tic
         self._gcxgc_ax_fid = ax_fid
-    
+
     def overlay_gcxgc_peaks(self, peaks: list) -> None:
         """Overlay detected peaks as red + markers on both heatmap axes."""
         if not hasattr(self, '_gcxgc_ax_tic'):

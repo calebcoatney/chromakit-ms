@@ -61,6 +61,7 @@ class ChromaKitApp(QMainWindow):
         self._gcxgc_metadata: dict = {}
         self._gcxgc_proc = None
         self._gcxgc_peaks: list = []
+        self._gcxgc_run = None
         
         # Load scaling factors from settings
         # self.signal_factor / self.area_factor are numeric mirrors (never None) of
@@ -802,7 +803,16 @@ class ChromaKitApp(QMainWindow):
             if folder_path.endswith('.C'):
                 self.current_cf = CFolder.open(folder_path)
                 self.current_profile = self.current_cf.profile
-                data = self.current_cf.load_signal(signal_factor=self.signal_factor, detector=detector)
+                from logic.gcxgc_run import MissingModulationPeriod
+                try:
+                    data = self.current_cf.load_signal(signal_factor=self.signal_factor, detector=detector)
+                except MissingModulationPeriod:
+                    if batch_mode:
+                        raise
+                    data = self._load_gcxgc_with_prompted_period(folder_path)
+                    if data is None:
+                        self.status_bar.showMessage("Load cancelled: no modulation period entered")
+                        return
                 # Sync the auto-detected detector back to data_handler so exports see the real name
                 detected = data.get('metadata', {}).get('detector', '')
                 if detected and detected != 'Unknown':
@@ -879,25 +889,15 @@ class ChromaKitApp(QMainWindow):
             self._gcxgc_mode = is_gcxgc
             
             if is_gcxgc:
-                # GCxGC mode: render heatmaps using user-specified pm + phase shift
                 self._gcxgc_metadata = data['metadata']
-                # Inform the parameters panel whether .dbc.lsc is available
-                dbc_available = data['metadata'].get('dbc_lsc_path') is not None
-                self.parameters_frame.set_gcxgc_dbc_available(dbc_available)
-                params = self.parameters_frame.get_gcxgc_params()
-                from logic.loaders.sepsolve_loader import _reshape_to_2d
-                pm = params['pm']
-                hz = data['metadata']['hz']
-                phase_scans = int(params['phase_shift'] * hz)
-                scans_per_mod = int(pm * hz)
-                fid_2d = np.roll(_reshape_to_2d(data['metadata']['fid_1d'], scans_per_mod), phase_scans, axis=1)
-                tic_source_1d = (
-                    data['metadata']['dbc_tic_1d']
-                    if params.get('tic_source') == 'dbc' and data['metadata'].get('dbc_tic_1d') is not None
-                    else data['metadata']['tic_1d']
-                )
-                tic_2d = np.roll(_reshape_to_2d(tic_source_1d, scans_per_mod), phase_scans, axis=1)
-                self.plot_frame.render_gcxgc(fid_2d, tic_2d, pm, hz)
+                self._gcxgc_run = data['metadata']['gcxgc_run']
+                self._gcxgc_proc = None
+                self._gcxgc_peaks = []
+                run = self._gcxgc_run
+                self.parameters_frame.set_gcxgc_dbc_available(run.dbc_lsc is not None)
+                self.parameters_frame.gcxgc_pm_entry.setText(f"{run.modulation_period_s:g}")
+                self.parameters_frame.gcxgc_phase_entry.setText(f"{run.phase_shift_s:g}")
+                self._render_gcxgc_frames()
                 self.real_data_loaded = True
             else:
                 # Process signal data if available
@@ -1664,55 +1664,64 @@ class ChromaKitApp(QMainWindow):
         if self._gcxgc_mode and self._gcxgc_metadata:
             self._run_gcxgc_processing()
 
-    def _run_gcxgc_processing(self) -> None:
-        """Run GCxGC processing: re-reshape with user pm, apply phase shift,
-        optionally apply 2D baseline correction, optionally detect peaks."""
-        from logic.gcxgc_processor import GCxGCProcessor
-        from logic.loaders.sepsolve_loader import _reshape_to_2d
+    def _load_gcxgc_with_prompted_period(self, folder_path):
+        """Ask for a modulation period the run's files do not record, then load with it."""
+        from PySide6.QtWidgets import QInputDialog
+        from logic.loaders.sepsolve_loader import SepSolveLoader
+        value, ok = QInputDialog.getDouble(
+            self, "Modulation period",
+            "This run's files do not record a modulation period.\nEnter it in seconds:",
+            4.0, 0.1, 60.0, 3)
+        if not ok:
+            return None
+        return SepSolveLoader().load(folder_path, modulation_period_s=value)
 
-        meta = self._gcxgc_metadata
+    def _gcxgc_tic_signal(self) -> str:
+        run = self._gcxgc_run
+        if self.parameters_frame.get_gcxgc_params().get('tic_source') == 'dbc' and run.dbc_tic is not None:
+            return 'dbc_tic'
+        return 'tic' if run.tic is not None else 'dbc_tic'
+
+    def _apply_gcxgc_layout_from_ui(self) -> None:
+        run = self._gcxgc_run
         params = self.parameters_frame.get_gcxgc_params()
-
         pm = params['pm']
-        hz = meta['hz']
-        phase_scans = int(params['phase_shift'] * hz)
-        scans_per_mod = int(pm * hz)
+        if pm is None and run.file_layout['modulation_period_s'][0] is None:
+            pm = run.modulation_period_s          # entered at load; the files have none
+        run.set_layout(modulation_period_s=pm, phase_shift_s=params['phase_shift'])
 
-        fid_2d = np.roll(_reshape_to_2d(meta['fid_1d'], scans_per_mod), phase_scans, axis=1)
-        tic_source_1d = (
-            meta['dbc_tic_1d']
-            if params.get('tic_source') == 'dbc' and meta.get('dbc_tic_1d') is not None
-            else meta['tic_1d']
-        )
-        tic_2d = np.roll(_reshape_to_2d(tic_source_1d, scans_per_mod), phase_scans, axis=1)
+    def _render_gcxgc_frames(self, fid_data=None) -> None:
+        from dataclasses import replace
+        run = self._gcxgc_run
+        fid = run.frame('fid')
+        if fid_data is not None and fid_data.shape == fid.data.shape:
+            fid = replace(fid, data=fid_data)
+        self.plot_frame.render_gcxgc(fid, run.frame(self._gcxgc_tic_signal()))
 
-        # Render heatmap with current pm/phase settings
-        self.plot_frame.render_gcxgc(fid_2d, tic_2d, pm, hz)
-
+    def _run_gcxgc_processing(self) -> None:
+        """Apply the layout, optional 2D baseline and peak detection on the run's frames."""
+        from logic.gcxgc_processor import GCxGCProcessor
+        run = self._gcxgc_run
+        params = self.parameters_frame.get_gcxgc_params()
+        try:
+            self._apply_gcxgc_layout_from_ui()
+        except ValueError as e:
+            self.status_bar.showMessage(f"GCxGC layout error: {e}")
+            QMessageBox.warning(self, "GCxGC layout", str(e))
+            return
+        self._render_gcxgc_frames()
         if not params['baseline_enabled'] and not params['peaks_enabled']:
             self.status_bar.showMessage("GCxGC: heatmap updated (baseline and peak detection disabled)")
             return
-
-        self.status_bar.showMessage("Running GCxGC processing…")
-
-        proc = GCxGCProcessor(
-            fid_2d=fid_2d,
-            tic_2d=tic_2d,
-            pm=pm,
-            hz=hz,
-            lsc_path=meta['lsc_path'],
-            phase_scans=phase_scans,
-            dbc_lsc_path=meta.get('dbc_lsc_path'),
-            use_dbc=params.get('use_dbc', True),
-        )
-
+        signal = params.get('detection_signal', 'fid')
+        proc = GCxGCProcessor(run.frame(signal), run, use_dbc=params.get('use_dbc', True),
+                              apex_window=params.get('apex_window', 10))
         try:
             if params['baseline_enabled']:
                 self.status_bar.showMessage("GCxGC: applying 2D baseline correction…")
                 proc.apply_baseline(lam=params['lam'], diff_order=params['diff_order'])
-                # Re-render with the corrected FID so user sees the change
-                self.plot_frame.render_gcxgc(proc._fid_corrected, tic_2d, pm, hz)
-
+                if signal == 'fid':
+                    self._render_gcxgc_frames(fid_data=proc.corrected)
             peaks = []
             if params['peaks_enabled']:
                 self.status_bar.showMessage("GCxGC: detecting peaks…")
@@ -1726,20 +1735,17 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage(f"GCxGC processing error: {e}")
             import traceback; traceback.print_exc()
             return
-
         self._gcxgc_proc = proc
         self._gcxgc_peaks = peaks
-        # Make peaks available to run_batch_ms_search via integrated_peaks
         self.integrated_peaks = peaks
         self.plot_frame._gcxgc_peaks = peaks
         self.plot_frame.overlay_gcxgc_peaks(peaks)
-
         if peaks:
             self.button_frame.batch_search_button.setEnabled(True)
             self._show_gcxgc_results_button(peaks)
             self.status_bar.showMessage(f"GCxGC: detected {len(peaks)} peaks — click a peak to view spectrum, or use MS Search All")
         else:
-            self.status_bar.showMessage(f"GCxGC: heatmap updated — no peaks detected")
+            self.status_bar.showMessage("GCxGC: heatmap updated — no peaks detected")
 
     def _show_gcxgc_results_button(self, peaks: list) -> None:
         """Show/update the 'View Results' button in the status bar for GCxGC peaks."""
@@ -1823,6 +1829,7 @@ class ChromaKitApp(QMainWindow):
         options = self.ms_frame.search_options if hasattr(self.ms_frame, 'search_options') else {}
         method = options.get('search_method', 'vector')
 
+        top_n = int(options.get('top_n', 5))
         peaks = self._gcxgc_peaks
         progress = QProgressDialog("Searching MS library…", "Cancel", 0, len(peaks), self)
         progress.setWindowModality(Qt.WindowModal)
@@ -1841,7 +1848,7 @@ class ChromaKitApp(QMainWindow):
                 if method == 'w2v':
                     results = toolkit.search_w2v(
                         spectrum,
-                        top_n=1,
+                        top_n=top_n,
                         intensity_power=options.get('intensity_power', 0.6),
                         top_k_clusters=options.get('top_k_clusters', 10),
                     )
@@ -1849,7 +1856,7 @@ class ChromaKitApp(QMainWindow):
                     results = toolkit.search_hybrid(
                         spectrum,
                         method=options.get('hybrid_method', 'auto'),
-                        top_n=1,
+                        top_n=top_n,
                         intensity_power=options.get('intensity_power', 0.6),
                         weighting_scheme=options.get('weighting', 'NIST_GC'),
                         composite=(options.get('similarity') == 'composite'),
@@ -1859,15 +1866,21 @@ class ChromaKitApp(QMainWindow):
                 else:  # 'vector' (default)
                     results = toolkit.search_vector(
                         spectrum,
-                        top_n=1,
+                        top_n=top_n,
                         composite=(options.get('similarity') == 'composite'),
                         weighting_scheme=options.get('weighting', 'NIST_GC'),
                         unmatched_method=options.get('unmatched', 'keep_all'),
                         top_k_clusters=options.get('top_k_clusters', 10),
                     )
-                if results:
-                    peak.compound_name = results[0][0]
-                    peak.match_score = float(results[0][1])
+                from logic.batch_search import format_casno
+                hits = []
+                for name, score in (results or [])[:top_n]:
+                    compound = getattr(toolkit, 'library', {}).get(name)
+                    cas = getattr(compound, 'casno', None) if compound is not None else None
+                    hits.append((name, float(score), format_casno(cas) if cas else None))
+                peak.top_hits = hits
+                if hits:
+                    peak.compound_name, peak.match_score, peak.casno = hits[0]
             except Exception as e:
                 print(f"MS search error for peak {peak.peak_number}: {e}")
 
@@ -2390,6 +2403,11 @@ class ChromaKitApp(QMainWindow):
 
     def on_automation_clicked(self):
         """Handle automation button click."""
+        if self._gcxgc_mode:
+            QMessageBox.information(self, "Batch processing",
+                                    "Batch processing is not supported for GCxGC runs yet. "
+                                    "Process GCxGC runs one at a time.")
+            return
         # Start the automation process directly without checking enabled state
         self.start_automation()
 
