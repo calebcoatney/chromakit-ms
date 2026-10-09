@@ -51,6 +51,8 @@ def parse_hdr_text(text: str, path: str = "<hdr text>") -> HdrInfo:
     ``path`` is only used in that error; read_hdr passes the real file.
     """
     pm = fid = tof = name = None
+    pm_valve = None
+    changes = {}               # valve number -> its "ValveN Changes" count
     section = None
     in_fid_signal = False
 
@@ -72,11 +74,17 @@ def parse_hdr_text(text: str, path: str = "<hdr text>") -> HdrInfo:
         if line.startswith(";") or "=" not in line:
             continue
         key, _, val = (s.strip() for s in line.partition("="))
-        if section == "INSIGHT Modulator" and pm is None and re.fullmatch(r"Valve\d+ Change0", key):
+        if section == "INSIGHT Modulator" and (m := re.fullmatch(r"Valve(\d+) Changes", key)):
+            try:
+                changes[m.group(1)] = int(val)
+            except ValueError:
+                pass           # only used for the variable-period warning below
+        elif section == "INSIGHT Modulator" and pm is None and (m := re.fullmatch(r"Valve(\d+) Change0", key)):
             fields = val.split(",")
             if len(fields) >= 2:
                 # Fields: <unknown>, PM s, flush ms, hold min.
                 pm = num(fields[1], f"modulation period (field 2 of {key})", line_no)
+                pm_valve = m.group(1)
         elif key == "Details":
             in_fid_signal = "(FID)" in val
         elif key == "Data Rate" and in_fid_signal and fid is None:
@@ -87,6 +95,11 @@ def parse_hdr_text(text: str, path: str = "<hdr text>") -> HdrInfo:
                 tof = 1e6 / period_us
         elif section == "TOF-DS Method" and key == "Name" and name is None:
             name = val
+    n_changes = changes.get(pm_valve, 1) if pm_valve is not None else 1
+    if n_changes > 1:
+        log.warning("%s: Valve%s has %d modulation period changes; using Change0 (%g s) for the "
+                    "whole run (a variable modulation period is not supported yet)",
+                    path, pm_valve, n_changes, pm)
     return HdrInfo(pm, fid, tof, name)
 
 

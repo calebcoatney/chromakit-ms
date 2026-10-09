@@ -65,7 +65,7 @@ class ChromaKitApp(QMainWindow):
         # Provenance of the current peak set, for the JSON record: the parameters that produced
         # the peaks, and the library search (if any) that annotated them.
         self._gcxgc_export_settings: dict = {}
-        self._gcxgc_search_info: dict = {"library": None, "search_method": None}
+        self._gcxgc_search_info: dict = {"library": None, "search_method": None, "complete": None}
         
         # Load scaling factors from settings
         # self.signal_factor / self.area_factor are numeric mirrors (never None) of
@@ -1030,9 +1030,13 @@ class ChromaKitApp(QMainWindow):
             # Switch to MS tab
             ms_idx = self.right_tabs.indexOf(self.ms_frame)
             self.right_tabs.setCurrentIndex(ms_idx)
-        self.status_bar.showMessage(
-            f"Peak {peak.peak_number}: rt1={peak.rt1:.3f} min, rt2={peak.rt2:.3f} s, vol={peak.volume:.0f}"
-        )
+        # MS Search All's hits for this peak (an empty list clears the previous peak's table)
+        self.ms_frame.update_ms_results([(name, score) for name, score, _cas in peak.top_hits])
+        message = f"Peak {peak.peak_number}: rt1={peak.rt1:.3f} min, rt2={peak.rt2:.3f} s, vol={peak.volume:.0f}"
+        if peak.compound_name:
+            score = f" ({peak.match_score:.3f})" if peak.match_score is not None else ""
+            message += f" — {peak.compound_name}{score}"
+        self.status_bar.showMessage(message)
         
     @Slot(float, float, float)
     def on_view_spectrum(self, rt, subtract_rt, mz_shift):
@@ -1780,7 +1784,7 @@ class ChromaKitApp(QMainWindow):
         self._gcxgc_peaks = peaks
         self._gcxgc_export_settings = dict(params, pm=run.modulation_period_s, phase_shift=run.phase_shift_s,
                                            detection_signal=signal, apex_window=apex_window)
-        self._gcxgc_search_info = {"library": None, "search_method": None}   # a new peak set has no search yet
+        self._gcxgc_search_info = {"library": None, "search_method": None, "complete": None}   # no search yet
         self.integrated_peaks = peaks
         self.plot_frame._gcxgc_peaks = peaks
         self.plot_frame.overlay_gcxgc_peaks(peaks)
@@ -1804,7 +1808,7 @@ class ChromaKitApp(QMainWindow):
         self._gcxgc_proc = None
         self._gcxgc_peaks = []
         self._gcxgc_export_settings = {}
-        self._gcxgc_search_info = {"library": None, "search_method": None}
+        self._gcxgc_search_info = {"library": None, "search_method": None, "complete": None}
         self.integrated_peaks = []
         self.plot_frame._gcxgc_peaks = []
         self.plot_frame.overlay_gcxgc_peaks([])
@@ -1846,7 +1850,8 @@ class ChromaKitApp(QMainWindow):
                 self._gcxgc_peaks, self._gcxgc_run, results_dir,
                 settings=self._gcxgc_export_settings,
                 get_spectrum=self._gcxgc_proc.extract_spectrum,
-                library=search.get('library'), search_method=search.get('search_method'))
+                library=search.get('library'), search_method=search.get('search_method'),
+                search_complete=search.get('complete'))
         except Exception as e:
             import traceback; traceback.print_exc()
             self.status_bar.showMessage(f"GCxGC export failed: {e}")
@@ -1944,13 +1949,19 @@ class ChromaKitApp(QMainWindow):
 
         top_n = int(options.get('top_n', 5))
         peaks = self._gcxgc_peaks
+        # A new search replaces the last one: no peak may keep an ID this search did not give it.
+        for peak in peaks:
+            peak.compound_name = peak.match_score = peak.casno = None
+            peak.top_hits = []
+        self._gcxgc_search_info = {"library": None, "search_method": None, "complete": None}
         progress = QProgressDialog("Searching MS library…", "Cancel", 0, len(peaks), self)
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
 
-        searched = False
+        searched = cancelled = False
         for i, peak in enumerate(peaks):
             if progress.wasCanceled():
+                cancelled = True
                 break
             progress.setValue(i)
             progress.setLabelText(f"Peak {i+1}/{len(peaks)}  rt1={peak.rt1:.2f} min")
@@ -2000,11 +2011,11 @@ class ChromaKitApp(QMainWindow):
                 print(f"MS search error for peak {peak.peak_number}: {e}")
 
         progress.setValue(len(peaks))
-        if searched:
+        if searched or cancelled:
             library = os.path.basename(self.ms_frame.settings.value("ms/library_path", "") or "") or None
-            self._gcxgc_search_info = {"library": library, "search_method": method}
+            self._gcxgc_search_info = {"library": library, "search_method": method, "complete": not cancelled}
         self.status_bar.showMessage(
-            f"GCxGC MS search complete ({method}): "
+            f"GCxGC MS search {'cancelled' if cancelled else 'complete'} ({method}): "
             f"{sum(1 for p in peaks if p.compound_name)} / {len(peaks)} peaks matched"
         )
         self._show_gcxgc_results_button(peaks)
@@ -2521,12 +2532,18 @@ class ChromaKitApp(QMainWindow):
         return True
 
 
+    def _refuse_batch_in_gcxgc_mode(self) -> bool:
+        """Tell the user batch processing does not handle GCxGC runs; True when refused."""
+        if not self._gcxgc_mode:
+            return False
+        QMessageBox.information(self, "Batch processing",
+                                "Batch processing is not supported for GCxGC runs yet. "
+                                "Process GCxGC runs one at a time.")
+        return True
+
     def on_automation_clicked(self):
         """Handle automation button click."""
-        if self._gcxgc_mode:
-            QMessageBox.information(self, "Batch processing",
-                                    "Batch processing is not supported for GCxGC runs yet. "
-                                    "Process GCxGC runs one at a time.")
+        if self._refuse_batch_in_gcxgc_mode():
             return
         # Start the automation process directly without checking enabled state
         self.start_automation()
@@ -4136,6 +4153,8 @@ class ChromaKitApp(QMainWindow):
     
     def show_batch_queue_dialog(self):
         """Show the batch job setup dialog before the progress dialog."""
+        if self._refuse_batch_in_gcxgc_mode():
+            return
         from ui.dialogs.batch_job_dialog import BatchJobDialog
         
         # Create and show the setup dialog first

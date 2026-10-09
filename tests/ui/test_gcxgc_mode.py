@@ -187,7 +187,7 @@ def test_search_provenance_is_recorded_only_after_a_search(gcxgc_app):
     _clear_results(c)
     app.button_frame.export_button.click()
     rec = _record(c)
-    assert rec["search_method"] is None and rec["library"] is None
+    assert rec["search_method"] is None and rec["library"] is None and rec["search_complete"] is None
 
     _fake_search(app)
     app.run_batch_ms_search()
@@ -195,6 +195,7 @@ def test_search_provenance_is_recorded_only_after_a_search(gcxgc_app):
     app.button_frame.export_button.click()
     rec = _record(c)
     assert rec["search_method"] == "vector" and rec["library"] == "NIST14.json"
+    assert rec["search_complete"] is True
 
     app.button_frame.integrate_button.click()            # a new peak set has had no search
     _clear_results(c)
@@ -676,3 +677,91 @@ def test_cancelled_period_prompt_drops_the_previous_run(qtbot, tmp_path, monkeyp
     assert "Load cancelled" in app.status_bar.currentMessage()
     _assert_run_dropped(app, run_a)
     _assert_nothing_written(app, a, b)
+
+
+# ── Final review, Minors 4, 5, 7 and 10 ─────────────────────────────────────
+
+def _toolkit(*hits):
+    class FakeToolkit:
+        library = {}
+        mz_shift = 0
+
+        def search_vector(self, spectrum, top_n=1, **kw):
+            return list(hits)[:top_n]
+
+        search_w2v = search_hybrid = search_vector
+
+    return FakeToolkit()
+
+
+def test_clicking_a_searched_peak_shows_its_hits(gcxgc_app):
+    app, _ = gcxgc_app
+    app.button_frame.integrate_button.click()
+    _fake_search(app)
+    app.ms_frame.ms_toolkit = _toolkit(("Benzene", 0.91), ("Toluene", 0.80))
+    app.ms_frame.search_options = {"search_method": "vector", "top_n": 2}
+    app.run_batch_ms_search()
+    first, second = app._gcxgc_peaks[:2]
+    app.plot_frame.peak_selected.emit(first)
+    assert "Benzene (0.910)" in app.status_bar.currentMessage()
+    tree = app.ms_frame.ms_search_tree
+    assert [(tree.topLevelItem(i).text(0), tree.topLevelItem(i).text(1))
+            for i in range(tree.topLevelItemCount())] == [("Benzene", "0.910"), ("Toluene", "0.800")]
+    second.top_hits, second.compound_name, second.match_score = [], None, None
+    app.plot_frame.peak_selected.emit(second)               # no hits: the previous peak's table goes
+    assert tree.topLevelItemCount() == 0 and "Benzene" not in app.status_bar.currentMessage()
+
+
+def _cancel_after(monkeypatch, n_peaks):
+    """Make MS Search All's progress dialog report Cancel once n_peaks peaks were searched."""
+    calls = {"n": 0}
+
+    def was_canceled(self):
+        calls["n"] += 1
+        return calls["n"] > n_peaks
+
+    monkeypatch.setattr("PySide6.QtWidgets.QProgressDialog.wasCanceled", was_canceled)
+
+
+def test_ms_search_all_starts_from_no_ids_and_marks_a_cancelled_search(gcxgc_app, monkeypatch):
+    app, c = gcxgc_app
+    monkeypatch.setattr(app.export_manager, "should_export_json", lambda trigger: False)
+    app.button_frame.integrate_button.click()
+    _fake_search(app)
+    app.run_batch_ms_search()                                         # search 1: complete
+    assert all(p.compound_name == "Benzene" for p in app._gcxgc_peaks)
+    assert app._gcxgc_search_info["complete"] is True
+    app.ms_frame.ms_toolkit = _toolkit(("Toluene", 0.7))
+    app.ms_frame.search_options = {"search_method": "w2v", "top_n": 1}
+    _cancel_after(monkeypatch, 1)
+    app.run_batch_ms_search()                                         # search 2: cancelled after peak 1
+    first, *rest = app._gcxgc_peaks
+    assert (first.compound_name, first.top_hits[0][0]) == ("Toluene", "Toluene")
+    for p in rest:                                                    # no leftovers from search 1
+        assert (p.compound_name, p.match_score, p.casno, p.top_hits) == (None, None, None, [])
+    assert app._gcxgc_search_info == {"library": "NIST14.json", "search_method": "w2v", "complete": False}
+    assert "cancelled" in app.status_bar.currentMessage()
+    _clear_results(c)
+    app.button_frame.export_button.click()
+    rec = _record(c)
+    assert (rec["search_method"], rec["search_complete"]) == ("w2v", False)
+
+
+def test_spectrum_window_cannot_be_zero(gcxgc_app):
+    import pydantic
+    from logic.method import GCxGCParams
+    app, _ = gcxgc_app
+    assert app.parameters_frame.gcxgc_apex_window_spin.minimum() == 1
+    with pytest.raises(pydantic.ValidationError):
+        GCxGCParams(apex_window_scans=0)
+
+
+def test_batch_process_directories_is_refused_in_gcxgc_mode(gcxgc_app, monkeypatch):
+    from PySide6.QtGui import QAction
+    app, _ = gcxgc_app
+    shown, opened = [], []
+    monkeypatch.setattr("ui.app.QMessageBox.information", lambda *a, **k: shown.append(a))
+    monkeypatch.setattr("ui.dialogs.batch_job_dialog.BatchJobDialog.exec", lambda self: opened.append(True))
+    action = next(a for a in app.findChildren(QAction) if a.text() == "Batch Process Directories...")
+    action.trigger()
+    assert shown and "not supported" in str(shown[0][2]) and opened == []

@@ -33,9 +33,9 @@ The Parameters tab has the GCxGC controls:
 - **2D Baseline Correction.** On by default. Lambda and Diff. Order tune the 2D baseline fit.
 - **2D Peak Detection.** On by default. Min Prominence (in detector counts; blank for none),
   2D RT Tolerance and Min Modulations control how slices from neighbouring modulations are joined into
-  one peak. Spectrum Window (scans) sets how far around a peak's expected position ChromaKit looks for
-  its mass-spectral apex. FID→TOF Offset is "Auto (fit)" by default; choose "Fixed" to enter the offset
-  in TOF scans yourself.
+  one peak. Spectrum Window (scans, at least 1) sets how far around a peak's expected position ChromaKit
+  looks for its mass-spectral apex. FID→TOF Offset is "Auto (fit)" by default; choose "Fixed" to enter
+  the offset in TOF scans yourself.
 
 Layout and detection settings take effect when you click Integrate.
 
@@ -50,14 +50,18 @@ Layout and detection settings take effect when you click Integrate.
 - "View Peak Results" (status bar, lower right) lists every peak with its retention times, volume,
   number of modulations, compound and match score.
 - Click near a peak's marker on the bottom (FID) heatmap. ChromaKit selects the nearest peak, shows its
-  spectrum in the Mass Spectrometry tab and prints its retention times and volume in the status bar.
+  spectrum in the Mass Spectrometry tab and prints its retention times and volume in the status bar;
+  after MS Search All the status bar also names its best hit and score, and the tab's results table
+  lists its top hits.
   The spectrum comes from the TOF scan at the peak's own apex: the FID apex is mapped to TOF time through
   the FID→TOF offset, and the TOF TIC is searched within the Spectrum Window for its maximum. Up to three
   adjacent scans are averaged, leaving out saturated ones.
 - Search Library (Mass Spectrometry tab) shows the top hits for the spectrum on display. MS Search All
   (under the plot) searches every peak, writes the best hit into the Compound and Match Score columns
-  and records the top hits in the JSON. Both need a loaded library. Use Vector Search (the default) or
-  Word2Vec Search, set under Configure…; Hybrid Search is not available with the current ms-toolkit.
+  and records the top hits in the JSON. Each MS Search All starts by clearing the previous IDs; if you
+  cancel it, the peaks it did not reach have no ID and the JSON's `search_complete` is false. Both need
+  a loaded library. Use Vector Search (the default) or Word2Vec Search, set under Configure…; Hybrid
+  Search is not available with the current ms-toolkit.
 
 ## Export
 
@@ -106,4 +110,5 @@ ChromSpace rows it cannot read, and when it reads no peaks at all (usually the w
 ## Not yet
 
 Region/stencil drawing and group-type (PIONA) wt%, deconvolution, retention indices, multi-sample
-alignment, and batch processing of GCxGC runs ("Batch Process All Files" says so and does nothing).
+alignment, and batch processing of GCxGC runs ("Batch Process All Files" and Process → "Batch Process
+Directories..." say so and do nothing).

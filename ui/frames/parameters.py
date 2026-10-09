@@ -1727,7 +1727,7 @@ class ParametersFrame(QWidget):
         self.gcxgc_use_dbc.setChecked(g.use_dbc_spectra)
         pk.addRow(self.gcxgc_use_dbc)
         self.gcxgc_apex_window_spin = QSpinBox()
-        self.gcxgc_apex_window_spin.setRange(0, 50)
+        self.gcxgc_apex_window_spin.setRange(1, 50)     # 0 would search nothing yet flag every apex found
         self.gcxgc_apex_window_spin.setValue(g.apex_window_scans)
         self.gcxgc_apex_window_spin.setToolTip("Search ± this many TOF scans around the peak's mapped apex for its spectrum.")
         pk.addRow("Spectrum Window (scans):", self.gcxgc_apex_window_spin)

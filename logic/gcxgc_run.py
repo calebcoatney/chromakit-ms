@@ -74,8 +74,11 @@ def _rate_from_timestamps(lsc: LscFile) -> float:
     return round((len(ts) - 1) / span, 3)
 
 
-def _pick(names, pred):
+def _pick(names, pred, what, folder):
     hits = sorted(n for n in names if pred(n.lower()))
+    if len(hits) > 1:
+        log.warning("%s: %d %s candidates (%s); using %s", folder, len(hits), what,
+                    ", ".join(hits), hits[0])
     return hits[0] if hits else None
 
 
@@ -108,10 +111,10 @@ class GCxGCRun:
     def from_c_folder(cls, c_path, *, modulation_period_s=None, phase_shift_s=None) -> "GCxGCRun":
         data_dir = os.path.join(str(c_path), "data")
         names = os.listdir(data_dir)
-        hdr = _pick(names, lambda n: n.endswith(".hdr"))
-        rsd = _pick(names, lambda n: n.endswith(".rsd"))
-        raw = _pick(names, lambda n: n.endswith(".lsc") and not n.endswith(".dbc.lsc"))
-        dbc = _pick(names, lambda n: n.endswith(".dbc.lsc"))
+        hdr = _pick(names, lambda n: n.endswith(".hdr"), ".HDR", data_dir)
+        rsd = _pick(names, lambda n: n.endswith(".rsd"), ".rsd", data_dir)
+        raw = _pick(names, lambda n: n.endswith(".lsc") and not n.endswith(".dbc.lsc"), ".lsc", data_dir)
+        dbc = _pick(names, lambda n: n.endswith(".dbc.lsc"), ".dbc.lsc", data_dir)
         if hdr is None or rsd is None or (raw is None and dbc is None):
             raise FileNotFoundError(f"{data_dir} needs a .HDR, a .rsd and a .lsc or .dbc.lsc")
         full = {k: os.path.join(data_dir, v) if v else None
@@ -319,14 +322,16 @@ class GCxGCRun:
             lsc, used = (self.lsc, "lsc") if self.lsc is not None else (self.dbc_lsc, "dbc")
         tic = self.dbc_tic if used == "dbc" else self.tic
         n = lsc.n_scans
-        if detection_signal == "fid":
-            center = int(round(self.fid_to_tof(apex_raw_index)))
-        else:
+        direct = detection_signal != "fid"     # detected on a TOF TIC: the apex IS the scan
+        if direct:
             center, window = int(apex_raw_index), 0
+        else:
+            center = int(round(self.fid_to_tof(apex_raw_index)))
         center = min(max(center, 0), n - 1)
         lo, hi = max(0, center - window), min(n, center + window + 1)
         k = lo + int(np.argmax(tic[lo:hi]))
-        apex_found = window == 0 or (lo < k < hi - 1 and self._is_prominent(tic, k, center, window))
+        # An FID peak needs a prominent interior TOF maximum; a window of 0 searched nothing.
+        apex_found = direct or (lo < k < hi - 1 and self._is_prominent(tic, k, center, window))
         if not apex_found:
             k = center
         mz, inten = self._mean_spectrum(lsc, k)

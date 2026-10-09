@@ -180,7 +180,8 @@ class GCxGCParams(BaseModel):
     rt2_grouping_tolerance: int = Field(default=2, ge=1, le=20, description="scans")
     min_modulations: int = Field(default=2, ge=1, le=10)
     use_dbc_spectra: bool = True
-    apex_window_scans: int = Field(default=10, ge=0, le=50)
+    apex_window_scans: int = Field(default=10, ge=1, le=50,
+                                   description="TOF scans searched each side of an FID peak's mapped apex")
     offset_mode: Literal["auto", "fixed"] = "auto"
     offset_scans: float = Field(default=0.0, description="used when offset_mode == 'fixed'")
 

@@ -258,6 +258,35 @@ def test_tof_rate_from_timestamps_is_the_mean_step(tmp_path, caplog):
     assert run.modulation_period_s == 4.0 and run.frame("tic").N == 200
     assert "timestamps" in caplog.text
 
+# ── Final review, Minors 7 and 9 ────────────────────────────────────────────
+
+def test_fid_spectrum_with_no_window_is_not_an_apex(tmp_path):
+    peak = synth.Peak(t1_min=2.0, t2_s=1.0, height=1.0, base_mz=91)
+    run = _run(tmp_path, synth.Scene(peaks=[peak], duration_min=4.0))
+    run.set_offset("fixed", 0.0)
+    r, c = _apex(run.frame("fid"), peak)
+    res = run.spectrum_at(run.to_raw("fid", r, c), "fid", source="lsc", window=0)
+    assert not res.apex_found and res.apex_distance_scans == 0     # nothing was searched
+
+
+def test_several_dbc_files_warn_and_name_the_one_used(tmp_path, caplog):
+    import logging
+    import shutil
+    c = synth.build_run(tmp_path, synth.Scene(duration_min=2.0))
+    shutil.copy(c / "data" / "Synth_0.5_secs.dbc.lsc", c / "data" / "Synth_1_secs.dbc.lsc")
+    with caplog.at_level(logging.WARNING, logger="logic.gcxgc_run"):
+        run = GCxGCRun.from_c_folder(c)
+    assert run.dbc_lsc.path.endswith("Synth_0.5_secs.dbc.lsc")
+    assert "Synth_0.5_secs.dbc.lsc" in caplog.text and "Synth_1_secs.dbc.lsc" in caplog.text
+    assert "using Synth_0.5_secs.dbc.lsc" in caplog.text
+
+
+def test_one_file_of_each_kind_does_not_warn(tmp_path, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="logic.gcxgc_run"):
+        _run(tmp_path, synth.Scene(duration_min=2.0))
+    assert "candidates" not in caplog.text
+
 @pytest.mark.realdata
 def test_real_8260_run_layout_and_offset(real_gcxgc_run):
     run = GCxGCRun.from_c_folder(real_gcxgc_run)

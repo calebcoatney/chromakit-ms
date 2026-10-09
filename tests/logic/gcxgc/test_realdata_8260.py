@@ -18,7 +18,10 @@ def test_real_8260_pipeline(real_gcxgc_run):
     found = [p for p in peaks if p.apex_found]
     near = [p for p in found if abs(p.apex_distance_scans) <= 3]
     wrong = 0
-    for p in found:                    # the 2026-10-09 review's check, over peaks with a real apex
+    # Regression guard, not independent validation: it reuses spectrum_at's own argmax and FID->TOF
+    # mapping, so a wrong mapping would pass it. The independent evidence on this run is near_apex
+    # and the four library-ID anchors (task 8 walkthrough, all found).
+    for p in found:
         center = int(round(run.fid_to_tof(p.apex_raw_index)))
         lo = max(0, center - 12)
         local = lo + int(np.argmax(run.dbc_tic[lo:center + 13]))
@@ -32,6 +35,6 @@ def test_real_8260_pipeline(real_gcxgc_run):
     assert 230 <= len(peaks) <= 312               # 271 ± 15 % before the fixes
     # Known miss: peak 236 (~72.87 min, 1.32 s) has a real TOF apex but sits 2.94 sigma above its
     # neighbourhood (crowded, so the MAD is inflated), just under the 3 sigma gate.
-    assert top50_found >= 48
+    assert top50_found >= 49
     assert len(near) / len(found) >= 0.95
     assert wrong / len(found) <= 0.05             # 28 % (over all peaks) before the fixes

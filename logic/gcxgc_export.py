@@ -91,6 +91,11 @@ def _git_commit() -> str:
         return ""
 
 
+def _intensity(x) -> str:
+    """Fixed-point intensity text for MSP/MGF (``.6g`` switched to exponents above 1e6)."""
+    return f"{float(x):.4f}".rstrip("0").rstrip(".")
+
+
 def _write_csv(f, peaks, percents) -> None:
     w = csv.writer(f)
     w.writerow(CHROMSPACE_COLUMNS)
@@ -111,7 +116,7 @@ def _write_msp(f, peaks, spectra) -> None:
                 f"scan={p.spectrum_scan}; source={p.spectrum_source}\n")
         f.write(f"Num Peaks: {len(spec)}\n")
         for mz, inten in spec:
-            f.write(f"{int(mz)} {float(inten):.6g}\n")
+            f.write(f"{int(mz)} {_intensity(inten)}\n")
         f.write("\n")
 
 
@@ -129,11 +134,11 @@ def _write_mgf(f, peaks, spectra) -> None:
         f.write("PEPMASS=0\n")          # EI spectra have no precursor ion
         f.write("MSLEVEL=1\n")
         for mz, inten in spec:
-            f.write(f"{int(mz)} {float(inten):.6g}\n")
+            f.write(f"{int(mz)} {_intensity(inten)}\n")
         f.write("END IONS\n\n")
 
 
-def _record(peaks, percents, run, settings, library, search_method) -> dict:
+def _record(peaks, percents, run, settings, library, search_method, search_complete) -> dict:
     off = run.offset()
     return {
         "schema": SCHEMA,
@@ -154,14 +159,19 @@ def _record(peaks, percents, run, settings, library, search_method) -> dict:
         "settings": settings,
         "library": library,
         "search_method": search_method,
+        "search_complete": search_complete,
         "volume_units": VOLUME_UNITS,
         "peaks": [dict(p.as_dict(), area_percent=pct) for p, pct in zip(peaks, percents)],
     }
 
 
 def export_gcxgc_results(peaks, run, results_dir, *, settings: dict, get_spectrum,
-                         library=None, search_method=None) -> GCxGCExportPaths:
-    """Write the four result files; get_spectrum(peak) -> [(mz, intensity)] | None."""
+                         library=None, search_method=None, search_complete=None) -> GCxGCExportPaths:
+    """Write the four result files; get_spectrum(peak) -> [(mz, intensity)] | None.
+
+    search_complete: True after a full MS Search All, False when it was cancelled part-way
+    (peaks it never reached have no ID), None when no search produced the IDs.
+    """
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
     stem = safe_name(run.sample_id or "sample")
@@ -175,6 +185,6 @@ def export_gcxgc_results(peaks, run, results_dir, *, settings: dict, get_spectru
     _atomic_write(paths.csv, lambda f: _write_csv(f, peaks, percents))
     _atomic_write(paths.msp, lambda f: _write_msp(f, peaks, spectra))
     _atomic_write(paths.mgf, lambda f: _write_mgf(f, peaks, spectra))
-    record = _record(peaks, percents, run, settings, library, search_method)
+    record = _record(peaks, percents, run, settings, library, search_method, search_complete)
     _atomic_write(paths.json, lambda f: json.dump(record, f, indent=1, default=_json_default))
     return paths

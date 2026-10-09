@@ -249,3 +249,20 @@ def test_rsd_truncated_at_block_boundary_raises(tmp_path):
         (tmp_path / "t.rsd").write_bytes(raw[:cut])
         with pytest.raises(SepSolveFormatError):
             read_rsd(tmp_path / "t.rsd")
+
+
+# ── Final review, Minor 8: a variable modulation period is reported ─────────
+
+def test_variable_modulation_period_warns_and_uses_change0(caplog):
+    text = synth.hdr_text(pm_s=4.0).replace("Valve1 Changes=1", "Valve1 Changes=2").replace(
+        "Valve1 Change0=1,4,300,999.00", "Valve1 Change0=1,4,300,20.00\r\nValve1 Change1=1,6,300,999.00")
+    with caplog.at_level(logging.WARNING, logger="logic.loaders.sepsolve_format"):
+        info = parse_hdr_text(text, "var.HDR")
+    assert info.modulation_period_s == 4.0
+    assert "var.HDR" in caplog.text and "2 modulation period" in caplog.text and "Change0" in caplog.text
+
+
+def test_single_modulation_period_does_not_warn(caplog):
+    with caplog.at_level(logging.WARNING, logger="logic.loaders.sepsolve_format"):
+        parse_hdr_text(synth.hdr_text(pm_s=4.0))
+    assert caplog.text == ""

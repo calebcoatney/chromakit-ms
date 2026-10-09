@@ -186,3 +186,20 @@ def test_json_record_names_the_commit(tmp_path):
     rec = json.load(open(_export(tmp_path, [_peak(1, 14.3, 0.44, 100.0)]).json))
     assert re.fullmatch(r"(?:[0-9a-f]{7,40})?", rec["chromakit_commit"])
     assert rec["chromakit_commit"]                      # this worktree is a git checkout
+
+
+# ── Final review, Minor 6: intensities are fixed-point in MSP and MGF ───────
+
+def test_intensity_text_is_fixed_point():
+    from logic.gcxgc_export import _intensity
+    assert [_intensity(v) for v in (4.825e6, 100.0, 40.0, 0.123456, 1234567.891, 0.0)] == [
+        "4825000", "100", "40", "0.1235", "1234567.891", "0"]
+
+
+def test_large_intensities_never_use_exponents(tmp_path, monkeypatch):
+    spectra = {1: [(57, 4.825e6), (71, 1.5e7), (85, 0.25)]}
+    monkeypatch.setitem(SPECTRA, 1, spectra[1])
+    paths = _export(tmp_path, [_peak(1, 14.3, 0.44, 100.0)])
+    for path in (paths.msp, paths.mgf):
+        lines = [ln for ln in path.read_text().splitlines() if ln[:1].isdigit()]
+        assert lines == ["57 4825000", "71 15000000", "85 0.25"], path.name
