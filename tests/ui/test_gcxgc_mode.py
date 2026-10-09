@@ -765,3 +765,25 @@ def test_batch_process_directories_is_refused_in_gcxgc_mode(gcxgc_app, monkeypat
     action = next(a for a in app.findChildren(QAction) if a.text() == "Batch Process Directories...")
     action.trigger()
     assert shown and "not supported" in str(shown[0][2]) and opened == []
+
+
+def test_a_load_that_fails_after_reading_closes_the_new_run(gcxgc_app, monkeypatch):
+    from logic.gcxgc_run import GCxGCRun
+    app, c = gcxgc_app
+    run_a = app._gcxgc_run
+    monkeypatch.setattr("ui.app.QMessageBox.critical", lambda *a, **k: None)
+    made, real = [], GCxGCRun.from_c_folder.__func__
+
+    def recording(cls, *a, **k):
+        made.append(real(cls, *a, **k))
+        return made[-1]
+
+    def boom(profile):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(GCxGCRun, "from_c_folder", classmethod(recording))
+    monkeypatch.setattr(app, "set_mode", boom)             # fails after the run's files are open
+    app.on_file_selected(str(synth.build_run(c.parent / "b", synth.Scene(duration_min=2.0), name="SynthB")))
+    assert "boom" in app.status_bar.currentMessage()
+    _assert_run_dropped(app, run_a)
+    assert len(made) == 1 and _run_files_closed(made[0])

@@ -777,6 +777,7 @@ class ChromaKitApp(QMainWindow):
             detector: Specific detector channel to use (for Agilent data)
         """
         from logic.c_folder import CFolder
+        data = None
         try:
             # Clear stored peak data to prevent ghost peaks
             self.plot_frame.clear_peak_data()
@@ -979,11 +980,15 @@ class ChromaKitApp(QMainWindow):
             
         except Exception as e:
             # Handle any errors during loading
-            if self._gcxgc_mode or self._gcxgc_run is not None:
+            new_run = data.get('metadata', {}).get('gcxgc_run') if isinstance(data, dict) else None
+            if self._gcxgc_mode or self._gcxgc_run is not None or new_run is not None:
                 # current_cf may already name the new folder: never let the previous GCxGC run's
-                # peaks be exported or re-integrated in its place.
+                # peaks be exported or re-integrated in its place. A run read before the failure
+                # is closed too.
                 try:
                     self._drop_gcxgc_run()
+                    if new_run is not None:
+                        new_run.close()
                 except Exception as drop_error:
                     print(f"Error dropping the previous GCxGC run: {drop_error}")
             # Debug: print type and details of the exception
