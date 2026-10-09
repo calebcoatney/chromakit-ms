@@ -75,10 +75,11 @@ class CFolder:
 
     @staticmethod
     def create_multi(source_paths: list[str], signal_type: str, **metadata) -> "CFolder":
-        """Create a .C folder from multiple source files (e.g. SepSolve .rsd + .dbc.lsc).
+        """Create a .C folder from multiple source files (e.g. SepSolve .HDR + .rsd + .lsc).
 
-        All source files are moved into data/. The .C folder is named after the
-        stem of the first file in source_paths (expected to be the .rsd file).
+        All source files are COPIED into data/; the originals are never touched.
+        The .C folder is named after the stem of the first file in source_paths
+        (expected to be the .HDR file). On any error the partial .C folder is removed.
         """
         if not source_paths:
             raise ValueError("source_paths must not be empty")
@@ -91,15 +92,13 @@ class CFolder:
         if os.path.exists(c_path):
             raise FileExistsError(f".C folder already exists: {c_path}")
 
-        moved: list[tuple[str, str]] = []
         try:
             os.makedirs(os.path.join(c_path, "data"))
             os.makedirs(os.path.join(c_path, "results"))
 
             for src in source_paths:
                 dest = os.path.join(c_path, "data", os.path.basename(src))
-                shutil.move(src, dest)
-                moved.append((dest, src))
+                shutil.copy2(src, dest)
 
             sample_timestamp = metadata.pop("sample_timestamp", None)
             manifest = {
@@ -112,11 +111,7 @@ class CFolder:
                 json.dump(manifest, f, indent=2)
 
         except Exception:
-            for dest, src in moved:
-                if os.path.exists(dest) and not os.path.exists(src):
-                    shutil.move(dest, src)
-            if os.path.exists(c_path):
-                shutil.rmtree(c_path, ignore_errors=True)
+            shutil.rmtree(c_path, ignore_errors=True)
             raise
 
         folder = CFolder(c_path)
