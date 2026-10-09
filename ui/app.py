@@ -164,7 +164,7 @@ class ChromaKitApp(QMainWindow):
         self.parameters_frame.parameters_changed.connect(self._on_params_writeback)
         self.parameters_frame.save_method_requested.connect(self.save_method)
         self.parameters_frame.load_method_requested.connect(self.load_method)
-        self.parameters_frame.gcxgc_params_changed.connect(self._on_gcxgc_params_changed)
+        self.parameters_frame.gcxgc_display_changed.connect(self._on_gcxgc_display_changed)
         
         # Connect button frame signals
         self.button_frame.export_clicked.connect(self.on_export)
@@ -279,6 +279,9 @@ class ChromaKitApp(QMainWindow):
         self._loading_method = True
         try:
             self.parameters_frame.apply_method(self.current_method)
+            if self._gcxgc_mode and self._gcxgc_run is not None:
+                # apply_method rebuilt the widgets: give them the run's file values back
+                self.parameters_frame.set_gcxgc_run_info(self._gcxgc_run)
             self.rt_table_frame.apply_method(self.current_method)
             if self.rf_table_frame is not None:
                 self.rf_table_frame.apply_method(self.current_method)
@@ -892,17 +895,17 @@ class ChromaKitApp(QMainWindow):
             is_gcxgc = data.get('metadata', {}).get('is_gcxgc', False)
             self._gcxgc_mode = is_gcxgc
             
+            gcxgc_layout_note = ""
             if is_gcxgc:
                 self._gcxgc_metadata = data['metadata']
                 self._gcxgc_run = data['metadata']['gcxgc_run']
-                self._gcxgc_proc = None
-                self._gcxgc_peaks = []
-                self._gcxgc_export_settings = {}
-                self._gcxgc_search_info = {"library": None, "search_method": None}
+                self._clear_gcxgc_results()      # the previous run's peaks, overlay and View Peak Results
                 run = self._gcxgc_run
-                self.parameters_frame.set_gcxgc_dbc_available(run.dbc_lsc is not None)
-                self.parameters_frame.gcxgc_pm_entry.setText(f"{run.modulation_period_s:g}")
-                self.parameters_frame.gcxgc_phase_entry.setText(f"{run.phase_shift_s:g}")
+                try:
+                    self._apply_gcxgc_layout_from_ui()
+                except ValueError as e:      # set_layout leaves the file layout in place
+                    gcxgc_layout_note = f" — GCxGC layout from the method ignored: {e}"
+                self.parameters_frame.set_gcxgc_run_info(run)
                 self._render_gcxgc_frames()
                 self.real_data_loaded = True
             else:
@@ -958,6 +961,8 @@ class ChromaKitApp(QMainWindow):
                 )
             else:
                 self.status_bar.showMessage(f"Loaded: {sample_name} - {ms_status} MS data")
+            if gcxgc_layout_note:
+                self.status_bar.showMessage(self.status_bar.currentMessage() + gcxgc_layout_note)
             
             # Enable export button
             self.button_frame.enable_export(True)
@@ -1667,11 +1672,15 @@ class ChromaKitApp(QMainWindow):
             else:
                 self.status_bar.showMessage("No next sample available")
         
-    def _on_gcxgc_params_changed(self) -> None:
-        """Slot for lightweight GCxGC display parameter changes (e.g. TIC source toggle).
-        Only re-renders the heatmap — does not re-run baseline or peak detection."""
-        if self._gcxgc_mode and self._gcxgc_metadata:
-            self._run_gcxgc_processing()
+    def _on_gcxgc_display_changed(self) -> None:
+        """Redraw the heatmaps for a display-only change (TIC source); never re-run processing."""
+        if not (self._gcxgc_mode and self._gcxgc_run is not None):
+            return
+        proc = self._gcxgc_proc
+        fid_data = proc.corrected if proc is not None and proc.frame.signal == 'fid' else None
+        self._render_gcxgc_frames(fid_data=fid_data)
+        if self._gcxgc_peaks:
+            self.plot_frame.overlay_gcxgc_peaks(self._gcxgc_peaks)
 
     def _load_gcxgc_with_prompted_period(self, folder_path):
         """Ask for a modulation period the run's files do not record, then load with it."""
@@ -1718,6 +1727,8 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage(f"GCxGC layout error: {e}")
             QMessageBox.warning(self, "GCxGC layout", str(e))
             return
+        run.set_offset(params['offset_mode'], params['offset_scans'])
+        self.parameters_frame.set_gcxgc_run_info(run)
         self._render_gcxgc_frames()
         if not params['baseline_enabled'] and not params['peaks_enabled']:
             self._clear_gcxgc_results()       # the layout just changed under the old peaks
@@ -1725,9 +1736,9 @@ class ChromaKitApp(QMainWindow):
             return
         signal = params.get('detection_signal', 'fid')
         apex_window = params.get('apex_window', 10)
-        proc = GCxGCProcessor(run.frame(signal), run, use_dbc=params.get('use_dbc', True),
-                              apex_window=apex_window)
         try:
+            proc = GCxGCProcessor(run.frame(signal), run, use_dbc=params.get('use_dbc', True),
+                                  apex_window=apex_window)
             if params['baseline_enabled']:
                 self.status_bar.showMessage("GCxGC: applying 2D baseline correction…")
                 proc.apply_baseline(lam=params['lam'], diff_order=params['diff_order'])
@@ -1749,7 +1760,8 @@ class ChromaKitApp(QMainWindow):
             return
         self._gcxgc_proc = proc
         self._gcxgc_peaks = peaks
-        self._gcxgc_export_settings = dict(params, detection_signal=signal, apex_window=apex_window)
+        self._gcxgc_export_settings = dict(params, pm=run.modulation_period_s, phase_shift=run.phase_shift_s,
+                                           detection_signal=signal, apex_window=apex_window)
         self._gcxgc_search_info = {"library": None, "search_method": None}   # a new peak set has no search yet
         self.integrated_peaks = peaks
         self.plot_frame._gcxgc_peaks = peaks
@@ -1762,6 +1774,9 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage("GCxGC: heatmap updated — no peaks detected")
         if peaks and self.export_manager.should_export_json('integration'):
             self._export_gcxgc(interactive=False)
+        if peaks and not run.offset().ok:
+            self.status_bar.showMessage(self.status_bar.currentMessage()
+                                        + " — FID→TOF offset fit failed; assuming 0 (set it under 2D Peak Detection)")
 
     def _clear_gcxgc_results(self) -> None:
         """Forget the processed peaks: the run's layout changed (or processing failed), so they
@@ -2663,6 +2678,8 @@ class ChromaKitApp(QMainWindow):
     @Slot(dict)
     def on_parameters_changed(self, params):
         """Handle parameter changes from the parameters frame"""
+        if self._gcxgc_mode:
+            return      # GCxGC settings apply at Integrate; _on_params_writeback keeps them in the method
         print("Parameters changed signal received!")
         
         # Check if we have data to process

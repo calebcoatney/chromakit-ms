@@ -11,7 +11,7 @@ Layer rule: this module is in logic/ and must NOT import from api/ or ui/.
 from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
@@ -167,6 +167,24 @@ class RTMatchingParams(BaseModel):
     high_priority: bool = False
 
 
+class GCxGCParams(BaseModel):
+    """GCxGC layout, detection and spectrum settings (spec 2026-10-09)."""
+    modulation_period_s: Optional[float] = Field(default=None, description="None = from the run's files")
+    phase_shift_s: Optional[float] = Field(default=None, description="None = ChromSpace's saved view, else 0")
+    detection_signal: Literal["fid", "dbc_tic", "tic"] = "fid"
+    baseline_enabled: bool = True
+    baseline_lambda: float = 1e5
+    baseline_diff_order: int = Field(default=2, ge=1, le=3)
+    peaks_enabled: bool = True
+    min_prominence: Optional[float] = 1e4
+    rt2_grouping_tolerance: int = Field(default=2, ge=1, le=20, description="scans")
+    min_modulations: int = Field(default=2, ge=1, le=10)
+    use_dbc_spectra: bool = True
+    apex_window_scans: int = Field(default=10, ge=0, le=50)
+    offset_mode: Literal["auto", "fixed"] = "auto"
+    offset_scans: float = Field(default=0.0, description="used when offset_mode == 'fixed'")
+
+
 # ── ChromaMethod ────────────────────────────────────────────────────────────────
 
 _METADATA_FIELDS = frozenset({
@@ -198,6 +216,7 @@ class ChromaMethod(BaseModel):
     deconvolution: DeconvolutionParams = Field(default_factory=DeconvolutionParams)
     negative_peaks: NegativePeakParams = Field(default_factory=NegativePeakParams)
     shoulders: ShoulderParams = Field(default_factory=ShoulderParams)
+    gcxgc: GCxGCParams = Field(default_factory=GCxGCParams)
     integration: IntegrationSubParams = Field(default_factory=IntegrationSubParams)
     rt_table: List[RTTableEntry] = Field(default_factory=list)
     rf_table: List[RFTableEntry] = Field(default_factory=list)
