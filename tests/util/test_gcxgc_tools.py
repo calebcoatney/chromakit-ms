@@ -71,3 +71,39 @@ def test_compare_chromspace_matches_and_summarizes(tmp_path):
     s = cmp.summarize(a, b, pairs)
     assert s["matched"] == 2 and s["volume_ratio_median"] == pytest.approx(2.5)
     assert (s["id_pairs"], s["id_agree"]) == (1, 1)
+    assert (s["chromspace_unmatched"], s["chromakit_unmatched"]) == (0, 1)
+
+
+def test_compare_chromspace_reports_unmatched_on_both_sides(tmp_path):
+    cmp = _load("compare_chromspace")
+    cs = [{"peak": "1", "compound": "", "t1_min": 10.0, "t2_s": 1.0, "area": 5.0},
+          {"peak": "2", "compound": "", "t1_min": 30.0, "t2_s": 1.0, "area": 5.0}]
+    ck = [{"peak": "1", "compound": "", "t1_min": 10.0, "t2_s": 1.0, "area": 5.0},
+          {"peak": "2", "compound": "", "t1_min": 50.0, "t2_s": 1.0, "area": 5.0},
+          {"peak": "3", "compound": "", "t1_min": 60.0, "t2_s": 1.0, "area": 5.0}]
+    pairs = cmp.match(cs, ck, t1_tol=0.1, t2_tol=0.1)
+    s = cmp.summarize(cs, ck, pairs)
+    assert (s["matched"], s["chromspace_unmatched"], s["chromakit_unmatched"]) == (1, 1, 2)
+
+
+def test_compare_chromspace_warns_about_skipped_and_empty_input(tmp_path, capsys):
+    cmp = _load("compare_chromspace")
+    good = tmp_path / "good.csv"
+    good.write_text(
+        "Peak #,Source,Compound,Synonyms,Library RI,1tR,2tR,Area,Area %\n"
+        "1,TIC,o-Xylene,,,17.20,0.0187,1000,50\n"
+        "Group 1,C10 dicycloalkane,,,,,,2000,100\n")
+    assert len(cmp.read_chromspace(good)) == 1
+    assert capsys.readouterr().err == ""            # header, group rows and a clean parse are silent
+    bad = tmp_path / "bad.csv"
+    bad.write_text(
+        "Peak #,Source,Compound,Synonyms,Library RI,1tR,2tR,Area,Area %\n"
+        "1,TIC,o-Xylene,,,17.20,0.0187,1000,50\n"
+        "2,TIC,,,,n/a,0.0107,1000,50\n"
+        "3,TIC,,,,21.96\n")
+    assert len(cmp.read_chromspace(bad)) == 1
+    assert "2 ChromSpace data row(s) skipped" in capsys.readouterr().err
+    empty = tmp_path / "empty.csv"
+    empty.write_text("Peak #,Source,Compound,Synonyms,Library RI,1tR,2tR,Area,Area %\n")
+    assert cmp.read_chromspace(empty) == []
+    assert "no peak rows" in capsys.readouterr().err

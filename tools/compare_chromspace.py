@@ -5,7 +5,9 @@ Usage: python tools/compare_chromspace.py <chromspace.csv> <peaks.json>
 
 ChromSpace rows are read by position: Peak #, Source, Compound, Synonyms, Library RI,
 1tR (min), 2tR (min), Area, Area %. A header row is optional; "Group" rows (stencil
-totals) are skipped. Tolerances: 1tR in minutes, 2tR in seconds.
+totals) are skipped. Tolerances: 1tR in minutes, 2tR in seconds. Rows that cannot be read are
+counted in a warning on stderr, as is an export that yields no peaks. The summary reports how many
+peaks on each side found no partner; --out writes the matched pairs only.
 """
 from __future__ import annotations
 
@@ -13,22 +15,33 @@ import argparse
 import csv
 import json
 import statistics
+import sys
 
 
 def read_chromspace(path) -> list[dict]:
-    rows = []
+    """Peak rows of a ChromSpace export. Warns on stderr about rows it had to skip and about an empty result."""
+    rows, skipped = [], 0
     with open(path, newline="", encoding="utf-8-sig") as f:
         for r in csv.reader(f):
-            if not r or not r[0].strip():
+            if not any(c.strip() for c in r):
                 continue
             first = r[0].strip().lower()
             if first.startswith("peak") or first.startswith("group"):
                 continue
             try:
+                if not first:
+                    raise ValueError("no peak number")
                 rows.append({"peak": r[0].strip(), "compound": r[2].strip(), "t1_min": float(r[5]),
                              "t2_s": float(r[6]) * 60.0, "area": float(r[7])})
             except (ValueError, IndexError):
-                continue
+                skipped += 1
+    if skipped:
+        print(f"warning: {skipped} ChromSpace data row(s) skipped in {path}: 1tR, 2tR or Area "
+              "(columns 6 to 8) missing or not a number", file=sys.stderr)
+    if not rows:
+        print(f"warning: no peak rows read from {path}; expected a ChromSpace Area-percent CSV with "
+              "Peak #, Source, Compound, Synonyms, Library RI, 1tR, 2tR, Area, Area % in that order",
+              file=sys.stderr)
     return rows
 
 
@@ -71,6 +84,8 @@ def summarize(cs, ck, pairs) -> dict:
         "chromspace_peaks": len(cs),
         "chromakit_peaks": len(ck),
         "matched": len(pairs),
+        "chromspace_unmatched": len(cs) - len(pairs),
+        "chromakit_unmatched": len(ck) - len(pairs),
         "volume_ratio_median": statistics.median(ratios) if ratios else None,
         "volume_ratio_iqr": (lambda q: q[2] - q[0])(statistics.quantiles(ratios, n=4)) if len(ratios) >= 2 else None,
         "area_percent_rmse": (sum(d * d for d in diffs) / len(diffs)) ** 0.5 if diffs else None,

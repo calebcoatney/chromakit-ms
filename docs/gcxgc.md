@@ -63,12 +63,18 @@ Layout and detection settings take effect when you click Integrate.
 
 Export (or "Export…" in View Peak Results) writes three files to `<run>.C/results/`:
 
-- `<run> - GCxGC peaks.csv`: ChromSpace's Area-percent layout (2tR in minutes).
+- `<run> - GCxGC peaks.csv`: ChromSpace's Area-percent layout (2tR in minutes). Use it to compare
+  ChromaKit's peaks side by side with a ChromSpace export (see below), or to paste peak rows into a
+  ChromSpace-based workbook. A workbook driven by stencil Group rows needs regions, which ChromaKit does
+  not produce yet.
 - `<run> - GCxGC peaks.json`: every peak with its flags, plus the run settings, the library and the
-  search method. The flags `apex_found`, `apex_distance_scans` and `saturated`, with `spectrum_scan` and
-  `spectrum_source`, say how much to trust each peak's spectrum.
-- `<run> - GCxGC spectra.msp`: one spectrum per peak, in MSP, a plain-text spectrum format that most
-  library software can import. Peaks with no spectrum are left out.
+  search method. This is the full record, for scripting in Python or R. The flags `apex_found`,
+  `apex_distance_scans` and `saturated`, with `spectrum_scan` and `spectrum_source`, say how much to
+  trust each peak's spectrum.
+- `<run> - GCxGC spectra.msp`: one spectrum per peak, in MSP, a plain-text spectrum format. Use it to
+  take the spectra into library-search and spectral tools that read NIST MSP, such as MZmine. The
+  import has not been tested in any of them, so check your tool's MSP options. Peaks with no spectrum are
+  left out.
 
 By default Integrate and MS Search All also write these files; Settings → Export Settings controls
 that. Run Integrate before Export; the files describe the peaks and settings of the last Integrate.
@@ -88,7 +94,9 @@ python tools/compare_chromspace.py chromspace.csv "<run> - GCxGC peaks.json" --o
 Peaks are paired one-to-one by closest retention time within `--t1-tol` (minutes, default 0.1) and
 `--t2-tol` (seconds, default 0.1). It prints peak counts, the number matched, the median and
 interquartile range of the volume ratio (ChromaKit over ChromSpace), the RMSE of Area %, and how many
-named pairs agree. `--out` saves the matched pairs.
+named pairs agree. `chromspace_unmatched` and `chromakit_unmatched` count the peaks on each side that
+found no partner. `--out` saves the matched pairs only. The tool warns on stderr when it has to skip
+ChromSpace rows it cannot read, and when it reads no peaks at all (usually the wrong file or columns).
 
 ## Not yet
 

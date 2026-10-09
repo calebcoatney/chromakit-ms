@@ -48,12 +48,21 @@ pip install "chromakit-ms[ms] @ git+https://github.com/calebcoatney/chromakit-ms
 ```
 
 For MS library search with your own NIST copy, see [docs/ms-library-from-nist.md](docs/ms-library-from-nist.md).
+The install commands were checked on macOS only; Windows and Linux are untested.
 
 ### REST API Backend
 
 ```bash
 pip install -r api/requirements.txt
 ```
+
+## GCxGC-TOFMS/FID
+
+Supported: SepSolve/Markes runs (`.HDR`, `.rsd`, `.lsc`, `.dbc.lsc`) converted with Tools → Batch Convert to .C…, with 2D peak detection on the FID or DBC TIC, spectra and library IDs, and CSV/JSON/MSP export. The how-to is in [docs/gcxgc.md](docs/gcxgc.md).
+
+Not yet: region/stencil drawing and group-type (PIONA) wt%, deconvolution, retention indices, multi-sample alignment, and batch processing of GCxGC runs.
+
+GCxGC mode has been used on macOS only; Windows is untested.
 
 ## Usage
 
