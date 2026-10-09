@@ -142,6 +142,8 @@ class Scene:
     background_mz: float = 40.0    # constant ion in the raw .lsc only (DBC removes it)
     background: float = 50.0
     scale: float = 1000.0
+    noise: float = 0.0             # sigma of Gaussian noise on the raw .lsc background ion (0 = none)
+    seed: int = 0                  # RNG seed for that noise
 
     def weights(self, t_s: np.ndarray, attr: str) -> np.ndarray:
         """Per-peak signal weight at physical times t_s; shape (n_peaks, len(t_s))."""
@@ -175,12 +177,15 @@ class Scene:
     def spectra(self, *, background: bool = True) -> list[tuple[np.ndarray, np.ndarray]]:
         w = self.weights(self.tof_times(), "in_tof")
         sigs = [signature(p.base_mz) for p in self.peaks]
+        bg = np.full(self.n_tof(), self.background)
+        if background and self.noise > 0:
+            bg = np.clip(bg + np.random.default_rng(self.seed).normal(0.0, self.noise, self.n_tof()), 0.0, None)
         out = []
         for k in range(self.n_tof()):
             mz_parts, in_parts = [], []
             if background:
                 mz_parts.append(np.array([self.background_mz]))
-                in_parts.append(np.array([self.background]))
+                in_parts.append(np.array([bg[k]]))
             for i, (mz, rel) in enumerate(sigs):
                 if w[i, k] > 1e-6:
                     mz_parts.append(mz)

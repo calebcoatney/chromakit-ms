@@ -169,6 +169,41 @@ def test_spectrum_at_flags_a_peak_the_tof_never_saw(tmp_path):
     assert not res.apex_found and res.scan == int(round(run.fid_to_tof(i)))
 
 
+def _blind_peak_result(tmp_path, seed, noise=5.0):
+    """spectrum_at for a FID-only peak on a raw TIC with Gaussian noise; also the FID-mapped scan."""
+    fid_only = synth.Peak(t1_min=2.0, t2_s=1.0, height=1.0, in_tof=False)
+    scene = synth.Scene(peaks=[fid_only], duration_min=4.0, noise=noise, seed=seed)
+    run = _run(tmp_path / f"s{seed}", scene)
+    run.set_offset("fixed", 0.0)
+    r, c = _apex(run.frame("fid"), fid_only)
+    i = run.to_raw("fid", r, c)
+    return run.spectrum_at(i, "fid", source="lsc", window=10), int(round(run.fid_to_tof(i)))
+
+
+def test_tof_blind_peak_on_a_noisy_tic_is_not_an_apex(tmp_path):
+    # Noise only (sigma 5 on a 50 background). The window maximum is interior ~90 % of the time,
+    # so only the prominence test can reject it. A 3-sigma rule passes pure noise a few percent of
+    # the time per trial, so across 20 fixed seeds we allow at most one such rare false positive.
+    results = [_blind_peak_result(tmp_path, seed) for seed in range(20)]
+    found = [res.apex_found for res, _ in results]
+    assert sum(found) <= 1, f"apex_found True for seeds {[s for s, f in enumerate(found) if f]}"
+    for res, mapped in results:
+        if not res.apex_found:
+            assert res.scan == mapped and res.apex_distance_scans == 0
+
+
+def test_real_peak_on_a_noisy_tic_is_still_an_apex(tmp_path):
+    peak = synth.Peak(t1_min=2.0, t2_s=1.0, height=1.0, base_mz=91)
+    for seed in range(5):
+        scene = synth.Scene(peaks=[peak], duration_min=4.0, noise=5.0, seed=seed)
+        run = _run(tmp_path / f"s{seed}", scene)
+        run.set_offset("fixed", 0.0)
+        r, c = _apex(run.frame("fid"), peak)
+        res = run.spectrum_at(run.to_raw("fid", r, c), "fid", source="lsc", window=10)
+        assert res.apex_found and abs(res.apex_distance_scans) <= 10
+        assert res.mz[int(np.argmax(res.intensity))] == 91
+
+
 def test_saturated_apex_is_replaced_by_its_neighbours(tmp_path):
     scene = synth.Scene(peaks=[synth.Peak(t1_min=2.0, t2_s=1.0, height=1.0)], duration_min=4.0)
     apex = int(np.argmax([s[1].sum() for s in scene.spectra(background=False)]))

@@ -307,7 +307,7 @@ class GCxGCRun:
         center = min(max(center, 0), n - 1)
         lo, hi = max(0, center - window), min(n, center + window + 1)
         k = lo + int(np.argmax(tic[lo:hi]))
-        apex_found = window == 0 or lo < k < hi - 1
+        apex_found = window == 0 or (lo < k < hi - 1 and self._is_prominent(tic, k, center, window))
         if not apex_found:
             k = center
         mz, inten = self._mean_spectrum(lsc, k)
@@ -315,6 +315,18 @@ class GCxGCRun:
             lsc, used = self.lsc, "lsc"
             mz, inten = self._mean_spectrum(lsc, k)
         return SpectrumResult(mz, inten, k, used, apex_found, k - center, lsc.is_saturated(k))
+
+    @staticmethod
+    def _is_prominent(tic: np.ndarray, k: int, center: int, window: int) -> bool:
+        """Is tic[k] a real peak: more than 3 robust sigma above its neighbourhood's median?
+
+        The neighbourhood is [center - 4*window, center + 4*window] clipped to the trace; sigma is
+        1.4826 * MAD. A perfectly flat neighbourhood (sigma 0) needs only a strict rise above it.
+        """
+        ctx = tic[max(0, center - 4 * window):min(len(tic), center + 4 * window + 1)]
+        med = float(np.median(ctx))
+        sigma = 1.4826 * float(np.median(np.abs(ctx - med)))
+        return bool(tic[k] - med > 3.0 * sigma)
 
     @staticmethod
     def _mean_spectrum(lsc: LscFile, k: int):
