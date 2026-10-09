@@ -1,5 +1,6 @@
 import csv
 import json
+import re
 
 import pytest
 
@@ -130,3 +131,58 @@ def test_mgf_has_one_entry_per_spectrum_and_no_retention_time(tmp_path):
 def test_zero_peaks_writes_an_empty_mgf(tmp_path):
     paths = _export(tmp_path, [])
     assert paths.mgf.read_text() == ""
+
+
+# ── Final review, Important 3: the JSON names the ChromaKit commit ──────────
+
+def _no_distribution(monkeypatch):
+    import importlib.metadata as md
+
+    def missing(name):
+        raise md.PackageNotFoundError(name)
+
+    monkeypatch.setattr(md, "distribution", missing)
+
+
+def test_commit_falls_back_to_git_in_the_package_folder(monkeypatch):
+    import pathlib
+    import subprocess
+    from logic.gcxgc_export import _chromakit_commit
+    _no_distribution(monkeypatch)
+    repo = pathlib.Path(__file__).resolve().parents[3]
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    commit = _chromakit_commit()
+    assert re.fullmatch(r"[0-9a-f]{40}", commit) and commit == head
+
+
+def test_commit_prefers_pep610_vcs_info(monkeypatch):
+    import importlib.metadata as md
+    from logic.gcxgc_export import _chromakit_commit
+
+    class Dist:
+        def read_text(self, name):
+            return json.dumps({"url": "https://github.com/x/chromakit-ms",
+                               "vcs_info": {"vcs": "git", "commit_id": "0123456789abcdef0123456789abcdef01234567"}})
+
+    monkeypatch.setattr(md, "distribution", lambda name: Dist())
+    assert _chromakit_commit() == "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_commit_is_empty_without_git(monkeypatch, tmp_path):
+    import subprocess
+    from logic.gcxgc_export import _chromakit_commit
+    _no_distribution(monkeypatch)
+
+    def no_git(*a, **k):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(subprocess, "run", no_git)
+    assert _chromakit_commit() == ""
+    rec = json.load(open(_export(tmp_path, [_peak(1, 14.3, 0.44, 100.0)]).json))
+    assert rec["chromakit_commit"] == "" and "chromakit_version" in rec
+
+
+def test_json_record_names_the_commit(tmp_path):
+    rec = json.load(open(_export(tmp_path, [_peak(1, 14.3, 0.44, 100.0)]).json))
+    assert re.fullmatch(r"(?:[0-9a-f]{7,40})?", rec["chromakit_commit"])
+    assert rec["chromakit_commit"]                      # this worktree is a git checkout

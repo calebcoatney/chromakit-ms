@@ -6,6 +6,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,6 +65,32 @@ def _chromakit_version() -> str:
         return ""
 
 
+def _chromakit_commit() -> str:
+    """The commit this ChromaKit came from: the distribution's PEP 610 vcs_info, else
+    ``git rev-parse HEAD`` in the package's own folder, else "". Never raises."""
+    return _direct_url_commit() or _git_commit()
+
+
+def _direct_url_commit() -> str:
+    try:
+        from importlib.metadata import distribution
+        info = json.loads(distribution("chromakit-ms").read_text("direct_url.json") or "{}")
+        commit = (info.get("vcs_info") or {}).get("commit_id") or ""
+        return commit if isinstance(commit, str) else ""
+    except Exception:
+        return ""
+
+
+def _git_commit() -> str:
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent,
+                             capture_output=True, text=True, timeout=3)
+        commit = out.stdout.strip()
+        return commit if out.returncode == 0 and re.fullmatch(r"[0-9a-f]{7,40}", commit) else ""
+    except Exception:
+        return ""
+
+
 def _write_csv(f, peaks, percents) -> None:
     w = csv.writer(f)
     w.writerow(CHROMSPACE_COLUMNS)
@@ -113,6 +140,7 @@ def _record(peaks, percents, run, settings, library, search_method) -> dict:
         "sample_id": run.sample_id,
         "created": datetime.datetime.now().isoformat(timespec="seconds"),
         "chromakit_version": _chromakit_version(),
+        "chromakit_commit": _chromakit_commit(),
         "run": {
             "modulation_period_s": run.modulation_period_s,
             "phase_shift_s": run.phase_shift_s,

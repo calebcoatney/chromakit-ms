@@ -67,8 +67,8 @@ Export (or "Export…" in View Peak Results) writes four files to `<run>.C/resul
   ChromaKit's peaks side by side with a ChromSpace export (see below), or to paste peak rows into a
   ChromSpace-based workbook. A workbook driven by stencil Group rows needs regions, which ChromaKit does
   not produce yet.
-- `<run> - GCxGC peaks.json`: every peak with its flags, plus the run settings, the library and the
-  search method. This is the full record, for scripting in Python or R. The flags `apex_found`,
+- `<run> - GCxGC peaks.json`: every peak with its flags, plus the run settings, the library, the
+  search method and the ChromaKit version and commit. This is the full record, for scripting in Python or R. The flags `apex_found`,
   `apex_distance_scans` and `saturated`, with `spectrum_scan` and `spectrum_source`, say how much to
   trust each peak's spectrum.
 - `<run> - GCxGC spectra.msp`: one spectrum per peak, in MSP, a plain-text spectrum format. Use it to
