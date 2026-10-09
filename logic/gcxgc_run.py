@@ -69,7 +69,7 @@ class GCxGCRun:
     """A loaded GCxGC run. Build it with GCxGCRun.from_c_folder()."""
 
     def __init__(self, *, fid, fid_hz, tic, dbc_tic, tof_hz, file_period, file_phase,
-                 lsc=None, dbc_lsc=None, sample_id="", paths=None,
+                 lsc=None, dbc_lsc=None, sample_id="", paths=None, c_path=None,
                  user_period_s=None, user_phase_s=None):
         self.fid = np.asarray(fid, dtype=float)
         self.fid_hz = float(fid_hz)
@@ -80,6 +80,7 @@ class GCxGCRun:
         self.dbc_lsc = dbc_lsc
         self.sample_id = sample_id
         self.paths = dict(paths or {})
+        self.c_path = None if c_path is None else os.path.abspath(str(c_path))   # the run's .C folder
         self._file = {"modulation_period_s": file_period, "phase_shift_s": file_phase}
         self._user = {"modulation_period_s": None, "phase_shift_s": None}
         self._offset = OffsetModel()
@@ -128,7 +129,7 @@ class GCxGCRun:
                 tof_hz=tof_hz, file_period=file_period, file_phase=file_phase,
                 lsc=lsc, dbc_lsc=dbc_lsc,
                 sample_id=os.path.splitext(os.path.basename(full["rsd"]))[0], paths=full,
-                user_period_s=modulation_period_s, user_phase_s=phase_shift_s,
+                c_path=c_path, user_period_s=modulation_period_s, user_phase_s=phase_shift_s,
             )
         except Exception:
             for f in (lsc, dbc_lsc):

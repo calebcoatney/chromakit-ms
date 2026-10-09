@@ -392,11 +392,13 @@ def test_loading_a_new_run_drops_the_previous_runs_results(gcxgc_app):
     app.button_frame.integrate_button.click()
     assert app._gcxgc_peaks and not app.view_results_button.isHidden()
     b = synth.build_run(c.parent, synth.Scene(duration_min=2.0), name="SynthB")
+    run_a = app._gcxgc_run
     app.on_file_selected(str(b))
     assert app._gcxgc_run.sample_id == "SynthB"
     assert app._gcxgc_peaks == [] and app._gcxgc_proc is None
     assert app.integrated_peaks == [] and app.plot_frame._gcxgc_peaks == []
     assert app.view_results_button.isHidden()
+    assert _run_files_closed(run_a) and not _run_files_closed(app._gcxgc_run)
 
 
 # ── Panel consistency the brief's wiring depends on ─────────────────────────
@@ -602,3 +604,75 @@ def test_return_on_an_untouched_blank_field_does_not_dirty_the_method(qtbot, tmp
     app._method_dirty = False
     qtbot.keyClick(app.parameters_frame.gcxgc_pm_entry, Qt.Key_Return)
     assert app._method_dirty is False
+
+
+# ── Final review, Important 1: a failed load never leaves the previous run's state behind ──
+
+def _run_files_closed(run):
+    return all(f is None or f._mm is None for f in (run.lsc, run.dbc_lsc))
+
+
+def _integrated_run_a(app, tmp_path, monkeypatch):
+    """Load run A, Integrate with auto-export on, and return (A, its GCxGCRun) with A's results/ empty."""
+    monkeypatch.setattr(app.export_manager, "should_export_json", lambda trigger: True)
+    a = synth.build_run(tmp_path / "a", _scene())
+    app.on_file_selected(str(a))
+    app.parameters_frame.gcxgc_prominence_entry.setText("50")
+    app.button_frame.integrate_button.click()
+    assert app._gcxgc_peaks
+    _clear_results(a)
+    return a, app._gcxgc_run
+
+
+def _assert_run_dropped(app, old_run):
+    assert app._gcxgc_run is None and not app._gcxgc_mode
+    assert app._gcxgc_peaks == [] and app._gcxgc_proc is None
+    assert app.plot_frame._gcxgc_peaks == []
+    assert not hasattr(app.plot_frame, "_gcxgc_ax_fid")          # A's heatmaps are off the screen
+    assert _run_files_closed(old_run)
+
+
+def _assert_nothing_written(app, *folders):
+    app.button_frame.export_button.click()
+    app.button_frame.integrate_button.click()
+    for folder in folders:
+        assert list((folder / "results").iterdir()) == [], folder
+
+
+def test_export_writes_into_the_runs_own_folder(gcxgc_app):
+    from logic.c_folder import CFolder
+    app, c = gcxgc_app
+    app.button_frame.integrate_button.click()
+    _clear_results(c)
+    other = synth.build_run(c.parent / "other", synth.Scene(duration_min=2.0), name="Other")
+    app.current_cf = CFolder.open(str(other))          # the app's notion of "current" moved on
+    app.current_directory_path = str(other)
+    app.button_frame.export_button.click()
+    assert list((other / "results").iterdir()) == []
+    assert len(list((c / "results").iterdir())) == 4
+
+
+def test_failed_load_drops_the_previous_run(qtbot, tmp_path, monkeypatch):
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    monkeypatch.setattr("ui.app.QMessageBox.critical", lambda *a, **k: None)
+    a, run_a = _integrated_run_a(app, tmp_path, monkeypatch)
+    b = synth.build_run(tmp_path / "b", _scene())
+    lsc = b / "data" / "Synth.lsc"
+    lsc.write_bytes(lsc.read_bytes()[: lsc.stat().st_size // 2])      # a damaged copy
+    app.on_file_selected(str(b))
+    assert "Error loading file" in app.status_bar.currentMessage()
+    _assert_run_dropped(app, run_a)
+    _assert_nothing_written(app, a, b)
+
+
+def test_cancelled_period_prompt_drops_the_previous_run(qtbot, tmp_path, monkeypatch):
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    a, run_a = _integrated_run_a(app, tmp_path, monkeypatch)
+    b = synth.build_run(tmp_path / "b", _scene(), insight=False, view=False)     # no period anywhere
+    monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getDouble", lambda *a, **k: (4.0, False))
+    app.on_file_selected(str(b))
+    assert "Load cancelled" in app.status_bar.currentMessage()
+    _assert_run_dropped(app, run_a)
+    _assert_nothing_written(app, a, b)

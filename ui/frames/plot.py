@@ -1240,6 +1240,18 @@ class PlotFrame(QWidget):
         self._gcxgc_ax_tic = ax_tic
         self._gcxgc_ax_fid = ax_fid
 
+    def clear_gcxgc(self) -> None:
+        """Take the GCxGC heatmaps and their peaks off the canvas and show the empty 1D axes."""
+        for name in ('_gcxgc_ax_tic', '_gcxgc_ax_fid'):
+            if hasattr(self, name):
+                delattr(self, name)
+        self._gcxgc_peaks = []
+        self.figure.clear()
+        self.figure.set_layout_engine('none')       # render_gcxgc turned constrained layout on
+        self.tic_ax = self.figure.add_subplot(211)
+        self.chromatogram_ax = self.figure.add_subplot(212, sharex=self.tic_ax)
+        self._setup_empty_plots()
+
     def overlay_gcxgc_peaks(self, peaks: list) -> None:
         """Overlay detected peaks as red + markers on both heatmap axes."""
         if not hasattr(self, '_gcxgc_ax_tic'):

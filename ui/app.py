@@ -818,6 +818,7 @@ class ChromaKitApp(QMainWindow):
                         raise
                     data = self._load_gcxgc_with_prompted_period(folder_path)
                     if data is None:
+                        self._drop_gcxgc_run()       # the previous run must not stand in for this one
                         self.status_bar.showMessage("Load cancelled: no modulation period entered")
                         return
                 # Sync the auto-detected detector back to data_handler so exports see the real name
@@ -893,12 +894,17 @@ class ChromaKitApp(QMainWindow):
             
             # Detect GCxGC data
             is_gcxgc = data.get('metadata', {}).get('is_gcxgc', False)
+            previous_run = self._gcxgc_run
+            if not is_gcxgc and previous_run is not None:
+                self._drop_gcxgc_run(clear_plot=False)     # close its files; the 1D path redraws
             self._gcxgc_mode = is_gcxgc
             
             gcxgc_layout_note = ""
             if is_gcxgc:
                 self._gcxgc_metadata = data['metadata']
                 self._gcxgc_run = data['metadata']['gcxgc_run']
+                if previous_run is not None and previous_run is not self._gcxgc_run:
+                    previous_run.close()
                 self._clear_gcxgc_results()      # the previous run's peaks, overlay and View Peak Results
                 run = self._gcxgc_run
                 try:
@@ -973,6 +979,13 @@ class ChromaKitApp(QMainWindow):
             
         except Exception as e:
             # Handle any errors during loading
+            if self._gcxgc_mode or self._gcxgc_run is not None:
+                # current_cf may already name the new folder: never let the previous GCxGC run's
+                # peaks be exported or re-integrated in its place.
+                try:
+                    self._drop_gcxgc_run()
+                except Exception as drop_error:
+                    print(f"Error dropping the previous GCxGC run: {drop_error}")
             # Debug: print type and details of the exception
             print(f"DEBUG: Exception type: {type(e)}")
             print(f"DEBUG: Exception repr: {repr(e)}")
@@ -1798,6 +1811,20 @@ class ChromaKitApp(QMainWindow):
         if hasattr(self, 'view_results_button'):
             self.view_results_button.setVisible(False)
 
+    def _drop_gcxgc_run(self, clear_plot: bool = True) -> None:
+        """Forget the loaded GCxGC run: drop its results, close its files and leave GCxGC mode.
+
+        Used when a load fails or is cancelled (and when a 1D file replaces the run), so the old
+        run cannot be exported or re-integrated as if it were the newly selected one."""
+        run, self._gcxgc_run = self._gcxgc_run, None
+        self._clear_gcxgc_results()
+        self._gcxgc_mode = False
+        self._gcxgc_metadata = {}
+        if run is not None:
+            run.close()
+        if clear_plot:
+            self.plot_frame.clear_gcxgc()
+
     def _export_gcxgc(self, interactive: bool) -> None:
         """Write the GCxGC CSV/JSON/MSP/MGF results into the run's results/ folder.
 
@@ -1809,8 +1836,10 @@ class ChromaKitApp(QMainWindow):
             if interactive:
                 self.status_bar.showMessage("Run Integrate before exporting GCxGC results")
             return
-        base = self.current_cf.path if getattr(self, 'current_cf', None) else self.current_directory_path
-        results_dir = os.path.join(base, "results")
+        if not self._gcxgc_run.c_path:
+            self.status_bar.showMessage("GCxGC export failed: this run has no .C folder to write into")
+            return
+        results_dir = os.path.join(self._gcxgc_run.c_path, "results")     # the run's own folder
         search = self._gcxgc_search_info
         try:
             paths = export_gcxgc_results(
