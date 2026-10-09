@@ -61,6 +61,11 @@ class ChromaKitApp(QMainWindow):
         self._gcxgc_metadata: dict = {}
         self._gcxgc_proc = None
         self._gcxgc_peaks: list = []
+        self._gcxgc_run = None
+        # Provenance of the current peak set, for the JSON record: the parameters that produced
+        # the peaks, and the library search (if any) that annotated them.
+        self._gcxgc_export_settings: dict = {}
+        self._gcxgc_search_info: dict = {"library": None, "search_method": None, "complete": None}
         
         # Load scaling factors from settings
         # self.signal_factor / self.area_factor are numeric mirrors (never None) of
@@ -159,7 +164,7 @@ class ChromaKitApp(QMainWindow):
         self.parameters_frame.parameters_changed.connect(self._on_params_writeback)
         self.parameters_frame.save_method_requested.connect(self.save_method)
         self.parameters_frame.load_method_requested.connect(self.load_method)
-        self.parameters_frame.gcxgc_params_changed.connect(self._on_gcxgc_params_changed)
+        self.parameters_frame.gcxgc_display_changed.connect(self._on_gcxgc_display_changed)
         
         # Connect button frame signals
         self.button_frame.export_clicked.connect(self.on_export)
@@ -274,6 +279,9 @@ class ChromaKitApp(QMainWindow):
         self._loading_method = True
         try:
             self.parameters_frame.apply_method(self.current_method)
+            if self._gcxgc_mode and self._gcxgc_run is not None:
+                # apply_method rebuilt the widgets: give them the run's file values back
+                self.parameters_frame.set_gcxgc_run_info(self._gcxgc_run)
             self.rt_table_frame.apply_method(self.current_method)
             if self.rf_table_frame is not None:
                 self.rf_table_frame.apply_method(self.current_method)
@@ -769,6 +777,7 @@ class ChromaKitApp(QMainWindow):
             detector: Specific detector channel to use (for Agilent data)
         """
         from logic.c_folder import CFolder
+        data = None
         try:
             # Clear stored peak data to prevent ghost peaks
             self.plot_frame.clear_peak_data()
@@ -802,7 +811,17 @@ class ChromaKitApp(QMainWindow):
             if folder_path.endswith('.C'):
                 self.current_cf = CFolder.open(folder_path)
                 self.current_profile = self.current_cf.profile
-                data = self.current_cf.load_signal(signal_factor=self.signal_factor, detector=detector)
+                from logic.gcxgc_run import MissingModulationPeriod
+                try:
+                    data = self.current_cf.load_signal(signal_factor=self.signal_factor, detector=detector)
+                except MissingModulationPeriod:
+                    if batch_mode:
+                        raise
+                    data = self._load_gcxgc_with_prompted_period(folder_path)
+                    if data is None:
+                        self._drop_gcxgc_run()       # the previous run must not stand in for this one
+                        self.status_bar.showMessage("Load cancelled: no modulation period entered")
+                        return
                 # Sync the auto-detected detector back to data_handler so exports see the real name
                 detected = data.get('metadata', {}).get('detector', '')
                 if detected and detected != 'Unknown':
@@ -876,28 +895,25 @@ class ChromaKitApp(QMainWindow):
             
             # Detect GCxGC data
             is_gcxgc = data.get('metadata', {}).get('is_gcxgc', False)
+            previous_run = self._gcxgc_run
+            if not is_gcxgc and previous_run is not None:
+                self._drop_gcxgc_run(clear_plot=False)     # close its files; the 1D path redraws
             self._gcxgc_mode = is_gcxgc
             
+            gcxgc_layout_note = ""
             if is_gcxgc:
-                # GCxGC mode: render heatmaps using user-specified pm + phase shift
                 self._gcxgc_metadata = data['metadata']
-                # Inform the parameters panel whether .dbc.lsc is available
-                dbc_available = data['metadata'].get('dbc_lsc_path') is not None
-                self.parameters_frame.set_gcxgc_dbc_available(dbc_available)
-                params = self.parameters_frame.get_gcxgc_params()
-                from logic.loaders.sepsolve_loader import _reshape_to_2d
-                pm = params['pm']
-                hz = data['metadata']['hz']
-                phase_scans = int(params['phase_shift'] * hz)
-                scans_per_mod = int(pm * hz)
-                fid_2d = np.roll(_reshape_to_2d(data['metadata']['fid_1d'], scans_per_mod), phase_scans, axis=1)
-                tic_source_1d = (
-                    data['metadata']['dbc_tic_1d']
-                    if params.get('tic_source') == 'dbc' and data['metadata'].get('dbc_tic_1d') is not None
-                    else data['metadata']['tic_1d']
-                )
-                tic_2d = np.roll(_reshape_to_2d(tic_source_1d, scans_per_mod), phase_scans, axis=1)
-                self.plot_frame.render_gcxgc(fid_2d, tic_2d, pm, hz)
+                self._gcxgc_run = data['metadata']['gcxgc_run']
+                if previous_run is not None and previous_run is not self._gcxgc_run:
+                    previous_run.close()
+                self._clear_gcxgc_results()      # the previous run's peaks, overlay and View Peak Results
+                run = self._gcxgc_run
+                try:
+                    self._apply_gcxgc_layout_from_ui()
+                except ValueError as e:      # set_layout leaves the file layout in place
+                    gcxgc_layout_note = f" — GCxGC layout from the method ignored: {e}"
+                self.parameters_frame.set_gcxgc_run_info(run)
+                self._render_gcxgc_frames()
                 self.real_data_loaded = True
             else:
                 # Process signal data if available
@@ -952,6 +968,8 @@ class ChromaKitApp(QMainWindow):
                 )
             else:
                 self.status_bar.showMessage(f"Loaded: {sample_name} - {ms_status} MS data")
+            if gcxgc_layout_note:
+                self.status_bar.showMessage(self.status_bar.currentMessage() + gcxgc_layout_note)
             
             # Enable export button
             self.button_frame.enable_export(True)
@@ -962,6 +980,17 @@ class ChromaKitApp(QMainWindow):
             
         except Exception as e:
             # Handle any errors during loading
+            new_run = data.get('metadata', {}).get('gcxgc_run') if isinstance(data, dict) else None
+            if self._gcxgc_mode or self._gcxgc_run is not None or new_run is not None:
+                # current_cf may already name the new folder: never let the previous GCxGC run's
+                # peaks be exported or re-integrated in its place. A run read before the failure
+                # is closed too.
+                try:
+                    self._drop_gcxgc_run()
+                    if new_run is not None:
+                        new_run.close()
+                except Exception as drop_error:
+                    print(f"Error dropping the previous GCxGC run: {drop_error}")
             # Debug: print type and details of the exception
             print(f"DEBUG: Exception type: {type(e)}")
             print(f"DEBUG: Exception repr: {repr(e)}")
@@ -1006,9 +1035,13 @@ class ChromaKitApp(QMainWindow):
             # Switch to MS tab
             ms_idx = self.right_tabs.indexOf(self.ms_frame)
             self.right_tabs.setCurrentIndex(ms_idx)
-        self.status_bar.showMessage(
-            f"Peak {peak.peak_number}: rt1={peak.rt1:.3f} min, rt2={peak.rt2:.3f} s, vol={peak.volume:.0f}"
-        )
+        # MS Search All's hits for this peak (an empty list clears the previous peak's table)
+        self.ms_frame.update_ms_results([(name, score) for name, score, _cas in peak.top_hits])
+        message = f"Peak {peak.peak_number}: rt1={peak.rt1:.3f} min, rt2={peak.rt2:.3f} s, vol={peak.volume:.0f}"
+        if peak.compound_name:
+            score = f" ({peak.match_score:.3f})" if peak.match_score is not None else ""
+            message += f" — {peak.compound_name}{score}"
+        self.status_bar.showMessage(message)
         
     @Slot(float, float, float)
     def on_view_spectrum(self, rt, subtract_rt, mz_shift):
@@ -1620,6 +1653,9 @@ class ChromaKitApp(QMainWindow):
     # Button handlers - now with navigation functionality
     def on_export(self):
         """Handle export button click."""
+        if self._gcxgc_mode:
+            self._export_gcxgc(interactive=True)
+            return
         self.status_bar.showMessage("Export clicked")
         
     def on_previous_sample(self):
@@ -1658,61 +1694,83 @@ class ChromaKitApp(QMainWindow):
             else:
                 self.status_bar.showMessage("No next sample available")
         
-    def _on_gcxgc_params_changed(self) -> None:
-        """Slot for lightweight GCxGC display parameter changes (e.g. TIC source toggle).
-        Only re-renders the heatmap — does not re-run baseline or peak detection."""
-        if self._gcxgc_mode and self._gcxgc_metadata:
-            self._run_gcxgc_processing()
+    def _on_gcxgc_display_changed(self) -> None:
+        """Redraw the heatmaps for a display-only change (TIC source); never re-run processing."""
+        if not (self._gcxgc_mode and self._gcxgc_run is not None):
+            return
+        proc = self._gcxgc_proc
+        fid_data = proc.corrected if proc is not None and proc.frame.signal == 'fid' else None
+        self._render_gcxgc_frames(fid_data=fid_data)
+        if self._gcxgc_peaks:
+            self.plot_frame.overlay_gcxgc_peaks(self._gcxgc_peaks)
+
+    def _load_gcxgc_with_prompted_period(self, folder_path):
+        """Ask for a modulation period the run's files do not record, then load with it."""
+        from PySide6.QtWidgets import QInputDialog
+        from logic.loaders.sepsolve_loader import SepSolveLoader
+        value, ok = QInputDialog.getDouble(
+            self, "Modulation period",
+            "This run's files do not record a modulation period.\nEnter it in seconds:",
+            4.0, 0.1, 60.0, 3)
+        if not ok:
+            return None
+        return SepSolveLoader().load(folder_path, modulation_period_s=value)
+
+    def _gcxgc_tic_signal(self) -> str:
+        run = self._gcxgc_run
+        if self.parameters_frame.get_gcxgc_params().get('tic_source') == 'dbc' and run.dbc_tic is not None:
+            return 'dbc_tic'
+        return 'tic' if run.tic is not None else 'dbc_tic'
+
+    def _apply_gcxgc_layout_from_ui(self) -> None:
+        run = self._gcxgc_run
+        params = self.parameters_frame.get_gcxgc_params()
+        pm = params['pm']
+        if pm is None and run.file_layout['modulation_period_s'][0] is None:
+            pm = run.modulation_period_s          # entered at load; the files have none
+        run.set_layout(modulation_period_s=pm, phase_shift_s=params['phase_shift'])
+
+    def _render_gcxgc_frames(self, fid_data=None) -> None:
+        from dataclasses import replace
+        run = self._gcxgc_run
+        fid = run.frame('fid')
+        if fid_data is not None and fid_data.shape == fid.data.shape:
+            fid = replace(fid, data=fid_data)
+        self.plot_frame.render_gcxgc(fid, run.frame(self._gcxgc_tic_signal()))
 
     def _run_gcxgc_processing(self) -> None:
-        """Run GCxGC processing: re-reshape with user pm, apply phase shift,
-        optionally apply 2D baseline correction, optionally detect peaks."""
+        """Apply the layout, optional 2D baseline and peak detection on the run's frames."""
         from logic.gcxgc_processor import GCxGCProcessor
-        from logic.loaders.sepsolve_loader import _reshape_to_2d
-
-        meta = self._gcxgc_metadata
+        run = self._gcxgc_run
         params = self.parameters_frame.get_gcxgc_params()
-
-        pm = params['pm']
-        hz = meta['hz']
-        phase_scans = int(params['phase_shift'] * hz)
-        scans_per_mod = int(pm * hz)
-
-        fid_2d = np.roll(_reshape_to_2d(meta['fid_1d'], scans_per_mod), phase_scans, axis=1)
-        tic_source_1d = (
-            meta['dbc_tic_1d']
-            if params.get('tic_source') == 'dbc' and meta.get('dbc_tic_1d') is not None
-            else meta['tic_1d']
-        )
-        tic_2d = np.roll(_reshape_to_2d(tic_source_1d, scans_per_mod), phase_scans, axis=1)
-
-        # Render heatmap with current pm/phase settings
-        self.plot_frame.render_gcxgc(fid_2d, tic_2d, pm, hz)
-
+        try:
+            self._apply_gcxgc_layout_from_ui()
+        except ValueError as e:
+            self.status_bar.showMessage(f"GCxGC layout error: {e}")
+            QMessageBox.warning(self, "GCxGC layout", str(e))
+            return
+        run.set_offset(params['offset_mode'], params['offset_scans'])
+        self.parameters_frame.set_gcxgc_run_info(run)
+        self._render_gcxgc_frames()
         if not params['baseline_enabled'] and not params['peaks_enabled']:
+            self._clear_gcxgc_results()       # the layout just changed under the old peaks
             self.status_bar.showMessage("GCxGC: heatmap updated (baseline and peak detection disabled)")
             return
-
-        self.status_bar.showMessage("Running GCxGC processing…")
-
-        proc = GCxGCProcessor(
-            fid_2d=fid_2d,
-            tic_2d=tic_2d,
-            pm=pm,
-            hz=hz,
-            lsc_path=meta['lsc_path'],
-            phase_scans=phase_scans,
-            dbc_lsc_path=meta.get('dbc_lsc_path'),
-            use_dbc=params.get('use_dbc', True),
-        )
-
+        signal = params.get('detection_signal', 'fid')
+        signal_note = ""
+        if signal not in run.available_signals:      # the method's choice, but this run lacks it
+            label = {"dbc_tic": "DBC TIC", "tic": "TIC"}.get(signal, signal)
+            signal_note = f" — {label} not available for this run; detected on FID"
+            signal = 'fid'
+        apex_window = params.get('apex_window', 10)
         try:
+            proc = GCxGCProcessor(run.frame(signal), run, use_dbc=params.get('use_dbc', True),
+                                  apex_window=apex_window)
             if params['baseline_enabled']:
                 self.status_bar.showMessage("GCxGC: applying 2D baseline correction…")
                 proc.apply_baseline(lam=params['lam'], diff_order=params['diff_order'])
-                # Re-render with the corrected FID so user sees the change
-                self.plot_frame.render_gcxgc(proc._fid_corrected, tic_2d, pm, hz)
-
+                if signal == 'fid':
+                    self._render_gcxgc_frames(fid_data=proc.corrected)
             peaks = []
             if params['peaks_enabled']:
                 self.status_bar.showMessage("GCxGC: detecting peaks…")
@@ -1723,23 +1781,91 @@ class ChromaKitApp(QMainWindow):
                     min_sub_peaks=params['min_sub_peaks'],
                 )
         except Exception as e:
+            self._clear_gcxgc_results()       # the layout was applied; the old peaks no longer match it
             self.status_bar.showMessage(f"GCxGC processing error: {e}")
             import traceback; traceback.print_exc()
             return
-
         self._gcxgc_proc = proc
         self._gcxgc_peaks = peaks
-        # Make peaks available to run_batch_ms_search via integrated_peaks
+        self._gcxgc_export_settings = dict(params, pm=run.modulation_period_s, phase_shift=run.phase_shift_s,
+                                           detection_signal=signal, apex_window=apex_window)
+        self._gcxgc_search_info = {"library": None, "search_method": None, "complete": None}   # no search yet
         self.integrated_peaks = peaks
         self.plot_frame._gcxgc_peaks = peaks
         self.plot_frame.overlay_gcxgc_peaks(peaks)
-
         if peaks:
             self.button_frame.batch_search_button.setEnabled(True)
             self._show_gcxgc_results_button(peaks)
             self.status_bar.showMessage(f"GCxGC: detected {len(peaks)} peaks — click a peak to view spectrum, or use MS Search All")
         else:
-            self.status_bar.showMessage(f"GCxGC: heatmap updated — no peaks detected")
+            self.status_bar.showMessage("GCxGC: heatmap updated — no peaks detected")
+        if peaks and self.export_manager.should_export_json('integration'):
+            self._export_gcxgc(interactive=False)
+        if signal_note:
+            self.status_bar.showMessage(self.status_bar.currentMessage() + signal_note)
+        if peaks and not run.offset().ok:
+            self.status_bar.showMessage(self.status_bar.currentMessage()
+                                        + " — FID→TOF offset fit failed; assuming 0 (set it under 2D Peak Detection)")
+
+    def _clear_gcxgc_results(self) -> None:
+        """Forget the processed peaks: the run's layout changed (or processing failed), so they
+        no longer describe it. Export then asks for a fresh Integrate."""
+        self._gcxgc_proc = None
+        self._gcxgc_peaks = []
+        self._gcxgc_export_settings = {}
+        self._gcxgc_search_info = {"library": None, "search_method": None, "complete": None}
+        self.integrated_peaks = []
+        self.plot_frame._gcxgc_peaks = []
+        self.plot_frame.overlay_gcxgc_peaks([])
+        if hasattr(self, 'view_results_button'):
+            self.view_results_button.setVisible(False)
+
+    def _drop_gcxgc_run(self, clear_plot: bool = True) -> None:
+        """Forget the loaded GCxGC run: drop its results, close its files and leave GCxGC mode.
+
+        Used when a load fails or is cancelled (and when a 1D file replaces the run), so the old
+        run cannot be exported or re-integrated as if it were the newly selected one."""
+        run, self._gcxgc_run = self._gcxgc_run, None
+        self._clear_gcxgc_results()
+        self._gcxgc_mode = False
+        self._gcxgc_metadata = {}
+        if run is not None:
+            run.close()
+        if clear_plot:
+            self.plot_frame.clear_gcxgc()
+
+    def _export_gcxgc(self, interactive: bool) -> None:
+        """Write the GCxGC CSV/JSON/MSP/MGF results into the run's results/ folder.
+
+        The JSON describes the processing that produced the current peaks (the parameter
+        snapshot taken at Integrate, and the library search recorded by MS Search All),
+        not whatever the widgets show now."""
+        from logic.gcxgc_export import export_gcxgc_results
+        if self._gcxgc_run is None or self._gcxgc_proc is None:
+            if interactive:
+                self.status_bar.showMessage("Run Integrate before exporting GCxGC results")
+            return
+        if not self._gcxgc_run.c_path:
+            self.status_bar.showMessage("GCxGC export failed: this run has no .C folder to write into")
+            return
+        results_dir = os.path.join(self._gcxgc_run.c_path, "results")     # the run's own folder
+        search = self._gcxgc_search_info
+        try:
+            paths = export_gcxgc_results(
+                self._gcxgc_peaks, self._gcxgc_run, results_dir,
+                settings=self._gcxgc_export_settings,
+                get_spectrum=self._gcxgc_proc.extract_spectrum,
+                library=search.get('library'), search_method=search.get('search_method'),
+                search_complete=search.get('complete'))
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            self.status_bar.showMessage(f"GCxGC export failed: {e}")
+            if interactive:
+                QMessageBox.critical(self, "GCxGC export failed", str(e))
+            return
+        self.status_bar.showMessage(
+            f"GCxGC results written to {results_dir}: {paths.csv.name}, {paths.json.name}, "
+            f"{paths.msp.name}, {paths.mgf.name}")
 
     def _show_gcxgc_results_button(self, peaks: list) -> None:
         """Show/update the 'View Results' button in the status bar for GCxGC peaks."""
@@ -1758,6 +1884,7 @@ class ChromaKitApp(QMainWindow):
         """Show GCxGC peak results in a dialog table."""
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox
         from PySide6.QtGui import QBrush, QColor
+        from ui.widgets.numeric_item import NumericItem
 
         dialog = QDialog(self)
         dialog.setWindowTitle("GCxGC Peak Results")
@@ -1769,14 +1896,14 @@ class ChromaKitApp(QMainWindow):
         table.setHorizontalHeaderLabels(headers)
 
         for i, p in enumerate(peaks):
-            table.setItem(i, 0, QTableWidgetItem(str(p.peak_number)))
-            table.setItem(i, 1, QTableWidgetItem(f"{p.rt1:.3f}"))
-            table.setItem(i, 2, QTableWidgetItem(f"{p.rt2:.3f}"))
-            table.setItem(i, 3, QTableWidgetItem(f"{p.volume:.0f}"))
-            table.setItem(i, 4, QTableWidgetItem(str(p.n_sub_peaks)))
+            table.setItem(i, 0, NumericItem(p.peak_number, str(p.peak_number)))
+            table.setItem(i, 1, NumericItem(p.rt1, f"{p.rt1:.3f}"))
+            table.setItem(i, 2, NumericItem(p.rt2, f"{p.rt2:.3f}"))
+            table.setItem(i, 3, NumericItem(p.volume, f"{p.volume:.0f}"))
+            table.setItem(i, 4, NumericItem(p.n_sub_peaks, str(p.n_sub_peaks)))
             table.setItem(i, 5, QTableWidgetItem(p.compound_name or ""))
-            score_text = f"{p.match_score:.3f}" if p.match_score is not None else ""
-            score_item = QTableWidgetItem(score_text)
+            score = p.match_score if p.match_score is not None else -1.0
+            score_item = NumericItem(score, f"{p.match_score:.3f}" if p.match_score is not None else "")
             if p.match_score is not None:
                 color = QColor(0, 180, 0) if p.match_score >= 0.8 else (QColor(200, 130, 0) if p.match_score >= 0.5 else QColor(200, 0, 0))
                 score_item.setForeground(QBrush(color))
@@ -1790,6 +1917,8 @@ class ChromaKitApp(QMainWindow):
         layout.addWidget(table)
 
         btns = QDialogButtonBox(QDialogButtonBox.Close)
+        export_btn = btns.addButton("Export…", QDialogButtonBox.ActionRole)
+        export_btn.clicked.connect(lambda: self._export_gcxgc(interactive=True))
         btns.rejected.connect(dialog.reject)
         layout.addWidget(btns)
         dialog.exec()
@@ -1823,13 +1952,21 @@ class ChromaKitApp(QMainWindow):
         options = self.ms_frame.search_options if hasattr(self.ms_frame, 'search_options') else {}
         method = options.get('search_method', 'vector')
 
+        top_n = int(options.get('top_n', 5))
         peaks = self._gcxgc_peaks
+        # A new search replaces the last one: no peak may keep an ID this search did not give it.
+        for peak in peaks:
+            peak.compound_name = peak.match_score = peak.casno = None
+            peak.top_hits = []
+        self._gcxgc_search_info = {"library": None, "search_method": None, "complete": None}
         progress = QProgressDialog("Searching MS library…", "Cancel", 0, len(peaks), self)
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
 
+        searched = cancelled = False
         for i, peak in enumerate(peaks):
             if progress.wasCanceled():
+                cancelled = True
                 break
             progress.setValue(i)
             progress.setLabelText(f"Peak {i+1}/{len(peaks)}  rt1={peak.rt1:.2f} min")
@@ -1837,11 +1974,12 @@ class ChromaKitApp(QMainWindow):
             spectrum = self._gcxgc_proc.extract_spectrum(peak)
             if not spectrum:
                 continue
+            searched = True
             try:
                 if method == 'w2v':
                     results = toolkit.search_w2v(
                         spectrum,
-                        top_n=1,
+                        top_n=top_n,
                         intensity_power=options.get('intensity_power', 0.6),
                         top_k_clusters=options.get('top_k_clusters', 10),
                     )
@@ -1849,7 +1987,7 @@ class ChromaKitApp(QMainWindow):
                     results = toolkit.search_hybrid(
                         spectrum,
                         method=options.get('hybrid_method', 'auto'),
-                        top_n=1,
+                        top_n=top_n,
                         intensity_power=options.get('intensity_power', 0.6),
                         weighting_scheme=options.get('weighting', 'NIST_GC'),
                         composite=(options.get('similarity') == 'composite'),
@@ -1859,25 +1997,36 @@ class ChromaKitApp(QMainWindow):
                 else:  # 'vector' (default)
                     results = toolkit.search_vector(
                         spectrum,
-                        top_n=1,
+                        top_n=top_n,
                         composite=(options.get('similarity') == 'composite'),
                         weighting_scheme=options.get('weighting', 'NIST_GC'),
                         unmatched_method=options.get('unmatched', 'keep_all'),
                         top_k_clusters=options.get('top_k_clusters', 10),
                     )
-                if results:
-                    peak.compound_name = results[0][0]
-                    peak.match_score = float(results[0][1])
+                from logic.batch_search import format_casno
+                hits = []
+                for name, score in (results or [])[:top_n]:
+                    compound = getattr(toolkit, 'library', {}).get(name)
+                    cas = getattr(compound, 'casno', None) if compound is not None else None
+                    hits.append((name, float(score), format_casno(cas) if cas else None))
+                peak.top_hits = hits
+                if hits:
+                    peak.compound_name, peak.match_score, peak.casno = hits[0]
             except Exception as e:
                 print(f"MS search error for peak {peak.peak_number}: {e}")
 
         progress.setValue(len(peaks))
+        if searched or cancelled:
+            library = os.path.basename(self.ms_frame.settings.value("ms/library_path", "") or "") or None
+            self._gcxgc_search_info = {"library": library, "search_method": method, "complete": not cancelled}
         self.status_bar.showMessage(
-            f"GCxGC MS search complete ({method}): "
+            f"GCxGC MS search {'cancelled' if cancelled else 'complete'} ({method}): "
             f"{sum(1 for p in peaks if p.compound_name)} / {len(peaks)} peaks matched"
         )
         self._show_gcxgc_results_button(peaks)
         self.plot_frame.overlay_gcxgc_peaks(peaks)
+        if self.export_manager.should_export_json('ms_search'):
+            self._export_gcxgc(interactive=False)
 
     def on_integrate(self):
         """Handle integrate button click."""
@@ -2388,8 +2537,19 @@ class ChromaKitApp(QMainWindow):
         return True
 
 
+    def _refuse_batch_in_gcxgc_mode(self) -> bool:
+        """Tell the user batch processing does not handle GCxGC runs; True when refused."""
+        if not self._gcxgc_mode:
+            return False
+        QMessageBox.information(self, "Batch processing",
+                                "Batch processing is not supported for GCxGC runs yet. "
+                                "Process GCxGC runs one at a time.")
+        return True
+
     def on_automation_clicked(self):
         """Handle automation button click."""
+        if self._refuse_batch_in_gcxgc_mode():
+            return
         # Start the automation process directly without checking enabled state
         self.start_automation()
 
@@ -2577,6 +2737,8 @@ class ChromaKitApp(QMainWindow):
     @Slot(dict)
     def on_parameters_changed(self, params):
         """Handle parameter changes from the parameters frame"""
+        if self._gcxgc_mode:
+            return      # GCxGC settings apply at Integrate; _on_params_writeback keeps them in the method
         print("Parameters changed signal received!")
         
         # Check if we have data to process
@@ -3996,6 +4158,8 @@ class ChromaKitApp(QMainWindow):
     
     def show_batch_queue_dialog(self):
         """Show the batch job setup dialog before the progress dialog."""
+        if self._refuse_batch_in_gcxgc_mode():
+            return
         from ui.dialogs.batch_job_dialog import BatchJobDialog
         
         # Create and show the setup dialog first

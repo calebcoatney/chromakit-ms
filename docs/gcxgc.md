@@ -1,0 +1,114 @@
+# GCxGC-TOFMS/FID in ChromaKit
+
+For SepSolve/Markes INSIGHT + BenchTOF2 + FID runs acquired with TOF-DS/ChromSpace. Install
+ChromaKit as described in the [README](../README.md). Library searching also needs an MS library;
+see [ms-library-from-nist.md](ms-library-from-nist.md).
+
+## Get a run into ChromaKit
+
+Tools → Batch Convert to .C… → "Add GCxGC Files…", pick the folder holding the run's files, then
+Convert. A run is recognised by `<run>.HDR` and `<run>.rsd` together with `<run>.lsc`,
+`<run>.dbc.lsc` or `<run>_*.dbc.lsc`. ChromaKit copies `<run>.HDR`, `<run>.rsd`, `<run>.lsc` and any
+`.dbc.lsc` files into `<run>.C/data/`, and creates the `<run>.C` folder beside the originals. The
+originals, including the large `.DAT`, are not touched, and analysis never needs the `.DAT`. A run
+whose `.C` folder already exists is skipped.
+
+## Open it
+
+Open Folder (top of the left panel) → choose the folder that contains the `.C` folder → double-click
+the `.C` folder. The top heatmap is the TIC, the bottom the FID. The x axis is first-dimension
+retention time in minutes, the y axis second-dimension retention time in seconds. The "TIC Display"
+choice under 2D Peak Detection switches the top heatmap between the raw TIC and the background-corrected
+(`.dbc.lsc`) TIC when the run has one.
+
+The Parameters tab has the GCxGC controls:
+
+- **2D Layout.** Modulation Period (s) and Phase Shift (s). Leave a field blank to use the run's own
+  value; the grey label under it says where the value in force came from (the run's HDR, ChromSpace's
+  saved view, your value, or a default). Type a number to override. The period must be a whole number
+  of samples at both detector rates; if it is not, ChromaKit refuses it, names the period and the
+  rate, and keeps the previous layout. Phase uses ChromSpace's sign convention. If a run's files
+  record no modulation period, ChromaKit asks for it when you open the run. **Detection Signal**
+  chooses FID, DBC TIC or TIC; a signal the run lacks is greyed out.
+- **2D Baseline Correction.** On by default. Lambda and Diff. Order tune the 2D baseline fit.
+- **2D Peak Detection.** On by default. Min Prominence (in detector counts; blank for none),
+  2D RT Tolerance and Min Modulations control how slices from neighbouring modulations are joined into
+  one peak. Spectrum Window (scans, at least 1) sets how far around a peak's expected position ChromaKit
+  looks for its mass-spectral apex. FID→TOF Offset is "Auto (fit)" by default; choose "Fixed" to enter
+  the offset in TOF scans yourself.
+
+Layout and detection settings take effect when you click Integrate.
+
+## Find and identify peaks
+
+- Detection Signal: FID (the default; volumes are FID-based, and FID response is roughly carbon
+  proportional for hydrocarbons) or DBC TIC (for trace compounds the FID cannot see).
+- Integrate (button under the plot): applies the layout, runs the 2D baseline, then finds peaks slice by slice and groups them
+  across modulations. Each peak gets a red + marker on both heatmaps, and the status bar reports the
+  count. If it reports none, lower Min Prominence. If it reports "FID→TOF offset fit failed", set the
+  offset to Fixed under 2D Peak Detection.
+- "View Peak Results" (status bar, lower right) lists every peak with its retention times, volume,
+  number of modulations, compound and match score.
+- Click near a peak's marker on the bottom (FID) heatmap. ChromaKit selects the nearest peak, shows its
+  spectrum in the Mass Spectrometry tab and prints its retention times and volume in the status bar;
+  after MS Search All the status bar also names its best hit and score, and the tab's results table
+  lists its top hits.
+  The spectrum comes from the TOF scan at the peak's own apex: the FID apex is mapped to TOF time through
+  the FID→TOF offset, and the TOF TIC is searched within the Spectrum Window for its maximum. Up to three
+  adjacent scans are averaged, leaving out saturated ones.
+- Search Library (Mass Spectrometry tab) shows the top hits for the spectrum on display. MS Search All
+  (under the plot) searches every peak, writes the best hit into the Compound and Match Score columns
+  and records the top hits in the JSON. Each MS Search All starts by clearing the previous IDs; if you
+  cancel it, the peaks it did not reach have no ID and the JSON's `search_complete` is false. Both need
+  a loaded library. Use Vector Search (the default) or Word2Vec Search, set under Configure…; Hybrid
+  Search is not available with the current ms-toolkit.
+
+## Export
+
+Export (or "Export…" in View Peak Results) writes four files to `<run>.C/results/`:
+
+- `<run> - GCxGC peaks.csv`: ChromSpace's Area-percent layout (2tR in minutes). Use it to compare
+  ChromaKit's peaks side by side with a ChromSpace export (see below), or to paste peak rows into a
+  ChromSpace-based workbook. A workbook driven by stencil Group rows needs regions, which ChromaKit does
+  not produce yet.
+- `<run> - GCxGC peaks.json`: every peak with its flags, plus the run settings, the library, the
+  search method and the ChromaKit version and commit. This is the full record, for scripting in Python or R. The flags `apex_found`,
+  `apex_distance_scans` and `saturated`, with `spectrum_scan` and `spectrum_source`, say how much to
+  trust each peak's spectrum.
+- `<run> - GCxGC spectra.msp`: one spectrum per peak, in MSP, a plain-text spectrum format. Use it to
+  take the spectra into library-search and spectral tools that read NIST MSP, such as MZmine. The
+  import has not been tested in any of them, so check your tool's MSP options. Peaks with no spectrum are
+  left out.
+- `<run> - GCxGC spectra.mgf`: the same spectra in MGF, one `BEGIN IONS … END IONS` block per peak,
+  for spectral-networking tools such as GNPS. It carries no retention time; `FEATURE_ID` (= the peak
+  number) links each spectrum to its 1tR/2tR in the CSV and JSON. `PEPMASS=0` and `MSLEVEL=1` mark EI
+  spectra with no precursor. The exact fields a given networking workflow expects have not been checked
+  against a reference file yet.
+
+By default Integrate and MS Search All also write these files; Settings → Export Settings controls
+that. Run Integrate before Export; the files describe the peaks and settings of the last Integrate.
+A run with no peaks still gets a header-only CSV, an empty MSP and MGF, and a JSON with an empty peak list.
+
+Volume (the CSV's Area) is in detector counts × samples and is not calibrated. Compare peaks with Area %.
+
+## Check against ChromSpace
+
+`tools/compare_chromspace.py` (in the repository, not installed by pip) matches the peaks of a
+ChromSpace Area-percent CSV export with a ChromaKit peaks JSON and reports how well they agree:
+
+```
+python tools/compare_chromspace.py chromspace.csv "<run> - GCxGC peaks.json" --out matches.csv
+```
+
+Peaks are paired one-to-one by closest retention time within `--t1-tol` (minutes, default 0.1) and
+`--t2-tol` (seconds, default 0.1). It prints peak counts, the number matched, the median and
+interquartile range of the volume ratio (ChromaKit over ChromSpace), the RMSE of Area %, and how many
+named pairs agree. `chromspace_unmatched` and `chromakit_unmatched` count the peaks on each side that
+found no partner. `--out` saves the matched pairs only. The tool warns on stderr when it has to skip
+ChromSpace rows it cannot read, and when it reads no peaks at all (usually the wrong file or columns).
+
+## Not yet
+
+Region/stencil drawing and group-type (PIONA) wt%, deconvolution, retention indices, multi-sample
+alignment, and batch processing of GCxGC runs ("Batch Process All Files" and Process → "Batch Process
+Directories..." say so and do nothing).

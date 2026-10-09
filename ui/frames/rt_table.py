@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFileDialog, QCheckBox, QMessageBox, QGroupBox, QFormLayout,
     QHeaderView, QSpinBox, QDoubleSpinBox, QFrame, QComboBox, QSlider, QDialog,
     QDialogButtonBox, QLineEdit, QListWidget
@@ -10,12 +10,6 @@ import json
 
 from logic.method import ChromaMethod, RTTableEntry, RTMatchingParams, RTMatchingWeights
 from ui.widgets.editable_table import EditableTableWidget, ColumnSpec
-
-
-GCXGC_COLUMN_HEADERS = [
-    'Peak #', '1D RT (min)', '2D RT (s)', 'Volume',
-    'Compound', 'Score', 'CAS#', 'mol%', 'wt%',
-]
 
 
 class AddToRTTableDialog(QDialog):
@@ -217,7 +211,7 @@ class RTTableFrame(QWidget):
         
         # Initialize UI components
         self._init_file_controls()
-        self._init_table_widget()
+        self._init_rt_table()
         self._init_settings()
         
         # Add stretch at the end
@@ -270,15 +264,11 @@ class RTTableFrame(QWidget):
         
         self.layout.addWidget(file_group)
     
-    def _init_table_widget(self):
-        """Initialize the table widgets for displaying RT data.
+    def _init_rt_table(self):
+        """Initialize the table widget for displaying RT data.
 
-        Two widgets share this group box:
-          * ``self.rt_table`` — an editable RT grid (Compound/Start/Apex/End)
-            that mirrors ``self.rt_table_data`` and is the normal RT view.
-          * ``self.table_widget`` — a plain ``QTableWidget`` used ONLY for the
-            transient 9-column GCxGC results view (populate_gcxgc). It is hidden
-            in the normal RT workflow so the two views never corrupt each other.
+        ``self.rt_table`` is an editable RT grid (Compound/Start/Apex/End)
+        that mirrors ``self.rt_table_data``.
         """
         table_group = QGroupBox("RT Table Contents")
         table_layout = QVBoxLayout(table_group)
@@ -303,61 +293,12 @@ class RTTableFrame(QWidget):
         rt_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)     # End RT
 
         table_layout.addWidget(self.rt_table)
-
-        # Transient GCxGC results view — dedicated QTableWidget, hidden by default.
-        self.table_widget = QTableWidget()
-        self.table_widget.setMaximumHeight(200)
-        self.table_widget.setAlternatingRowColors(True)
-        self.table_widget.setColumnCount(len(GCXGC_COLUMN_HEADERS))
-        self.table_widget.setHorizontalHeaderLabels(GCXGC_COLUMN_HEADERS)
-        self.table_widget.hide()
-
-        table_layout.addWidget(self.table_widget)
         self.layout.addWidget(table_group)
     
     def set_column_labels(self, position_label: str) -> None:
         """Update table headers to match the active signal profile (e.g., 'Wavenumber')."""
         labels = ["Compound", f"Start {position_label}", f"Apex {position_label}", f"End {position_label}"]
         self.rt_table.table.setHorizontalHeaderLabels(labels)
-    
-    def populate_gcxgc(self, peaks: list) -> None:
-        """Display GCxGC2DPeak results in the table.
-
-        Swaps the normal editable RT grid out for a dedicated flat peak results
-        table. Does not modify rt_table_data or affect compound matching.
-        """
-        from logic.gcxgc_peak import GCxGC2DPeak
-
-        # Swap views: hide the editable RT grid, show the GCxGC results widget.
-        self.rt_table.hide()
-        self.table_widget.show()
-
-        self.table_widget.clearContents()
-        self.table_widget.setColumnCount(len(GCXGC_COLUMN_HEADERS))
-        self.table_widget.setHorizontalHeaderLabels(GCXGC_COLUMN_HEADERS)
-        self.table_widget.setRowCount(len(peaks))
-
-        for row, p in enumerate(peaks):
-            if not isinstance(p, GCxGC2DPeak):
-                continue
-            values = [
-                str(p.peak_number),
-                f"{p.rt1:.4f}",
-                f"{p.rt2:.4f}",
-                f"{p.volume:.2f}",
-                p.compound_name or '',
-                f"{p.match_score:.4f}" if p.match_score is not None else '',
-                p.casno or '',
-                f"{p.mol_percent:.4f}" if p.mol_percent is not None else '',
-                f"{p.wt_percent:.4f}" if p.wt_percent is not None else '',
-            ]
-            for col, val in enumerate(values):
-                item = QTableWidgetItem(val)
-                item.setTextAlignment(Qt.AlignCenter)
-                self.table_widget.setItem(row, col, item)
-
-        # Resize columns to content
-        self.table_widget.resizeColumnsToContents()
     
     def _init_settings(self):
         """Initialize RT matching settings."""
@@ -568,7 +509,6 @@ class RTTableFrame(QWidget):
             return
 
         # Replace the editable grid (guarded — no table_edited emit).
-        self.table_widget.hide()
         self.rt_table.show()
         self.rt_table.set_dataframe(df)
         self.rt_table_data = self.rt_table.get_dataframe()
@@ -695,8 +635,6 @@ class RTTableFrame(QWidget):
         self.rt_table_data = None
         
         # Clear UI
-        self.table_widget.setRowCount(0)
-        self.table_widget.hide()
         self.rt_table.set_rows([])   # guarded — no emit
         self.rt_table.show()
         self.file_info_label.setText("No RT table loaded")
@@ -775,14 +713,10 @@ class RTTableFrame(QWidget):
 
         Keeps the editable widget (``self.rt_table``) in sync with the backing
         DataFrame (``self.rt_table_data``), which remains the source of truth for
-        compound lookups. Swaps back from any transient GCxGC view.
+        compound lookups.
         """
         if self.rt_table_data is None:
             return
-
-        # Ensure the normal RT view is shown (in case a GCxGC view was active).
-        self.table_widget.hide()
-        self.rt_table.show()
 
         # set_dataframe is guarded internally (no table_edited emit).
         self.rt_table.set_dataframe(self.rt_table_data)

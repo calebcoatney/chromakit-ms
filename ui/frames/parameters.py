@@ -9,12 +9,14 @@ from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtCore import QRegularExpression
 import numpy as np
 
+from logic.method import GCxGCParams
+
 class ParametersFrame(QWidget):
     """Frame containing integration parameters for chromatogram processing."""
     
     # Add signal for when parameters change
     parameters_changed = Signal(dict)
-    gcxgc_params_changed = Signal()
+    gcxgc_display_changed = Signal()      # display-only GCxGC change (TIC source): redraw, never reprocess
     
     # Add signal for MS baseline correction button click
     ms_baseline_clicked = Signal()
@@ -92,6 +94,8 @@ class ParametersFrame(QWidget):
                 'peak_groups': []  # List of [start, end] time windows for grouping
             }
         }
+        self.current_params['gcxgc'] = GCxGCParams().model_dump()
+        self._ui_mode = None
         
         # Create main layout
         self.layout = QVBoxLayout(self)
@@ -1315,10 +1319,6 @@ class ParametersFrame(QWidget):
         # Emit signal
         self.parameters_changed.emit(self.current_params)
 
-    def _on_gcxgc_lambda_changed(self, value: int) -> None:
-        self.gcxgc_lam_spinbox.setValue(value)
-        self.gcxgc_lam_label.setText(f"λ = 10^{value}")
-    
     def _on_baseline_offset_changed(self):
         """Handle baseline offset input change."""
         text = self.baseline_offset_input.text().strip()
@@ -1556,6 +1556,8 @@ class ParametersFrame(QWidget):
             visibility: Dict of {section_key: bool}
         """
         for key, visible in visibility.items():
+            if getattr(self, '_ui_mode', None) == 'gcxgc' and not key.startswith('gcxgc'):
+                continue
             if key in self.section_groups:
                 self.section_groups[key].setVisible(visible)
 
@@ -1633,119 +1635,115 @@ class ParametersFrame(QWidget):
             self.prominence_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
             QTimer.singleShot(800, lambda: self.prominence_entry.setStyleSheet(""))
 
+    _PROVENANCE_TEXT = {"hdr": "from file (HDR)", "lsc_view": "ChromSpace saved view",
+                        "user": "your value", "default": "default"}
+
     def _init_gcxgc_controls(self):
-        """Initialize GCxGC-specific processing parameter controls.
+        """GCxGC controls: 2D layout, 2D baseline, 2D peak detection. All bound to current_params['gcxgc']."""
+        g = GCxGCParams(**self.current_params.get('gcxgc', {}))
+        # Empty is Acceptable, so clearing a field + Return / focus-out emits editingFinished and stores None.
+        num_validator = QRegularExpressionValidator(QRegularExpression(r'^(-?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)?$'))
 
-        Creates two separate sections matching the look of the standard 1D sections:
-        one for 2D baseline correction, one for 2D peak detection.
-        """
-        # ── 2D Baseline Correction ────────────────────────────────────────
+        # ── 2D Layout ──
+        layout_group = QGroupBox("2D Layout")
+        ly = QFormLayout(layout_group)
+        self.gcxgc_pm_entry = QLineEdit("" if g.modulation_period_s is None else f"{g.modulation_period_s:g}")
+        self.gcxgc_pm_entry.setValidator(num_validator)
+        self.gcxgc_pm_entry.setToolTip("Modulation period (s). Leave blank to use the run's files.")
+        self.gcxgc_pm_source = QLabel("")
+        self.gcxgc_pm_source.setStyleSheet("color: #666666; font-size: 10px;")
+        ly.addRow("Modulation Period (s):", self.gcxgc_pm_entry)
+        ly.addRow("", self.gcxgc_pm_source)
+        self.gcxgc_phase_entry = QLineEdit("" if g.phase_shift_s is None else f"{g.phase_shift_s:g}")
+        self.gcxgc_phase_entry.setValidator(num_validator)
+        self.gcxgc_phase_entry.setToolTip("Phase shift (s), ChromSpace's sign convention. Leave blank to use ChromSpace's saved view.")
+        self.gcxgc_phase_source = QLabel("")
+        self.gcxgc_phase_source.setStyleSheet("color: #666666; font-size: 10px;")
+        ly.addRow("Phase Shift (s):", self.gcxgc_phase_entry)
+        ly.addRow("", self.gcxgc_phase_source)
+        self.gcxgc_signal_combo = QComboBox()
+        for label, key in (("FID", "fid"), ("DBC TIC", "dbc_tic"), ("TIC", "tic")):
+            self.gcxgc_signal_combo.addItem(label, key)
+        self.gcxgc_signal_combo.setCurrentIndex(max(0, self.gcxgc_signal_combo.findData(g.detection_signal)))
+        self.gcxgc_signal_combo.setToolTip("Signal used for peak detection and volumes.")
+        ly.addRow("Detection Signal:", self.gcxgc_signal_combo)
+        layout_group.setVisible(False)
+        self.section_groups['gcxgc_layout'] = layout_group
+        self.params_layout.addWidget(layout_group)
+
+        # ── 2D Baseline Correction ──
         baseline_group = QGroupBox("2D Baseline Correction")
-        bl_layout = QFormLayout(baseline_group)
-
+        bl = QFormLayout(baseline_group)
         self.gcxgc_baseline_enabled = QCheckBox("Apply 2D Baseline Correction")
-        self.gcxgc_baseline_enabled.setChecked(False)
-        bl_layout.addRow(self.gcxgc_baseline_enabled)
-
-        self.gcxgc_pm_entry = QLineEdit("4.0")
-        self.gcxgc_pm_entry.setToolTip(
-            "Modulation period in seconds.\n"
-            "Used to reshape the raw 1D signal into the 2D heatmap.\n"
-            "Overrides the value read from the .HDR file."
-        )
-        bl_layout.addRow("Modulation Period (s):", self.gcxgc_pm_entry)
-
-        self.gcxgc_phase_entry = QLineEdit("1.8")
-        self.gcxgc_phase_entry.setToolTip(
-            "Phase shift in seconds applied as a circular roll along the 2D time axis.\n"
-            "Shifts the heatmap horizontally to align peaks within each modulation."
-        )
-        bl_layout.addRow("Phase Shift (s):", self.gcxgc_phase_entry)
-
-        self.gcxgc_lam_container = QWidget()
-        lam_layout = QHBoxLayout(self.gcxgc_lam_container)
-        lam_layout.setContentsMargins(0, 0, 0, 0)
-
+        self.gcxgc_baseline_enabled.setChecked(g.baseline_enabled)
+        bl.addRow(self.gcxgc_baseline_enabled)
+        lam_exp = int(round(np.log10(g.baseline_lambda)))
+        lam_box = QWidget()
+        lam_row = QHBoxLayout(lam_box)
+        lam_row.setContentsMargins(0, 0, 0, 0)
         self.gcxgc_lam_slider = QSlider(Qt.Horizontal)
-        self.gcxgc_lam_slider.setMinimum(2)
-        self.gcxgc_lam_slider.setMaximum(12)
-        self.gcxgc_lam_slider.setValue(5)
-        self.gcxgc_lam_slider.setTickPosition(QSlider.TicksBelow)
-        self.gcxgc_lam_slider.valueChanged.connect(self._on_gcxgc_lambda_changed)
-
+        self.gcxgc_lam_slider.setRange(2, 12)
+        self.gcxgc_lam_slider.setValue(lam_exp)
         self.gcxgc_lam_spinbox = QSpinBox()
-        self.gcxgc_lam_spinbox.setMinimum(2)
-        self.gcxgc_lam_spinbox.setMaximum(12)
-        self.gcxgc_lam_spinbox.setValue(5)
+        self.gcxgc_lam_spinbox.setRange(2, 12)
+        self.gcxgc_lam_spinbox.setValue(lam_exp)
+        self.gcxgc_lam_slider.valueChanged.connect(self.gcxgc_lam_spinbox.setValue)
         self.gcxgc_lam_spinbox.valueChanged.connect(self.gcxgc_lam_slider.setValue)
-
-        lam_layout.addWidget(self.gcxgc_lam_slider, 3)
-        lam_layout.addWidget(self.gcxgc_lam_spinbox, 1)
-
-        self.gcxgc_lam_label = QLabel("λ = 10^5")
-
-        bl_layout.addRow("Lambda (λ):", self.gcxgc_lam_container)
-        bl_layout.addRow("", self.gcxgc_lam_label)
-
+        lam_row.addWidget(self.gcxgc_lam_slider, 3)
+        lam_row.addWidget(self.gcxgc_lam_spinbox, 1)
+        self.gcxgc_lam_label = QLabel(f"λ = 10^{lam_exp}")
+        self.gcxgc_lam_slider.valueChanged.connect(lambda v: self.gcxgc_lam_label.setText(f"λ = 10^{v}"))
+        bl.addRow("Lambda (λ):", lam_box)
+        bl.addRow("", self.gcxgc_lam_label)
         self.gcxgc_diff_order_spin = QSpinBox()
         self.gcxgc_diff_order_spin.setRange(1, 3)
-        self.gcxgc_diff_order_spin.setValue(2)
-        bl_layout.addRow("Diff. Order:", self.gcxgc_diff_order_spin)
-
+        self.gcxgc_diff_order_spin.setValue(g.baseline_diff_order)
+        bl.addRow("Diff. Order:", self.gcxgc_diff_order_spin)
         baseline_group.setVisible(False)
         self.section_groups['gcxgc_baseline'] = baseline_group
         self.params_layout.addWidget(baseline_group)
 
-        # ── 2D Peak Detection ─────────────────────────────────────────────
+        # ── 2D Peak Detection ──
         peaks_group = QGroupBox("2D Peak Detection")
-        pk_layout = QFormLayout(peaks_group)
-
+        pk = QFormLayout(peaks_group)
         self.gcxgc_peaks_enabled = QCheckBox("Enable Peak Detection")
-        self.gcxgc_peaks_enabled.setChecked(False)
-        pk_layout.addRow(self.gcxgc_peaks_enabled)
-
-        self.gcxgc_prominence_entry = QLineEdit("1e4")
-        validator = QRegularExpressionValidator(QRegularExpression(r'^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$'))
-        self.gcxgc_prominence_entry.setValidator(validator)
-        self.gcxgc_prominence_entry.setToolTip(
-            "Minimum peak prominence in signal units.\nAccepts scientific notation (e.g. 1e4)."
-        )
-        pk_layout.addRow("Min Prominence:", self.gcxgc_prominence_entry)
-
-        prominence_help = QLabel("Enter a number or scientific notation (e.g. 1e4)")
-        prominence_help.setStyleSheet("color: #666666; font-size: 10px;")
-        pk_layout.addRow("", prominence_help)
-
+        self.gcxgc_peaks_enabled.setChecked(g.peaks_enabled)
+        pk.addRow(self.gcxgc_peaks_enabled)
+        self.gcxgc_prominence_entry = QLineEdit("" if g.min_prominence is None else f"{g.min_prominence:g}")
+        self.gcxgc_prominence_entry.setValidator(num_validator)
+        self.gcxgc_prominence_entry.setToolTip("Minimum peak prominence in signal units (e.g. 1e4). Blank = none.")
+        pk.addRow("Min Prominence:", self.gcxgc_prominence_entry)
         self.gcxgc_rt2_tolerance_spin = QSpinBox()
         self.gcxgc_rt2_tolerance_spin.setRange(1, 20)
-        self.gcxgc_rt2_tolerance_spin.setValue(2)
-        self.gcxgc_rt2_tolerance_spin.setToolTip(
-            "Number of scans to group nearby detections across modulations\n"
-            "into a single 2D peak."
-        )
-        pk_layout.addRow("2D RT Tolerance (scans):", self.gcxgc_rt2_tolerance_spin)
-
+        self.gcxgc_rt2_tolerance_spin.setValue(g.rt2_grouping_tolerance)
+        self.gcxgc_rt2_tolerance_spin.setToolTip("Max 2D shift (scans) between slices of one peak in adjacent modulations.")
+        pk.addRow("2D RT Tolerance (scans):", self.gcxgc_rt2_tolerance_spin)
         self.gcxgc_min_sub_peaks_spin = QSpinBox()
         self.gcxgc_min_sub_peaks_spin.setRange(1, 10)
-        self.gcxgc_min_sub_peaks_spin.setValue(2)
-        self.gcxgc_min_sub_peaks_spin.setToolTip(
-            "Minimum number of modulations in which a peak must appear\n"
-            "to be retained as a real 2D peak."
-        )
-        pk_layout.addRow("Min Modulations:", self.gcxgc_min_sub_peaks_spin)
-
-        # DBC spectrum source toggle
+        self.gcxgc_min_sub_peaks_spin.setValue(g.min_modulations)
+        self.gcxgc_min_sub_peaks_spin.setToolTip("Minimum number of modulations a peak must span.")
+        pk.addRow("Min Modulations:", self.gcxgc_min_sub_peaks_spin)
         self.gcxgc_use_dbc = QCheckBox("Use DBC spectra (.dbc.lsc) for MS search")
-        self.gcxgc_use_dbc.setChecked(True)
-        self.gcxgc_use_dbc.setToolTip(
-            "When checked, spectrum extraction uses the dynamic background-corrected\n"
-            "(.dbc.lsc) file for cleaner MS library matches.\n"
-            "When unchecked, uses the plain full-rate .lsc file.\n"
-            "Only available if a .dbc.lsc file was found during loading."
-        )
-        pk_layout.addRow(self.gcxgc_use_dbc)
-
-        # TIC display source
+        self.gcxgc_use_dbc.setChecked(g.use_dbc_spectra)
+        pk.addRow(self.gcxgc_use_dbc)
+        self.gcxgc_apex_window_spin = QSpinBox()
+        self.gcxgc_apex_window_spin.setRange(1, 50)     # 0 would search nothing yet flag every apex found
+        self.gcxgc_apex_window_spin.setValue(g.apex_window_scans)
+        self.gcxgc_apex_window_spin.setToolTip("Search ± this many TOF scans around the peak's mapped apex for its spectrum.")
+        pk.addRow("Spectrum Window (scans):", self.gcxgc_apex_window_spin)
+        self.gcxgc_offset_mode_combo = QComboBox()
+        self.gcxgc_offset_mode_combo.addItem("Auto (fit)", "auto")
+        self.gcxgc_offset_mode_combo.addItem("Fixed", "fixed")
+        self.gcxgc_offset_mode_combo.setCurrentIndex(self.gcxgc_offset_mode_combo.findData(g.offset_mode))
+        self.gcxgc_offset_spin = QDoubleSpinBox()
+        self.gcxgc_offset_spin.setRange(-200.0, 200.0)
+        self.gcxgc_offset_spin.setDecimals(2)
+        self.gcxgc_offset_spin.setValue(g.offset_scans)
+        self.gcxgc_offset_spin.setEnabled(g.offset_mode == "fixed")
+        self.gcxgc_offset_mode_combo.currentIndexChanged.connect(
+            lambda _i: self.gcxgc_offset_spin.setEnabled(self.gcxgc_offset_mode_combo.currentData() == "fixed"))
+        pk.addRow("FID→TOF Offset:", self.gcxgc_offset_mode_combo)
+        pk.addRow("Offset (TOF scans):", self.gcxgc_offset_spin)
         self.gcxgc_tic_source_group = QButtonGroup(self)
         self.gcxgc_tic_raw = QRadioButton("Raw (.lsc)")
         self.gcxgc_tic_dbc = QRadioButton("Background Corrected (.dbc.lsc)")
@@ -1753,21 +1751,60 @@ class ParametersFrame(QWidget):
         self.gcxgc_tic_dbc.setEnabled(False)
         self.gcxgc_tic_source_group.addButton(self.gcxgc_tic_raw, 0)
         self.gcxgc_tic_source_group.addButton(self.gcxgc_tic_dbc, 1)
-        self.gcxgc_tic_raw.toggled.connect(
-            lambda checked: self.gcxgc_params_changed.emit() if checked else None
-        )
-        tic_container = QWidget()
-        tic_container.setContentsMargins(0, 0, 0, 0)
-        tic_layout = QHBoxLayout(tic_container)
-        tic_layout.setContentsMargins(0, 0, 0, 0)
-        tic_layout.setAlignment(Qt.AlignLeft)
-        tic_layout.addWidget(self.gcxgc_tic_raw)
-        tic_layout.addWidget(self.gcxgc_tic_dbc)
-        pk_layout.addRow("TIC Display:", tic_container)
-
+        self.gcxgc_tic_source_group.buttonToggled.connect(
+            lambda _btn, checked: checked and self.gcxgc_display_changed.emit())
+        tic_box = QWidget()
+        tic_row = QHBoxLayout(tic_box)
+        tic_row.setContentsMargins(0, 0, 0, 0)
+        tic_row.setAlignment(Qt.AlignLeft)
+        tic_row.addWidget(self.gcxgc_tic_raw)
+        tic_row.addWidget(self.gcxgc_tic_dbc)
+        pk.addRow("TIC Display:", tic_box)
         peaks_group.setVisible(False)
         self.section_groups['gcxgc_peaks'] = peaks_group
         self.params_layout.addWidget(peaks_group)
+
+        # Every edit writes back into current_params['gcxgc'] (→ method, dirty flag).
+        for w in (self.gcxgc_pm_entry, self.gcxgc_phase_entry, self.gcxgc_prominence_entry):
+            w.editingFinished.connect(self._on_gcxgc_widget_changed)
+        for w in (self.gcxgc_baseline_enabled, self.gcxgc_peaks_enabled, self.gcxgc_use_dbc):
+            w.toggled.connect(self._on_gcxgc_widget_changed)
+        for w in (self.gcxgc_lam_slider, self.gcxgc_diff_order_spin, self.gcxgc_rt2_tolerance_spin,
+                  self.gcxgc_min_sub_peaks_spin, self.gcxgc_apex_window_spin, self.gcxgc_offset_spin):
+            w.valueChanged.connect(self._on_gcxgc_widget_changed)
+        for w in (self.gcxgc_signal_combo, self.gcxgc_offset_mode_combo):
+            w.currentIndexChanged.connect(self._on_gcxgc_widget_changed)
+
+    def _on_gcxgc_widget_changed(self, *_):
+        values = self._read_gcxgc_widgets()
+        if values == self.current_params.get('gcxgc'):
+            return      # e.g. Return / focus-out on an unchanged field: nothing to write, nothing dirty
+        self.current_params['gcxgc'] = values
+        self.parameters_changed.emit(self.current_params)
+
+    def _read_gcxgc_widgets(self) -> dict:
+        def opt_float(edit):
+            text = edit.text().strip()
+            try:
+                return float(text) if text else None
+            except ValueError:
+                return None
+        return GCxGCParams(
+            modulation_period_s=opt_float(self.gcxgc_pm_entry),
+            phase_shift_s=opt_float(self.gcxgc_phase_entry),
+            detection_signal=self.gcxgc_signal_combo.currentData(),
+            baseline_enabled=self.gcxgc_baseline_enabled.isChecked(),
+            baseline_lambda=float(10 ** self.gcxgc_lam_slider.value()),
+            baseline_diff_order=self.gcxgc_diff_order_spin.value(),
+            peaks_enabled=self.gcxgc_peaks_enabled.isChecked(),
+            min_prominence=opt_float(self.gcxgc_prominence_entry),
+            rt2_grouping_tolerance=self.gcxgc_rt2_tolerance_spin.value(),
+            min_modulations=self.gcxgc_min_sub_peaks_spin.value(),
+            use_dbc_spectra=self.gcxgc_use_dbc.isChecked(),
+            apex_window_scans=self.gcxgc_apex_window_spin.value(),
+            offset_mode=self.gcxgc_offset_mode_combo.currentData(),
+            offset_scans=self.gcxgc_offset_spin.value(),
+        ).model_dump()
 
     # ── Method file I/O ────────────────────────────────────────────────────
 
@@ -1789,10 +1826,13 @@ class ParametersFrame(QWidget):
         clearing the layout and re-running them is sufficient to restore
         the full widget state.
         """
-        # Remove all existing widgets from params_layout
+        # Remove all existing widgets from params_layout. Hide each one now: deleteLater() only runs
+        # once control returns to an event loop, and until then a removed group stays a visible
+        # child of params_widget at its old place (in GCxGC mode the 1D groups showed through).
         while self.params_layout.count():
             item = self.params_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
 
         # Rebuild title
@@ -1811,12 +1851,16 @@ class ParametersFrame(QWidget):
         self._init_peak_grouping_controls()
         self._init_gcxgc_controls()
         self.params_layout.addStretch()
+        if getattr(self, '_ui_mode', None):
+            self.set_mode(self._ui_mode)
+
     def set_mode(self, ui_mode: str) -> None:
         """Show/hide parameter sections based on the active UI mode.
 
-        In 'gcxgc' mode: hide 1D sections, show gcxgc_baseline and gcxgc_peaks.
+        In 'gcxgc' mode: hide 1D sections, show gcxgc_layout, gcxgc_baseline and gcxgc_peaks.
         Otherwise: show 1D sections, hide gcxgc sections.
         """
+        self._ui_mode = ui_mode
         is_gcxgc = ui_mode == 'gcxgc'
         for key, group in self.section_groups.items():
             if key.startswith('gcxgc'):
@@ -1825,42 +1869,60 @@ class ParametersFrame(QWidget):
                 group.setVisible(not is_gcxgc)
 
     def get_gcxgc_params(self) -> dict:
-        """Return current GCxGC processing parameters from UI widgets."""
-        try:
-            pm = float(self.gcxgc_pm_entry.text())
-        except ValueError:
-            pm = 4.0
-        try:
-            phase_shift = float(self.gcxgc_phase_entry.text())
-        except ValueError:
-            phase_shift = 1.8
-        try:
-            min_prominence = float(self.gcxgc_prominence_entry.text())
-        except ValueError:
-            min_prominence = 0.0
-
+        """GCxGC settings in the shape the app and exporter use."""
+        g = self._read_gcxgc_widgets()
+        prom = g['min_prominence']
         return {
-            'baseline_enabled': self.gcxgc_baseline_enabled.isChecked(),
-            'peaks_enabled': self.gcxgc_peaks_enabled.isChecked(),
-            'pm': pm,
-            'phase_shift': phase_shift,
-            'lam': 10 ** self.gcxgc_lam_slider.value(),
-            'diff_order': self.gcxgc_diff_order_spin.value(),
+            'pm': g['modulation_period_s'],
+            'phase_shift': g['phase_shift_s'],
+            'detection_signal': g['detection_signal'],
+            'baseline_enabled': g['baseline_enabled'],
+            'peaks_enabled': g['peaks_enabled'],
+            'lam': g['baseline_lambda'],
+            'diff_order': g['baseline_diff_order'],
             'min_height': None,
-            'min_prominence': min_prominence if min_prominence > 0 else None,
-            'rt2_grouping_tolerance': self.gcxgc_rt2_tolerance_spin.value(),
-            'min_sub_peaks': self.gcxgc_min_sub_peaks_spin.value(),
-            'use_dbc': self.gcxgc_use_dbc.isChecked(),
+            'min_prominence': prom if prom and prom > 0 else None,
+            'rt2_grouping_tolerance': g['rt2_grouping_tolerance'],
+            'min_sub_peaks': g['min_modulations'],
+            'use_dbc': g['use_dbc_spectra'],
+            'apex_window': g['apex_window_scans'],
+            'offset_mode': g['offset_mode'],
+            'offset_scans': g['offset_scans'],
             'tic_source': 'dbc' if self.gcxgc_tic_dbc.isChecked() else 'lsc',
         }
 
+    def set_gcxgc_run_info(self, run) -> None:
+        """Show the run's file values as placeholders, provenance, and which signals exist.
+
+        Signals the run lacks are disabled in the detection combo but never deselected: the
+        selection is the method's choice, so a run must not rewrite it (Integrate falls back to
+        FID for that run). Nothing here emits parameters_changed."""
+        (fpm, _), (fph, _) = run.file_layout["modulation_period_s"], run.file_layout["phase_shift_s"]
+        self.gcxgc_pm_entry.setPlaceholderText(f"{fpm:g}" if fpm is not None else "required")
+        self.gcxgc_phase_entry.setPlaceholderText(f"{fph:g}" if fph is not None else "0")
+        self.gcxgc_pm_source.setText(self._PROVENANCE_TEXT[run.provenance["modulation_period_s"]])
+        self.gcxgc_phase_source.setText(self._PROVENANCE_TEXT[run.provenance["phase_shift_s"]])
+        available = set(run.available_signals)
+        combo = self.gcxgc_signal_combo
+        model = combo.model()
+        combo.blockSignals(True)
+        try:
+            for i in range(combo.count()):
+                model.item(i).setEnabled(combo.itemData(i) in available)
+        finally:
+            combo.blockSignals(False)
+        self.set_gcxgc_dbc_available(run.dbc_lsc is not None)
+
     def set_gcxgc_dbc_available(self, available: bool) -> None:
-        """Enable or disable DBC controls based on whether a .dbc.lsc file was found."""
+        """Enable or disable DBC controls based on whether a .dbc.lsc file was found.
+
+        Disabling leaves "Use DBC spectra" checked as the method has it: loading a run never
+        rewrites or dirties the method (GCxGCProcessor ignores use_dbc for a run without a
+        .dbc.lsc). The TIC display falls back to Raw, which is display state only."""
         self.gcxgc_use_dbc.setEnabled(available)
         self.gcxgc_tic_dbc.setEnabled(available)
         if not available:
-            self.gcxgc_use_dbc.setChecked(False)
-            self.gcxgc_use_dbc.setToolTip("No .dbc.lsc file found for this sample.")
+            self.gcxgc_use_dbc.setToolTip("No .dbc.lsc file found for this sample; spectra come from the raw .lsc.")
             self.gcxgc_tic_raw.setChecked(True)
             self.gcxgc_tic_dbc.setToolTip("No .dbc.lsc file found for this sample.")
         else:

@@ -44,52 +44,34 @@ def _extract_timestamp(filename: str) -> str | None:
 
 
 def _find_sepsolve_stems(directory: str) -> dict[str, list[str]]:
-    """Scan a directory for SepSolve file groups sharing a common stem.
+    """Group SepSolve files by run stem.
 
-    A valid group must contain at least one .rsd file and one .dbc.lsc file.
-    All files sharing the .rsd file's stem (e.g. 'Sample A') are grouped.
-
-    Returns:
-        dict mapping stem → list of absolute file paths in that group
+    A run is `<stem>.rsd` with `<stem>.HDR` and at least one of `<stem>.lsc`,
+    `<stem>.dbc.lsc` or `<stem>_<anything>.dbc.lsc`. Matching is exact on those
+    suffixes (case-insensitive); a .dbc.lsc goes to the longest stem it fits, so
+    "Sample 1" never captures "Sample 10" or "Sample 1_B". .DAT/.DAX are never included.
+    Returns {stem: [HDR, rsd, lsc?, dbc.lsc...]} as absolute paths, HDR first.
     """
-    by_stem: dict[str, list[str]] = {}
-    rsd_stems: set[str] = set()
-
-    for fname in os.listdir(directory):
-        fpath = os.path.join(directory, fname)
-        if not os.path.isfile(fpath):
+    files = sorted(f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f)))
+    by_lower = {f.lower(): f for f in files}
+    rsd = {f[:-4]: f for f in files if f.lower().endswith(".rsd")}
+    dbc_owner: dict[str, list[str]] = {}
+    for f in files:
+        fl = f.lower()
+        if not fl.endswith(".dbc.lsc"):
             continue
-        lower = fname.lower()
-        if lower.endswith('.rsd'):
-            stem = os.path.splitext(fname)[0]
-            rsd_stems.add(stem)
-            by_stem.setdefault(stem, []).append(fpath)
-        elif (lower.endswith('.dbc.lsc') or lower.endswith('.lsc') or
-              lower.endswith('.hdr') or lower.endswith('.dat') or lower.endswith('.dax')):
-            by_stem.setdefault('__pending__' + fname, [fpath])
-
-    # Assign non-rsd files to their stem
-    grouped: dict[str, list[str]] = {s: paths for s, paths in by_stem.items()
-                                     if s in rsd_stems}
-    for key, paths in by_stem.items():
-        if not key.startswith('__pending__'):
-            continue
-        fpath = paths[0]
-        fname = os.path.basename(fpath)
-        for stem in rsd_stems:
-            if fname.startswith(stem):
-                grouped.setdefault(stem, []).append(fpath)
-                break
-
-    # Keep only groups with both .rsd and .dbc.lsc
-    valid: dict[str, list[str]] = {}
-    for stem, paths in grouped.items():
-        lowers = [os.path.basename(p).lower() for p in paths]
-        if (any(p.endswith('.rsd') for p in lowers) and
-                any(p.endswith('.dbc.lsc') for p in lowers)):
-            valid[stem] = paths
-
-    return valid
+        fits = [s for s in rsd if fl == s.lower() + ".dbc.lsc" or fl.startswith(s.lower() + "_")]
+        if fits:
+            dbc_owner.setdefault(max(fits, key=len), []).append(f)
+    groups: dict[str, list[str]] = {}
+    for stem, rsd_name in rsd.items():
+        hdr = by_lower.get(stem.lower() + ".hdr")
+        lsc = by_lower.get(stem.lower() + ".lsc")
+        dbc = dbc_owner.get(stem, [])
+        if hdr and (lsc or dbc):
+            names = [hdr, rsd_name] + ([lsc] if lsc else []) + dbc
+            groups[stem] = [os.path.join(directory, n) for n in names]
+    return groups
 
 
 # ---------------------------------------------------------------------------
@@ -250,8 +232,8 @@ class BatchConvertDialog(QDialog):
         if not stems:
             QMessageBox.information(
                 self, "No GCxGC Files Found",
-                "No SepSolve GCxGC file groups found in the selected directory.\n"
-                "Expected: at least one .rsd and one .dbc.lsc file sharing a common stem."
+                "No SepSolve GCxGC runs found in the selected directory.\n"
+                "Expected per run: <stem>.HDR and <stem>.rsd plus <stem>.lsc and/or <stem>_*.dbc.lsc."
             )
             return
         for stem, file_paths in sorted(stems.items()):

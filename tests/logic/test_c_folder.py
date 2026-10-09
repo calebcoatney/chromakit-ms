@@ -131,3 +131,26 @@ def test_save_results_json_content(tmp_path):
 
     assert len(data["features"]) == 1
     assert data["features"][0]["position"] == 1720.0
+
+
+def test_create_multi_copies_and_leaves_originals(tmp_path):
+    import os
+    srcs = []
+    for n in ("S.HDR", "S.rsd", "S.lsc"):
+        p = tmp_path / n
+        p.write_bytes(n.encode())
+        srcs.append(str(p))
+    folder = CFolder.create_multi(srcs, signal_type="gcxgc", sample_id="S")
+    assert all(os.path.exists(s) for s in srcs)
+    assert sorted(os.listdir(os.path.join(folder.path, "data"))) == ["S.HDR", "S.lsc", "S.rsd"]
+    assert (tmp_path / "S.C" / "data" / "S.rsd").read_bytes() == b"S.rsd"
+    assert folder.get_manifest()["source_format"] == "sepsolve"
+
+
+def test_create_multi_failure_removes_partial_folder(tmp_path):
+    import pytest
+    good = tmp_path / "S.HDR"
+    good.write_bytes(b"h")
+    with pytest.raises(FileNotFoundError):
+        CFolder.create_multi([str(good), str(tmp_path / "missing.rsd")], signal_type="gcxgc")
+    assert good.exists() and not (tmp_path / "S.C").exists()

@@ -11,3 +11,23 @@ def isolated_registry():
     yield
     SignalProfileRegistry._profiles.clear()
     SignalProfileRegistry._profiles.update(saved)
+
+
+import os
+import pathlib
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "realdata: needs CHROMAKIT_GCXGC_RUN pointing at a SepSolve .C folder",
+    )
+
+
+@pytest.fixture
+def real_gcxgc_run() -> pathlib.Path:
+    """The real GCxGC run named by CHROMAKIT_GCXGC_RUN, or skip."""
+    path = os.environ.get("CHROMAKIT_GCXGC_RUN")
+    if not path or not os.path.isdir(path):
+        pytest.skip("CHROMAKIT_GCXGC_RUN is not set to a .C folder")
+    return pathlib.Path(path)
