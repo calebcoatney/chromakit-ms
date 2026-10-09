@@ -8,7 +8,7 @@ ChromaKit-MS is a Python application for inspecting and processing GC-MS (Gas Ch
 * **Peak integration** – integrate detected peaks; export results to JSON, CSV, and Excel.
 * **Mass spectrum search** – search against spectral libraries using `ms-toolkit-nrel` (single peak or batch).
 * **Peak deconvolution** – 1D U-Net neural network for resolving overlapping peaks (requires `torch`).
-* **GCxGC support** – load and process 2D chromatography data (`.dbc`/`.lsc` and Agilent `.D` formats).
+* **GCxGC-TOFMS/FID** – SepSolve/Markes runs: 2D peaks on the FID or DBC TIC, spectra and library IDs, CSV/JSON/MSP export (see [docs/gcxgc.md](docs/gcxgc.md)).
 * **Batch automation** – process directories of data files without manual interaction.
 * **Quantitation** – Polyarc + internal standard method for compound quantitation.
 * **Interactive plots** – inspect chromatograms, TIC traces, heatmaps, and mass spectra with Matplotlib.
@@ -40,6 +40,14 @@ pip install -e ".[ms]"
 ```
 
 This installs the `chromakit-ms` console entry point.
+
+To install straight from GitHub instead of a clone (the MS library search extra is included):
+
+```bash
+pip install "chromakit-ms[ms] @ git+https://github.com/calebcoatney/chromakit-ms"
+```
+
+For MS library search with your own NIST copy, see [docs/ms-library-from-nist.md](docs/ms-library-from-nist.md).
 
 ### REST API Backend
 
