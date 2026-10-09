@@ -432,18 +432,58 @@ def test_method_layout_that_does_not_fit_the_run_is_ignored_on_load(qtbot, tmp_p
     assert app.parameters_frame.gcxgc_pm_source.text() == "from file (HDR)"
 
 
-def test_unavailable_detection_signal_is_reported_not_raised(qtbot, tmp_path):
-    app = ChromaKitApp()
-    qtbot.addWidget(app)
-    app.on_file_selected(str(synth.build_run(tmp_path, _scene(), dbc=False)))
+def _assert_dbc_tic_kept_but_disabled(app):
     pf = app.parameters_frame
     combo = pf.gcxgc_signal_combo
+    assert app.current_method.gcxgc.detection_signal == "dbc_tic"
+    assert pf.current_params["gcxgc"]["detection_signal"] == "dbc_tic"
+    assert combo.currentData() == "dbc_tic"
     assert not combo.model().item(combo.findData("dbc_tic")).isEnabled()
-    combo.setCurrentIndex(combo.findData("dbc_tic"))       # only reachable programmatically
+
+
+def test_no_dbc_run_keeps_the_methods_detection_signal_and_detects_on_fid(qtbot, tmp_path):
+    """Review fix 1 (file-load path): a run without the method's detection signal leaves the
+    method alone (no write-back, not dirty); Integrate detects on FID for this run and says so."""
+    from logic.method import ChromaMethod, GCxGCParams
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    app.current_method = ChromaMethod(name="g", signal_type="gcxgc", gcxgc=GCxGCParams(detection_signal="dbc_tic"))
+    app._apply_method_to_frames()
+    pf = app.parameters_frame
+    emitted = []
+    pf.parameters_changed.connect(lambda _p: emitted.append(True))
+    dirty_before = app._method_dirty
+    app.on_file_selected(str(synth.build_run(tmp_path, _scene(), name="NoDbc", dbc=False)))
+    _assert_dbc_tic_kept_but_disabled(app)
+    assert app._method_dirty == dirty_before and emitted == []
+
+    pf.gcxgc_prominence_entry.setText("50")
     app.button_frame.integrate_button.click()
-    assert app._gcxgc_peaks == [] and app._gcxgc_proc is None
-    assert "processing error" in app.status_bar.currentMessage()
-    assert combo.currentData() == "fid"                     # the run info put the combo back
+    assert app._gcxgc_peaks and all(p.detection_signal == "fid" for p in app._gcxgc_peaks)
+    assert "DBC TIC not available for this run; detected on FID" in app.status_bar.currentMessage()
+    assert app._gcxgc_export_settings["detection_signal"] == "fid"
+    _assert_dbc_tic_kept_but_disabled(app)
+    assert emitted == []
+
+
+def test_load_method_on_a_no_dbc_run_keeps_the_methods_detection_signal(qtbot, tmp_path, monkeypatch):
+    """Review fix 1 (Load Method path): same outcome as the file-load path, and a later unrelated
+    GCxGC edit does not write FID into the method either."""
+    from logic.method import ChromaMethod, GCxGCParams
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    app.on_file_selected(str(synth.build_run(tmp_path, synth.Scene(duration_min=2.0), name="NoDbc", dbc=False)))
+    path = tmp_path / "dbc_tic.chromethod"
+    ChromaMethod(name="dbc_tic", signal_type="gcxgc", gcxgc=GCxGCParams(detection_signal="dbc_tic")).to_file(path)
+    app._method_dirty = False
+    monkeypatch.setattr("ui.app.QFileDialog.getOpenFileName", lambda *a, **k: (str(path), ""))
+    app.load_method()
+    assert app.current_method.name == "dbc_tic"
+    _assert_dbc_tic_kept_but_disabled(app)
+    assert app._method_dirty is False
+    app.parameters_frame.gcxgc_min_sub_peaks_spin.setValue(4)          # an unrelated edit
+    assert app.current_method.gcxgc.min_modulations == 4
+    _assert_dbc_tic_kept_but_disabled(app)
 
 
 def test_no_dbc_run_does_not_rewrite_the_methods_dbc_choice(qtbot, tmp_path):
@@ -467,3 +507,57 @@ def test_no_dbc_run_does_not_rewrite_the_methods_dbc_choice(qtbot, tmp_path):
     app.on_file_selected(str(synth.build_run(tmp_path, synth.Scene(duration_min=2.0), name="WithDbc")))
     assert pf.gcxgc_use_dbc.isEnabled() and pf.gcxgc_use_dbc.isChecked()
     assert pf.gcxgc_tic_dbc.isEnabled()
+
+
+# ── Review fix 2: a cleared numeric field reaches the method (real key events) ──
+
+def _type_and_return(qtbot, entry, text):
+    from PySide6.QtCore import Qt
+    entry.selectAll()
+    qtbot.keyClick(entry, Qt.Key_Backspace)          # clears the field; a no-op when it is empty
+    if text:
+        qtbot.keyClicks(entry, text)
+    qtbot.keyClick(entry, Qt.Key_Return)
+
+
+@pytest.mark.parametrize("entry_name, field, typed, value", [
+    ("gcxgc_pm_entry", "modulation_period_s", "4", 4.0),
+    ("gcxgc_phase_entry", "phase_shift_s", "2.2", 2.2),
+    ("gcxgc_prominence_entry", "min_prominence", "75", 75.0),
+])
+def test_typing_then_clearing_a_numeric_field_reaches_the_method(gcxgc_app, qtbot, entry_name, field,
+                                                                 typed, value):
+    app, _ = gcxgc_app
+    entry = getattr(app.parameters_frame, entry_name)
+    app._method_dirty = False
+    _type_and_return(qtbot, entry, typed)
+    assert getattr(app.current_method.gcxgc, field) == value and app._method_dirty
+    _type_and_return(qtbot, entry, "")
+    assert entry.text() == ""
+    assert getattr(app.current_method.gcxgc, field) is None
+    assert app.parameters_frame.current_params["gcxgc"][field] is None
+
+
+def test_clearing_the_phase_returns_the_run_to_the_file_phase(gcxgc_app, qtbot):
+    app, _ = gcxgc_app
+    entry = app.parameters_frame.gcxgc_phase_entry
+    app._method_dirty = False
+    _type_and_return(qtbot, entry, "2.2")
+    assert app.current_method.gcxgc.phase_shift_s == 2.2 and app._method_dirty
+    app.button_frame.integrate_button.click()
+    assert app._gcxgc_run.provenance["phase_shift_s"] == "user"
+    _type_and_return(qtbot, entry, "")
+    assert app.current_method.gcxgc.phase_shift_s is None
+    app.button_frame.integrate_button.click()
+    assert app._gcxgc_run.provenance["phase_shift_s"] == "lsc_view"
+    assert app._gcxgc_run.phase_shift_s == -1.8
+
+
+def test_return_on_an_untouched_blank_field_does_not_dirty_the_method(qtbot, tmp_path):
+    from PySide6.QtCore import Qt
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    app.on_file_selected(str(synth.build_run(tmp_path, synth.Scene(duration_min=2.0))))
+    app._method_dirty = False
+    qtbot.keyClick(app.parameters_frame.gcxgc_pm_entry, Qt.Key_Return)
+    assert app._method_dirty is False

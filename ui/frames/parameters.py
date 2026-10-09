@@ -1641,7 +1641,8 @@ class ParametersFrame(QWidget):
     def _init_gcxgc_controls(self):
         """GCxGC controls: 2D layout, 2D baseline, 2D peak detection. All bound to current_params['gcxgc']."""
         g = GCxGCParams(**self.current_params.get('gcxgc', {}))
-        num_validator = QRegularExpressionValidator(QRegularExpression(r'^-?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$'))
+        # Empty is Acceptable, so clearing a field + Return / focus-out emits editingFinished and stores None.
+        num_validator = QRegularExpressionValidator(QRegularExpression(r'^(-?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)?$'))
 
         # ── 2D Layout ──
         layout_group = QGroupBox("2D Layout")
@@ -1775,7 +1776,10 @@ class ParametersFrame(QWidget):
             w.currentIndexChanged.connect(self._on_gcxgc_widget_changed)
 
     def _on_gcxgc_widget_changed(self, *_):
-        self.current_params['gcxgc'] = self._read_gcxgc_widgets()
+        values = self._read_gcxgc_widgets()
+        if values == self.current_params.get('gcxgc'):
+            return      # e.g. Return / focus-out on an unchanged field: nothing to write, nothing dirty
+        self.current_params['gcxgc'] = values
         self.parameters_changed.emit(self.current_params)
 
     def _read_gcxgc_widgets(self) -> dict:
@@ -1885,18 +1889,25 @@ class ParametersFrame(QWidget):
         }
 
     def set_gcxgc_run_info(self, run) -> None:
-        """Show the run's file values as placeholders, provenance, and which signals exist."""
+        """Show the run's file values as placeholders, provenance, and which signals exist.
+
+        Signals the run lacks are disabled in the detection combo but never deselected: the
+        selection is the method's choice, so a run must not rewrite it (Integrate falls back to
+        FID for that run). Nothing here emits parameters_changed."""
         (fpm, _), (fph, _) = run.file_layout["modulation_period_s"], run.file_layout["phase_shift_s"]
         self.gcxgc_pm_entry.setPlaceholderText(f"{fpm:g}" if fpm is not None else "required")
         self.gcxgc_phase_entry.setPlaceholderText(f"{fph:g}" if fph is not None else "0")
         self.gcxgc_pm_source.setText(self._PROVENANCE_TEXT[run.provenance["modulation_period_s"]])
         self.gcxgc_phase_source.setText(self._PROVENANCE_TEXT[run.provenance["phase_shift_s"]])
         available = set(run.available_signals)
-        model = self.gcxgc_signal_combo.model()
-        for i in range(self.gcxgc_signal_combo.count()):
-            model.item(i).setEnabled(self.gcxgc_signal_combo.itemData(i) in available)
-        if self.gcxgc_signal_combo.currentData() not in available:
-            self.gcxgc_signal_combo.setCurrentIndex(0)
+        combo = self.gcxgc_signal_combo
+        model = combo.model()
+        combo.blockSignals(True)
+        try:
+            for i in range(combo.count()):
+                model.item(i).setEnabled(combo.itemData(i) in available)
+        finally:
+            combo.blockSignals(False)
         self.set_gcxgc_dbc_available(run.dbc_lsc is not None)
 
     def set_gcxgc_dbc_available(self, available: bool) -> None:

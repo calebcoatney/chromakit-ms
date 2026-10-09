@@ -1735,6 +1735,11 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage("GCxGC: heatmap updated (baseline and peak detection disabled)")
             return
         signal = params.get('detection_signal', 'fid')
+        signal_note = ""
+        if signal not in run.available_signals:      # the method's choice, but this run lacks it
+            label = {"dbc_tic": "DBC TIC", "tic": "TIC"}.get(signal, signal)
+            signal_note = f" — {label} not available for this run; detected on FID"
+            signal = 'fid'
         apex_window = params.get('apex_window', 10)
         try:
             proc = GCxGCProcessor(run.frame(signal), run, use_dbc=params.get('use_dbc', True),
@@ -1774,6 +1779,8 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage("GCxGC: heatmap updated — no peaks detected")
         if peaks and self.export_manager.should_export_json('integration'):
             self._export_gcxgc(interactive=False)
+        if signal_note:
+            self.status_bar.showMessage(self.status_bar.currentMessage() + signal_note)
         if peaks and not run.offset().ok:
             self.status_bar.showMessage(self.status_bar.currentMessage()
                                         + " — FID→TOF offset fit failed; assuming 0 (set it under 2D Peak Detection)")
