@@ -1620,6 +1620,9 @@ class ChromaKitApp(QMainWindow):
     # Button handlers - now with navigation functionality
     def on_export(self):
         """Handle export button click."""
+        if self._gcxgc_mode:
+            self._export_gcxgc(interactive=True)
+            return
         self.status_bar.showMessage("Export clicked")
         
     def on_previous_sample(self):
@@ -1746,6 +1749,35 @@ class ChromaKitApp(QMainWindow):
             self.status_bar.showMessage(f"GCxGC: detected {len(peaks)} peaks — click a peak to view spectrum, or use MS Search All")
         else:
             self.status_bar.showMessage("GCxGC: heatmap updated — no peaks detected")
+        if peaks and self.export_manager.should_export_json('integration'):
+            self._export_gcxgc(interactive=False)
+
+    def _export_gcxgc(self, interactive: bool) -> None:
+        """Write the GCxGC CSV/JSON/MSP results into the run's results/ folder."""
+        from logic.gcxgc_export import export_gcxgc_results
+        if self._gcxgc_run is None or self._gcxgc_proc is None:
+            if interactive:
+                self.status_bar.showMessage("Run Integrate before exporting GCxGC results")
+            return
+        base = self.current_cf.path if getattr(self, 'current_cf', None) else self.current_directory_path
+        results_dir = os.path.join(base, "results")
+        options = getattr(self.ms_frame, 'search_options', {}) or {}
+        library = None
+        if getattr(self.ms_frame, 'library_loaded', False):
+            library = os.path.basename(self.ms_frame.settings.value("ms/library_path", "") or "") or None
+        try:
+            paths = export_gcxgc_results(
+                self._gcxgc_peaks, self._gcxgc_run, results_dir,
+                settings=self.parameters_frame.get_gcxgc_params(),
+                get_spectrum=self._gcxgc_proc.extract_spectrum,
+                library=library, search_method=options.get('search_method'))
+        except Exception as e:
+            self.status_bar.showMessage(f"GCxGC export failed: {e}")
+            if interactive:
+                QMessageBox.critical(self, "GCxGC export failed", str(e))
+            return
+        self.status_bar.showMessage(
+            f"GCxGC results written to {results_dir}: {paths.csv.name}, {paths.json.name}, {paths.msp.name}")
 
     def _show_gcxgc_results_button(self, peaks: list) -> None:
         """Show/update the 'View Results' button in the status bar for GCxGC peaks."""
@@ -1764,6 +1796,7 @@ class ChromaKitApp(QMainWindow):
         """Show GCxGC peak results in a dialog table."""
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox
         from PySide6.QtGui import QBrush, QColor
+        from ui.widgets.numeric_item import NumericItem
 
         dialog = QDialog(self)
         dialog.setWindowTitle("GCxGC Peak Results")
@@ -1775,14 +1808,14 @@ class ChromaKitApp(QMainWindow):
         table.setHorizontalHeaderLabels(headers)
 
         for i, p in enumerate(peaks):
-            table.setItem(i, 0, QTableWidgetItem(str(p.peak_number)))
-            table.setItem(i, 1, QTableWidgetItem(f"{p.rt1:.3f}"))
-            table.setItem(i, 2, QTableWidgetItem(f"{p.rt2:.3f}"))
-            table.setItem(i, 3, QTableWidgetItem(f"{p.volume:.0f}"))
-            table.setItem(i, 4, QTableWidgetItem(str(p.n_sub_peaks)))
+            table.setItem(i, 0, NumericItem(p.peak_number, str(p.peak_number)))
+            table.setItem(i, 1, NumericItem(p.rt1, f"{p.rt1:.3f}"))
+            table.setItem(i, 2, NumericItem(p.rt2, f"{p.rt2:.3f}"))
+            table.setItem(i, 3, NumericItem(p.volume, f"{p.volume:.0f}"))
+            table.setItem(i, 4, NumericItem(p.n_sub_peaks, str(p.n_sub_peaks)))
             table.setItem(i, 5, QTableWidgetItem(p.compound_name or ""))
-            score_text = f"{p.match_score:.3f}" if p.match_score is not None else ""
-            score_item = QTableWidgetItem(score_text)
+            score = p.match_score if p.match_score is not None else -1.0
+            score_item = NumericItem(score, f"{p.match_score:.3f}" if p.match_score is not None else "")
             if p.match_score is not None:
                 color = QColor(0, 180, 0) if p.match_score >= 0.8 else (QColor(200, 130, 0) if p.match_score >= 0.5 else QColor(200, 0, 0))
                 score_item.setForeground(QBrush(color))
@@ -1796,6 +1829,8 @@ class ChromaKitApp(QMainWindow):
         layout.addWidget(table)
 
         btns = QDialogButtonBox(QDialogButtonBox.Close)
+        export_btn = btns.addButton("Export…", QDialogButtonBox.ActionRole)
+        export_btn.clicked.connect(lambda: self._export_gcxgc(interactive=True))
         btns.rejected.connect(dialog.reject)
         layout.addWidget(btns)
         dialog.exec()
@@ -1891,6 +1926,8 @@ class ChromaKitApp(QMainWindow):
         )
         self._show_gcxgc_results_button(peaks)
         self.plot_frame.overlay_gcxgc_peaks(peaks)
+        if self.export_manager.should_export_json('ms_search'):
+            self._export_gcxgc(interactive=False)
 
     def on_integrate(self):
         """Handle integrate button click."""

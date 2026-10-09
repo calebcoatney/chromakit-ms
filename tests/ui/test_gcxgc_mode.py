@@ -93,3 +93,43 @@ def test_ms_search_all_keeps_top_hits(gcxgc_app):
     p = app._gcxgc_peaks[0]
     assert p.top_hits == [("Benzene", 0.91, format_casno("71432")), ("Toluene", 0.80, None)]
     assert (p.compound_name, p.casno) == ("Benzene", format_casno("71432"))
+
+
+def test_export_button_writes_three_files(gcxgc_app):
+    app, c = gcxgc_app
+    app.button_frame.integrate_button.click()
+    for f in (c / "results").glob("*"):
+        f.unlink()                                    # clear any auto-export
+    app.button_frame.export_button.click()
+    assert sorted(f.name for f in (c / "results").iterdir()) == [
+        "Synth - GCxGC peaks.csv", "Synth - GCxGC peaks.json", "Synth - GCxGC spectra.msp"]
+
+
+def test_numeric_item_sorts_by_value(qtbot):
+    from ui.widgets.numeric_item import NumericItem
+    items = [NumericItem(v, str(v)) for v in (10, 9, 100)]
+    assert [i.text() for i in sorted(items)] == ["9", "10", "100"]
+
+
+def test_auto_export_follows_integrate_and_ms_search(gcxgc_app, monkeypatch):
+    app, c = gcxgc_app
+    monkeypatch.setattr(app.export_manager, "should_export_json", lambda trigger: True)
+    csv_path = c / "results" / "Synth - GCxGC peaks.csv"
+    app.button_frame.integrate_button.click()
+    assert csv_path.exists() and "Benzene" not in csv_path.read_text()
+    csv_path.unlink()
+
+    class FakeToolkit:
+        library = {}
+        mz_shift = 0
+
+        def search_vector(self, spectrum, top_n=1, **kw):
+            return [("Benzene", 0.91)][:top_n]
+
+        search_w2v = search_hybrid = search_vector
+
+    app.ms_frame.ms_toolkit = FakeToolkit()
+    app.ms_frame.library_loaded = True
+    app.ms_frame.search_options = {"search_method": "vector", "top_n": 1}
+    app.run_batch_ms_search()
+    assert "Benzene" in csv_path.read_text()
