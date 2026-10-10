@@ -981,6 +981,7 @@ class ChromaKitApp(QMainWindow):
         except Exception as e:
             # Handle any errors during loading
             new_run = data.get('metadata', {}).get('gcxgc_run') if isinstance(data, dict) else None
+            self._clear_1d_sample_state()      # no valid sample is loaded; Integrate must not reuse the last one
             if self._gcxgc_mode or self._gcxgc_run is not None or new_run is not None:
                 # current_cf may already name the new folder: never let the previous GCxGC run's
                 # peaks be exported or re-integrated in its place. A run read before the failure
@@ -1820,12 +1821,26 @@ class ChromaKitApp(QMainWindow):
         if hasattr(self, 'view_results_button'):
             self.view_results_button.setVisible(False)
 
+    def _clear_1d_sample_state(self) -> None:
+        """Forget the 1D sample's processed data and peaks.
+
+        A load that fails or is cancelled leaves no valid current sample (the load has already
+        reset current_x/current_y), so Integrate must report that there is no data instead of
+        processing the earlier sample and exporting its peaks into whatever folder
+        data_handler.current_directory_path still names."""
+        self.current_processed = None
+        for name in ('integrated_peaks', 'integration_results'):
+            if hasattr(self, name):
+                delattr(self, name)
+
     def _drop_gcxgc_run(self, clear_plot: bool = True) -> None:
         """Forget the loaded GCxGC run: drop its results, close its files and leave GCxGC mode.
 
         Used when a load fails or is cancelled (and when a 1D file replaces the run), so the old
-        run cannot be exported or re-integrated as if it were the newly selected one."""
+        run cannot be exported or re-integrated as if it were the newly selected one, and the
+        1D sample that was loaded before it cannot stand in for the missing sample either."""
         run, self._gcxgc_run = self._gcxgc_run, None
+        self._clear_1d_sample_state()
         self._clear_gcxgc_results()
         self._gcxgc_mode = False
         self._gcxgc_metadata = {}

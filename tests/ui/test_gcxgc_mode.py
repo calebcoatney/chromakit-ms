@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -677,6 +678,80 @@ def test_cancelled_period_prompt_drops_the_previous_run(qtbot, tmp_path, monkeyp
     assert "Load cancelled" in app.status_bar.currentMessage()
     _assert_run_dropped(app, run_a)
     _assert_nothing_written(app, a, b)
+
+
+# ── Follow-up: a dropped GCxGC run (or a failed load) leaves no 1D sample to integrate ──
+
+def _make_1d_sample(folder):
+    """A 1D chromatogram as a CSV-backed .C (FTIR profile, read by the real CSV loader)."""
+    import numpy as np
+    from logic.c_folder import CFolder
+    x = np.linspace(0, 10, 4000)
+    y = sum(h * np.exp(-((x - c) / 0.05) ** 2)
+            for c, h in ((2, 5e5), (4, 8e5), (6, 3e5), (8, 6e5))) + 10
+    folder.mkdir(parents=True, exist_ok=True)
+    csv = folder / "one_d.csv"
+    csv.write_text("x,y\n" + "\n".join(f"{a},{b}" for a, b in zip(x, y)))
+    return Path(CFolder.create(str(csv), "ftir").path)
+
+
+def _load_1d_sample(app, folder, monkeypatch):
+    """Load a 1D sample through the real path with peak detection on and auto-export on."""
+    monkeypatch.setattr(app.export_manager, "should_export_json", lambda trigger: True)
+    monkeypatch.setattr(app.export_manager, "should_export_csv", lambda trigger: True)
+    monkeypatch.setattr("ui.app.QMessageBox.critical", lambda *a, **k: pytest.fail(f"load failed: {a[2]}"))
+    c = _make_1d_sample(folder)
+    app.on_file_selected(str(c))
+    assert not app._gcxgc_mode and app.current_processed is not None
+    app.parameters_frame.peaks_enabled.setChecked(True)
+    return c
+
+
+@pytest.mark.parametrize("how", ["failed", "cancelled"])
+def test_dropped_gcxgc_run_leaves_no_1d_sample_to_integrate(qtbot, tmp_path, monkeypatch, how):
+    """1D sample X, GCxGC run A, then a load of B that fails or is cancelled: Integrate must not
+    process X's stale peaks and export them into A's (or B's) folder."""
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    x = _load_1d_sample(app, tmp_path / "x", monkeypatch)
+    monkeypatch.setattr("ui.app.QMessageBox.critical", lambda *a, **k: None)     # B's failure dialog
+    monkeypatch.setattr("ui.app.QMessageBox.warning", lambda *a, **k: None)
+    a = synth.build_run(tmp_path / "a", _scene())
+    app.on_file_selected(str(a))
+    assert app._gcxgc_mode
+    if how == "failed":
+        b = synth.build_run(tmp_path / "b", _scene())
+        lsc = b / "data" / "Synth.lsc"
+        lsc.write_bytes(lsc.read_bytes()[: lsc.stat().st_size // 2])      # a damaged copy
+    else:
+        b = synth.build_run(tmp_path / "b", _scene(), insight=False, view=False)     # no period anywhere
+        monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getDouble", lambda *a, **k: (4.0, False))
+    app.on_file_selected(str(b))
+    assert app._gcxgc_run is None and not app._gcxgc_mode
+    for folder in (a, b, x):
+        _clear_results(folder)
+    app.button_frame.integrate_button.click()
+    assert "No data available for integration" in app.status_bar.currentMessage()
+    assert app.current_processed is None
+    for folder in (a, b, x):
+        assert list((folder / "results").iterdir()) == [], folder
+
+
+def test_failed_1d_load_leaves_no_stale_sample_to_integrate(qtbot, tmp_path, monkeypatch):
+    """A 1D load that fails has already discarded the previous sample's x/y; Integrate must not
+    still run on that sample's processed data."""
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    x = _load_1d_sample(app, tmp_path / "x", monkeypatch)
+    monkeypatch.setattr("ui.app.QMessageBox.critical", lambda *a, **k: None)     # the bad file's dialog
+    bad = _make_1d_sample(tmp_path / "bad")
+    (bad / "data" / "one_d.csv").write_text("not,a\nchromatogram\n")     # no x / y columns
+    app.on_file_selected(str(bad))
+    assert "Error loading file" in app.status_bar.currentMessage()
+    _clear_results(x)
+    app.button_frame.integrate_button.click()
+    assert "No data available for integration" in app.status_bar.currentMessage()
+    assert list((x / "results").iterdir()) == [] and list((bad / "results").iterdir()) == []
 
 
 # ── Final review, Minors 4, 5, 7 and 10 ─────────────────────────────────────
