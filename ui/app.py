@@ -897,7 +897,7 @@ class ChromaKitApp(QMainWindow):
             is_gcxgc = data.get('metadata', {}).get('is_gcxgc', False)
             previous_run = self._gcxgc_run
             if not is_gcxgc and previous_run is not None:
-                self._drop_gcxgc_run(clear_plot=False)     # close its files; the 1D path redraws
+                self._drop_gcxgc_run()     # close its files and take its heatmaps off the plot, before the 1D render
             self._gcxgc_mode = is_gcxgc
             
             gcxgc_layout_note = ""
@@ -1833,8 +1833,9 @@ class ChromaKitApp(QMainWindow):
             if hasattr(self, name):
                 delattr(self, name)
 
-    def _drop_gcxgc_run(self, clear_plot: bool = True) -> None:
-        """Forget the loaded GCxGC run: drop its results, close its files and leave GCxGC mode.
+    def _drop_gcxgc_run(self) -> None:
+        """Forget the loaded GCxGC run: drop its results, close its files, take its heatmaps off
+        the plot and leave GCxGC mode.
 
         Used when a load fails or is cancelled (and when a 1D file replaces the run), so the old
         run cannot be exported or re-integrated as if it were the newly selected one, and the
@@ -1846,8 +1847,7 @@ class ChromaKitApp(QMainWindow):
         self._gcxgc_metadata = {}
         if run is not None:
             run.close()
-        if clear_plot:
-            self.plot_frame.clear_gcxgc()
+        self.plot_frame.clear_gcxgc()
 
     def _export_gcxgc(self, interactive: bool) -> None:
         """Write the GCxGC CSV/JSON/MSP/MGF results into the run's results/ folder.

@@ -754,6 +754,31 @@ def test_failed_1d_load_leaves_no_stale_sample_to_integrate(qtbot, tmp_path, mon
     assert list((x / "results").iterdir()) == [] and list((bad / "results").iterdir()) == []
 
 
+# ── Follow-up: a 1D sample loaded after a GCxGC run gets the 1D plot and its clicks back ──
+
+def test_loading_a_1d_sample_after_a_gcxgc_run_returns_clicks_to_the_1d_plot(gcxgc_app, tmp_path, monkeypatch):
+    """The GCxGC click handler must not swallow every click once a 1D sample is on screen."""
+    from types import SimpleNamespace
+    app, _ = gcxgc_app
+    pf = app.plot_frame
+    assert hasattr(pf, "_gcxgc_ax_fid") and hasattr(pf, "_gcxgc_ax_tic")
+    _load_1d_sample(app, tmp_path / "x", monkeypatch)             # fails the test if the load errors
+    assert not hasattr(pf, "_gcxgc_ax_fid") and not hasattr(pf, "_gcxgc_ax_tic")
+    assert pf._gcxgc_peaks == []
+    assert pf.chromatogram_ax in pf.figure.axes and len(pf.chromatogram_ax.lines) > 0   # the 1D plot survived
+    app.button_frame.integrate_button.click()
+    assert pf.integrated_peaks
+    gcxgc_clicks, menus = [], []
+    monkeypatch.setattr(pf, "_on_gcxgc_click", lambda event: gcxgc_clicks.append(event))
+    monkeypatch.setattr(pf, "_show_peak_context_menu", lambda i, event: menus.append(i))
+    peak = pf.integrated_peaks[0]
+    rt = getattr(peak, "retention_time", None) or peak.position
+    pf._on_plot_click(SimpleNamespace(inaxes=pf.chromatogram_ax, button=3, xdata=rt, ydata=1.0))
+    assert gcxgc_clicks == [] and menus == [0]                    # a right-click on a peak opens its menu
+    pf._on_plot_click(SimpleNamespace(inaxes=pf.chromatogram_ax, button=1, xdata=rt, ydata=1.0))
+    assert gcxgc_clicks == [] and pf._last_click_x == rt           # a left-click is recorded for point selection
+
+
 # ── Final review, Minors 4, 5, 7 and 10 ─────────────────────────────────────
 
 def _toolkit(*hits):
