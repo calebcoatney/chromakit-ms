@@ -143,12 +143,12 @@ def make_field_widget(spec: FieldSpec) -> QWidget:
         w = QSpinBox()
         w.setRange(int(spec.minimum), int(spec.maximum))
         w.setSingleStep(int(spec.step))
+        w.setSpecialValueText(spec.special_value_text)
     else:
         w = QDoubleSpinBox()
         w.setDecimals(spec.decimals)
         w.setRange(spec.minimum, spec.maximum)
         w.setSingleStep(spec.step)
-    if spec.special_value_text:
         w.setSpecialValueText(spec.special_value_text)
     w.setToolTip(tooltip_html(spec.tooltip))
     return w

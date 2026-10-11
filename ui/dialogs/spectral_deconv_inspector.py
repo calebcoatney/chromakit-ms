@@ -256,6 +256,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setMinimumWidth(settings.minimumSizeHint().width()
                                + scroll.verticalScrollBar().sizeHint().width())
+        self._settings_scroll = scroll
 
         panel = QWidget()
         panel_layout = QVBoxLayout(panel)
@@ -378,6 +379,8 @@ class SpectralDeconvInspectorDialog(QDialog):
             return self._read_params()
         except ValueError as e:
             self._status_label.setText(invalid_mz_message(e))
+            # setFocus() alone doesn't scroll (only Tab does); bring the field into view first.
+            self._settings_scroll.ensureWidgetVisible(self._excluded_mz_edit)
             self._excluded_mz_edit.setFocus()
             self._excluded_mz_edit.selectAll()
             return None

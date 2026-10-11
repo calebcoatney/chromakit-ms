@@ -193,3 +193,22 @@ def test_settings_scroll_and_the_buttons_stay_pinned(dialog, qtbot):
     bottom = dialog._close_btn.mapTo(dialog, dialog._close_btn.rect().bottomLeft()).y()
     assert bottom <= dialog.height()                                  # buttons on screen
     assert scroll.verticalScrollBar().maximum() > 0                   # the panel scrolls instead
+
+
+def test_bad_excluded_mz_scrolls_the_field_into_view(dialog, qtbot):
+    """Focus alone doesn't scroll a QScrollArea: at the minimum size the field sat below the fold."""
+    from PySide6.QtWidgets import QScrollArea
+    dialog.resize(1100, 650)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    scroll = dialog.findChild(QScrollArea)
+    field = dialog._excluded_mz_edit
+    viewport = scroll.viewport()
+
+    def field_in_view():
+        return viewport.rect().contains(field.rect().translated(field.mapTo(viewport, field.rect().topLeft())))
+
+    assert scroll.verticalScrollBar().value() == 0 and not field_in_view()   # below the fold
+    field.setText("73 abc")
+    dialog._on_preview_clicked()
+    assert field_in_view()
