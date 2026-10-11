@@ -190,7 +190,7 @@ class BatchOffsetDialog(QDialog):
             self._apply_btn.setToolTip("")
         else:
             self._apply_btn.setToolTip(
-                "Use 'Apply' on the inspector for current-file-only."
+                "Use Save Offset in the Inspector to set the offset for the current file only."
             )
 
     # ── Public API ─────────────────────────────────────────────────────
