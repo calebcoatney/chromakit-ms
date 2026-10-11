@@ -77,7 +77,7 @@ class RejectedIon:
     reason: str             # "shape" or "small_group"
 
 
-@dataclass
+@dataclass(eq=False)   # identity equality: default __eq__ compares ndarray fields and raises
 class DeconvolutedComponent:
     """One deconvolved analyte: RT, spectrum {m/z: height} and its lead-ion profile."""
     rt: float

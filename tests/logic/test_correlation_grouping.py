@@ -1,12 +1,14 @@
 """Tests for logic.correlation_grouping (port of mzmine
 RtGroupingAndShapeCorrelationAlgorithm.groupFeatures / calculateCorrelation and
 SpectralDeconvolutionUtils.generatePseudoSpectra / getMainFeature)."""
+import copy
+
 import numpy as np
 import pytest
 
 from logic.ion_peak_resolver import IonPeak, whole_run_noise_levels
 from logic.correlation_grouping import (
-    CorrelationDeconvParams, IonGroup, RejectedIon, DeconvolutedComponent,
+    CorrelationDeconvParams, DeconvolutedComponent,
     pearson_r, group_ion_peaks, build_components, deconvolve_window,
 )
 
@@ -83,14 +85,36 @@ def test_excluded_mz_lead_selection():
     assert 73.0 in comp.spectrum         # excluded ions stay in the spectrum
 
 
+def test_excluded_mz_tolerance_is_half_a_mass_unit():
+    peaks = [ion(73, 1.0, 10000), ion(57, 1.0, 8000), ion(43, 1.0, 5000), ion(85, 1.0, 2000)]
+    # 73.4 is 0.4 from 73.0: it excludes 73, so the lead falls to 57
+    groups, _ = group_ion_peaks(peaks, CorrelationDeconvParams(excluded_mz=[73.4]))
+    assert groups[0].lead.mz == 57.0
+    # 73.6 (0.6 away) and 74.0 (1.0 away) do not exclude 73, so the lead stays 73
+    for excluded in ([73.6], [74.0]):
+        groups, _ = group_ion_peaks(peaks, CorrelationDeconvParams(excluded_mz=excluded))
+        assert groups[0].lead.mz == 73.0
+
+
+def test_component_equality_does_not_compare_arrays():
+    groups, _ = group_ion_peaks([ion(57, 1.0, 10000), ion(43, 1.0, 5000)],
+                                CorrelationDeconvParams(min_ions=1))
+    comp = build_components(groups)[0]
+    assert comp == comp
+    assert comp != copy.deepcopy(comp)
+
+
 def test_two_candidate_groups_higher_r_wins():
     a = ion(100, 1.00, 10000, sigma=0.03)
     b = ion(200, 1.07, 9000, sigma=0.03)
-    f = ion(300, 1.06, 1000, sigma=0.03)
+    f = ion(300, 1.05, 1000, sigma=0.045)   # r(a,f)=0.084 and r(b,f)=0.760: b must win
     params = CorrelationDeconvParams(rt_tolerance=0.065, min_r=0.0, min_ions=1)
     groups, _ = group_ion_peaks([a, b, f], params)
     by_rep = {g.members[0].mz: [m.mz for m in g.members] for g in groups}
     assert by_rep == {100.0: [100.0], 200.0: [200.0, 300.0]}
+    g_b = next(g for g in groups if g.members[0].mz == 200.0)
+    assert g_b.r[0] == 1.0
+    assert g_b.r[1] == pytest.approx(0.760, abs=0.01)
 
 
 def test_pearson_needs_three_shared_points():
