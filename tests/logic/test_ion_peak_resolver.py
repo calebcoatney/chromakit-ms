@@ -70,9 +70,37 @@ def test_noise_only_trace_gives_nothing():
 
 
 def test_three_point_spike_below_min_points():
+    # peaked 3-point spike: passes every gate except min_points (5000 >= 1.7 * 1000 edges)
     y = np.zeros(X.size)
-    y[100:103] = 5000.0
-    assert resolve_ion_peaks(X, y, 57.0, 50.0, **KW) == []
+    y[100:103] = [1000.0, 5000.0, 1000.0]
+    assert resolve_ion_peaks(X, y, 57.0, 50.0, **KW) == []          # min_points=4
+    peaks = resolve_ion_peaks(X, y, 57.0, 50.0, **dict(KW, min_points=3))
+    assert len(peaks) == 1
+    assert peaks[0].apex_idx == 101
+
+
+def test_four_point_region_accepted_at_min_points():
+    # boundary: a 4-point peaked region is accepted at min_points=4, rejected at 5
+    y = np.zeros(X.size)
+    y[100:104] = [1000.0, 5000.0, 5000.0, 1000.0]
+    peaks = resolve_ion_peaks(X, y, 57.0, 50.0, **KW)
+    assert len(peaks) == 1
+    assert peaks[0].apex_idx == 101
+    assert resolve_ion_peaks(X, y, 57.0, 50.0, **dict(KW, min_points=5)) == []
+
+
+def test_ion_peak_equality_is_identity():
+    # eq=False: comparing peaks whose fields are arrays must not raise
+    def make():
+        return IonPeak(mz=57.0, start_idx=0, end_idx=2, apex_idx=1, rt_apex=0.005,
+                       height=5000.0, rt_array=np.array([0.0, 0.005, 0.01]),
+                       intensity_array=np.array([1000.0, 5000.0, 1000.0]))
+    a, b = make(), make()
+    assert (a == b) is False
+    assert a == a
+    assert b not in [a]
+    assert a in [a, b]
+    assert len({a, b}) == 2                  # still hashable
 
 
 def test_top_edge_ratio_failure():

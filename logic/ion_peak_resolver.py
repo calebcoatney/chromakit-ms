@@ -44,7 +44,7 @@ MIN_RELATIVE_HEIGHT = 0.0
 PEAK_DURATION = (0.0, 10.0)   # minutes, inclusive
 
 
-@dataclass
+@dataclass(eq=False)   # identity equality: default __eq__ compares ndarray fields and raises
 class IonPeak:
     """One ion's chromatographic peak inside a deconvolution window."""
     mz: float
