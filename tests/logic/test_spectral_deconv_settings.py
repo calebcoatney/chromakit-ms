@@ -68,3 +68,24 @@ def test_parse_mz_list_strict_raises():
 def test_load_skips_bad_stored_excluded_mz():
     dp, _ = load_spectral_deconv_settings(FakeSettings({PREFIX + "excluded_mz": "73, junk"}))
     assert dp.excluded_mz == [73.0]
+
+
+@pytest.mark.parametrize("text", ["73 147 207", "73, 147, 207", "73,147 207", " 73\t147 ,, 207 "])
+def test_parse_mz_list_accepts_commas_and_or_spaces(text):
+    assert parse_mz_list(text, strict=True) == [73.0, 147.0, 207.0]
+    assert parse_mz_list(text) == [73.0, 147.0, 207.0]
+
+
+def test_parse_mz_list_semicolon_is_not_a_separator():
+    with pytest.raises(ValueError, match="73;147"):
+        parse_mz_list("73;147", strict=True)
+
+
+@pytest.mark.parametrize("token", ["nan", "inf", "-inf", "0", "-5", "0.0"])
+def test_parse_mz_list_strict_rejects_non_finite_and_non_positive(token):
+    with pytest.raises(ValueError, match=token):
+        parse_mz_list(f"73, {token}", strict=True)
+
+
+def test_parse_mz_list_lenient_skips_non_finite_and_non_positive():
+    assert parse_mz_list("73, nan, -5, 0, inf, 147") == [73.0, 147.0]

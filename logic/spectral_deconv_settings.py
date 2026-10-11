@@ -6,10 +6,14 @@ Old ADAP-era keys in the group are ignored.
 """
 from __future__ import annotations
 
+import math
+import re
+
 from logic.correlation_grouping import CorrelationDeconvParams
 from logic.spectral_deconv_runner import WindowGroupingParams
 
 PREFIX = "ms_spectral_deconv/"
+_MZ_SEPARATORS = re.compile(r"[,\s]+")
 
 _DECONV_FIELDS = (  # (field, type)
     ("noise_percentile", float),
@@ -24,17 +28,27 @@ _DECONV_FIELDS = (  # (field, type)
 
 
 def parse_mz_list(text: str, strict: bool = False) -> list[float]:
-    """Parse '73, 147' into [73.0, 147.0]. strict=True raises on a bad token."""
+    """Parse '73, 147 207' into [73.0, 147.0, 207.0]; commas and/or whitespace separate values.
+
+    A token that is not a finite number above 0 is bad: strict=True raises
+    ValueError naming it, otherwise it is skipped.
+    """
     values: list[float] = []
-    for token in (text or "").split(","):
-        token = token.strip()
+    for token in _MZ_SEPARATORS.split(text or ""):
         if not token:
             continue
         try:
-            values.append(float(token))
+            value = float(token)
         except ValueError:
-            if strict:
-                raise ValueError(f"invalid m/z value: '{token}'") from None
+            problem = f"'{token}' is not a number"
+        else:
+            if math.isfinite(value) and value > 0:
+                values.append(value)
+                continue
+            problem = (f"'{token}' is not a finite number" if not math.isfinite(value)
+                       else f"'{token}' is not above 0")
+        if strict:
+            raise ValueError(problem)
     return values
 
 
