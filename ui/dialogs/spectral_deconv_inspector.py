@@ -11,8 +11,8 @@ from PySide6.QtCore import Qt, Signal, QObject, QRunnable, Slot, QThreadPool
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QVBoxLayout, QSplitter, QWidget,
-    QGroupBox, QFormLayout, QLabel, QDoubleSpinBox, QSpinBox,
-    QComboBox, QCheckBox, QLineEdit, QPushButton, QProgressBar,
+    QGroupBox, QFormLayout, QLabel, QSpinBox,
+    QComboBox, QCheckBox, QPushButton, QProgressBar,
     QTreeWidget, QTreeWidgetItem, QHeaderView, QSlider,
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -25,6 +25,7 @@ from logic.ion_peak_resolver import whole_run_noise_levels
 from logic.spectral_deconv_settings import save_spectral_deconv_settings, parse_mz_list
 from logic.spectral_deconv_runner import WindowGroupingParams, _group_peaks_into_windows
 from logic.ms_time import shifted_xlabels
+from ui.dialogs.spectral_deconv_fields import build_setting_boxes
 
 
 class _PreviewWorkerSignals(QObject):
@@ -203,114 +204,22 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._on_offset_apply_folder_clicked
         )
 
-        # Window Grouping group
-        wg_group = QGroupBox("Peak Window Grouping")
-        wg_form = QFormLayout(wg_group)
-
-        self._gap_spin = QDoubleSpinBox()
-        self._gap_spin.setRange(0.0, 10.0)
-        self._gap_spin.setDecimals(3)
-        self._gap_spin.setSingleStep(0.01)
-        self._gap_spin.setSpecialValueText("Auto")
-        self._gap_spin.setToolTip("0 = auto (0.5× median FID peak width)")
-        wg_form.addRow("Gap tolerance (min):", self._gap_spin)
-
-        self._padding_spin = QDoubleSpinBox()
-        self._padding_spin.setRange(0.0, 5.0)
-        self._padding_spin.setDecimals(2)
-        wg_form.addRow("Padding fraction:", self._padding_spin)
-
-        self._rt_match_spin = QDoubleSpinBox()
-        self._rt_match_spin.setRange(0.001, 1.0)
-        self._rt_match_spin.setDecimals(3)
-        self._rt_match_spin.setSingleStep(0.005)
-        self._rt_match_spin.setToolTip("Max RT gap (min) between FID peak and MS component")
-        wg_form.addRow("RT match tolerance (min):", self._rt_match_spin)
-
-        self._max_window_peaks_spin = QSpinBox()
-        self._max_window_peaks_spin.setRange(0, 100)
-        self._max_window_peaks_spin.setSpecialValueText("Unlimited")
-        self._max_window_peaks_spin.setToolTip(
-            "Force a window split when this many FID peaks accumulate.\n"
-            "Splits at the largest internal RT gap. 0 = unlimited."
-        )
-        wg_form.addRow("Max peaks per window:", self._max_window_peaks_spin)
-
-        layout.addWidget(wg_group)
-
-        # --- Ion Peak Detection (local minimum resolver, after mzmine) ---
-        peak_group = QGroupBox("Ion Peak Detection")
-        peak_form = QFormLayout(peak_group)
-
-        self._noise_percentile_spin = QDoubleSpinBox()
-        self._noise_percentile_spin.setRange(0.0, 1.0)
-        self._noise_percentile_spin.setDecimals(3)
-        self._noise_percentile_spin.setSingleStep(0.05)
-        self._noise_percentile_spin.setToolTip(
-            "Ignore each ion's weakest points: the cut is this percentile of that ion's\n"
-            "intensities over the whole run.")
-        peak_form.addRow("Noise percentile:", self._noise_percentile_spin)
-
-        self._search_range_spin = QDoubleSpinBox()
-        self._search_range_spin.setRange(0.001, 1.0)
-        self._search_range_spin.setDecimals(3)
-        self._search_range_spin.setSingleStep(0.005)
-        self._search_range_spin.setToolTip(
-            "A dip that is the lowest point within ± this range (min) splits two peaks.\n"
-            "Set near one peak width.")
-        peak_form.addRow("Search range (min):", self._search_range_spin)
-
-        self._min_peak_height_spin = QDoubleSpinBox()
-        self._min_peak_height_spin.setRange(0.0, 1e9)
-        self._min_peak_height_spin.setDecimals(0)
-        self._min_peak_height_spin.setSingleStep(100.0)
-        self._min_peak_height_spin.setToolTip("Ignore ion peaks below this height (counts).")
-        peak_form.addRow("Min peak height (counts):", self._min_peak_height_spin)
-
-        self._min_top_edge_ratio_spin = QDoubleSpinBox()
-        self._min_top_edge_ratio_spin.setRange(1.0, 100.0)
-        self._min_top_edge_ratio_spin.setDecimals(2)
-        self._min_top_edge_ratio_spin.setSingleStep(0.1)
-        self._min_top_edge_ratio_spin.setToolTip("A peak's top must exceed each edge by this factor.")
-        peak_form.addRow("Min peak top/edge ratio:", self._min_top_edge_ratio_spin)
-
-        self._min_points_spin = QSpinBox()
-        self._min_points_spin.setRange(1, 100)
-        self._min_points_spin.setToolTip("Ignore ion peaks with fewer points (spikes).")
-        peak_form.addRow("Min points per peak:", self._min_points_spin)
-        layout.addWidget(peak_group)
-
-        # --- Grouping (RT grouping + shape correlation, after mzmine) ---
-        group_box = QGroupBox("Grouping")
-        group_form = QFormLayout(group_box)
-
-        self._rt_tolerance_spin = QDoubleSpinBox()
-        self._rt_tolerance_spin.setRange(0.001, 1.0)
-        self._rt_tolerance_spin.setDecimals(3)
-        self._rt_tolerance_spin.setSingleStep(0.005)
-        self._rt_tolerance_spin.setToolTip(
-            "How far (min) an ion's apex may sit from its group's representative ion.")
-        group_form.addRow("RT tolerance (min):", self._rt_tolerance_spin)
-
-        self._min_r_spin = QDoubleSpinBox()
-        self._min_r_spin.setRange(0.0, 1.0)
-        self._min_r_spin.setDecimals(2)
-        self._min_r_spin.setSingleStep(0.05)
-        self._min_r_spin.setToolTip(
-            "Pearson correlation an ion's peak shape needs with the representative ion to join.")
-        group_form.addRow("Min shape correlation (r):", self._min_r_spin)
-
-        self._min_ions_spin = QSpinBox()
-        self._min_ions_spin.setRange(1, 100)
-        self._min_ions_spin.setToolTip("Drop groups with fewer ions.")
-        group_form.addRow("Min ions per spectrum:", self._min_ions_spin)
-
-        self._excluded_mz_edit = QLineEdit()
-        self._excluded_mz_edit.setPlaceholderText("e.g. 73, 147, 221")
-        self._excluded_mz_edit.setToolTip(
-            "Comma-separated m/z values (±0.5) that can't be a group's lead ion.")
-        group_form.addRow("Excluded m/z:", self._excluded_mz_edit)
-        layout.addWidget(group_box)
+        boxes, w = build_setting_boxes()
+        for box in boxes:
+            layout.addWidget(box)
+        self._gap_spin = w["gap_tolerance"]
+        self._padding_spin = w["padding_fraction"]
+        self._rt_match_spin = w["rt_match_tolerance"]
+        self._max_window_peaks_spin = w["max_window_peaks"]
+        self._noise_percentile_spin = w["noise_percentile"]
+        self._search_range_spin = w["search_range"]
+        self._min_peak_height_spin = w["min_peak_height"]
+        self._min_top_edge_ratio_spin = w["min_top_edge_ratio"]
+        self._min_points_spin = w["min_points"]
+        self._rt_tolerance_spin = w["rt_tolerance"]
+        self._min_r_spin = w["min_r"]
+        self._min_ions_spin = w["min_ions"]
+        self._excluded_mz_edit = w["excluded_mz"]
 
         # Top N traces + display options
         top_n_layout = QFormLayout()
