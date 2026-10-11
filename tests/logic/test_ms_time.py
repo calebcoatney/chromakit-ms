@@ -4,7 +4,6 @@ import inspect
 import numpy as np
 import pytest
 
-from logic.eic_extractor import extract_eic_peaks
 from logic.ms_time import shifted_xlabels
 from logic.spectral_deconv_runner import run_spectral_deconvolution
 from logic.spectral_deconv_worker import SpectralDeconvWorker
@@ -61,12 +60,6 @@ def test_spectrum_extractor_extract_for_peak_accepts_ms_time_offset():
     assert sig.parameters["ms_time_offset"].default == 0.0
 
 
-def test_extract_eic_peaks_accepts_ms_time_offset():
-    sig = inspect.signature(extract_eic_peaks)
-    assert "ms_time_offset" in sig.parameters
-    assert sig.parameters["ms_time_offset"].default == 0.0
-
-
 def test_run_spectral_deconvolution_accepts_ms_time_offset():
     sig = inspect.signature(run_spectral_deconvolution)
     assert "ms_time_offset" in sig.parameters
@@ -77,3 +70,14 @@ def test_spectral_deconv_worker_accepts_ms_time_offset():
     sig = inspect.signature(SpectralDeconvWorker)
     assert "ms_time_offset" in sig.parameters
     assert sig.parameters["ms_time_offset"].default == 0.0
+
+
+def test_no_adap_modules_remain():
+    import logic
+    from importlib.machinery import PathFinder
+
+    # Search the package's own directory only. An editable install maps
+    # `logic.*` imports onto the checkout it was installed from, so a plain
+    # importlib.util.find_spec() can find a deleted module in another checkout.
+    for name in ("spectral_deconvolution", "eic_extractor"):
+        assert PathFinder.find_spec(f"logic.{name}", logic.__path__) is None

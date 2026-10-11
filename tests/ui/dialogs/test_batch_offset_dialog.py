@@ -131,6 +131,15 @@ def test_dialog_apply_disabled_when_only_current_selected(qtbot):
     assert dlg._apply_btn.isEnabled()
 
 
+def test_disabled_apply_points_at_save_offset(qtbot):
+    """The Inspector's "Apply" button is now "Save Offset"; the hint must name it."""
+    dlg = _make_dialog(qtbot)
+    dlg._on_select_none()               # only the current file's row stays checked
+    assert not dlg._apply_btn.isEnabled()
+    tip = dlg._apply_btn.toolTip()
+    assert "Save Offset" in tip and "'Apply'" not in tip
+
+
 def test_dialog_returns_accepted_on_apply(qtbot):
     """Clicking Apply triggers QDialog.Accepted."""
     dlg = _make_dialog(qtbot)

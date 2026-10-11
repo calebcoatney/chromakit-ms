@@ -1,14 +1,26 @@
 ChromaKit-MS
 Copyright (c) 2025 Caleb Coatney
 
-This project incorporates code from the following third-party packages:
+This project incorporates code from the following third-party projects:
 
-- evanyeyeye/rainbow, licensed under the GNU Lesser General Public License v3.0
-  See COPYING.LESSER in that project for license details.
+- mzmine (https://github.com/mzmine/mzmine), MIT License,
+  Copyright (c) 2004-2025 The mzmine Development Team.
+  Ported in logic/ion_peak_resolver.py (local minimum resolver) and
+  logic/correlation_grouping.py (RT grouping and shape correlation).
+  See licenses/MZMINE-MIT.txt.
 - Portions derived from the ms-toolkit-nrel project licensed under the
   Apache License, Version 2.0.
-- pybaselines, licensed under the BSD 3-Clause License.
 
+This project depends on (does not vendor):
+
+- rainbow-api (evanyeyeye/rainbow), GNU Lesser General Public License v3.0.
+- pybaselines, BSD 3-Clause License.
+
+History: ChromaKit-MS versions up to commit 433d642 contained
+logic/spectral_deconvolution.py, a translation of ADAP-GC 3.2 (Du-Lab Team,
+GNU GPL version 2 or later; Smirnov et al., J. Proteome Res. 2018, 17,
+470-478), and a second copy of that translation under deconvolution/. Both
+were removed in favour of the mzmine-derived implementation above.
 
 These third-party components are distributed under their respective licenses.
 The source code in this repository is licensed under the Apache License,

@@ -4,9 +4,11 @@ FastAPI backend for ChromaKit-MS.
 Thin wrapper around the logic/ layer — all core processing is delegated
 to existing ChromaKit-MS modules with zero modifications.
 """
+import dataclasses
 import os
 import sys
 import json
+import typing
 from pathlib import Path
 from typing import Optional
 
@@ -26,7 +28,7 @@ from logic.spectral_deconv_runner import (
     run_spectral_deconvolution,
     WindowGroupingParams,
 )
-from logic.spectral_deconvolution import DeconvolutionParams
+from logic.correlation_grouping import CorrelationDeconvParams
 from logic.integration import ChromatographicPeak
 from logic.ms_search_core import run_batch_search, BatchSearchSummary
 from logic.json_exporter import (
@@ -389,9 +391,54 @@ async def extract_spectrum(request: SpectrumRequest):
 
 # ─── Spectral Deconvolution ──────────────────────────────────────────
 
+def _is_number(value) -> bool:
+    """True for int/float; bool is a subclass of int in Python but not a number here."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _check_param_type(name: str, hint, value, label: str) -> None:
+    """Raise a 422 naming `label.name` when `value` does not fit the field's type.
+
+    float: int or float (not bool); int: int only (not bool);
+    list: a list of numbers (excluded_mz); `X | None` also accepts null.
+    """
+    kinds = typing.get_args(hint) or (hint,)
+    if type(None) in kinds and value is None:
+        return
+    if float in kinds and _is_number(value):
+        return
+    if int in kinds and isinstance(value, int) and not isinstance(value, bool):
+        return
+    if list in kinds and isinstance(value, list) and all(_is_number(v) for v in value):
+        return
+    expected = {float: "a number", int: "an integer", list: "a list of numbers"}
+    wanted = " or ".join(expected[k] for k in kinds if k in expected)
+    if type(None) in kinds:
+        wanted += " or null"
+    raise HTTPException(
+        status_code=422,
+        detail=f"invalid {label}.{name}: expected {wanted}, got {value!r}",
+    )
+
+
+def _dataclass_from_request(cls, values, label: str):
+    """Build a params dataclass from a request dict; 422 on unknown fields or wrong value types."""
+    valid = [f.name for f in dataclasses.fields(cls)]
+    unknown = sorted(set(values) - set(valid))
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown {label} field(s): {', '.join(unknown)}; valid fields: {', '.join(valid)}",
+        )
+    hints = typing.get_type_hints(cls)
+    for name, value in values.items():
+        _check_param_type(name, hints[name], value, label)
+    return cls(**values)
+
+
 @app.post("/api/spectral-deconvolution", response_model=SpectralDeconvolutionResponse)
 async def spectral_deconvolution(request: SpectralDeconvolutionRequest):
-    """Run ADAP-GC spectral deconvolution on a list of integrated peaks.
+    """Run spectral deconvolution (correlation grouping, after mzmine) on integrated peaks.
 
     Peaks come in as dicts (Peak.as_dict shape); we re-hydrate them via
     Peak.from_dict, call the pure runner, and serialize back.
@@ -412,11 +459,11 @@ async def spectral_deconvolution(request: SpectralDeconvolutionRequest):
         )
 
     deconv_params = (
-        DeconvolutionParams(**request.deconv_params)
-        if request.deconv_params else DeconvolutionParams()
+        _dataclass_from_request(CorrelationDeconvParams, request.deconv_params, "deconv_params")
+        if request.deconv_params else CorrelationDeconvParams()
     )
     grouping_params = (
-        WindowGroupingParams(**request.grouping_params)
+        _dataclass_from_request(WindowGroupingParams, request.grouping_params, "grouping_params")
         if request.grouping_params else WindowGroupingParams()
     )
 

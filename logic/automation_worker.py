@@ -563,7 +563,7 @@ class AutomationWorker(QRunnable):
             return False
     
     def _run_spectral_deconvolution(self):
-        """Run ADAP-GC spectral deconvolution on integrated peaks.
+        """Run spectral deconvolution on integrated peaks.
 
         Populates peak.deconvolved_spectrum in-place so the subsequent
         BatchSearchWorker uses deconvolved spectra instead of raw point-in-time

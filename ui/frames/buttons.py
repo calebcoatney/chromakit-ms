@@ -65,7 +65,9 @@ class ButtonFrame(QWidget):
         self.row2_layout.addWidget(self.batch_search_button)
 
         self.deconvolve_ms_button = QPushButton("Deconvolve MS")
-        self.deconvolve_ms_button.setToolTip("Run ADAP-GC spectral deconvolution on integrated peaks")
+        self.deconvolve_ms_button.setToolTip(
+            "<p>Give each integrated FID peak a cleaner mass spectrum, built from the ions that "
+            "elute with it. Settings: MS Options → Spectral Deconvolution.</p>")
         self.deconvolve_ms_button.setEnabled(False)
         self.deconvolve_ms_button.clicked.connect(self.deconvolve_ms_clicked)
         self.row2_layout.addWidget(self.deconvolve_ms_button)

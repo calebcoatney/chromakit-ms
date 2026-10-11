@@ -65,13 +65,13 @@ class ChromatographicPeak(Feature):
         self.is_grouped = False
         self.grouped_peak_count = None
 
-        # MS spectral deconvolution results (ADAP-GC)
+        # MS spectral deconvolution results
         self.deconvolved_spectrum = None
         # When populated: {'mz': np.ndarray, 'intensities': np.ndarray}
         # Same format as SpectrumExtractor.extract_for_peak()
 
         self.deconvolution_component_count = None
-        # int: ADAP-GC components found in this peak's window; None = not yet run
+        # int: components found in this peak's window; None = not yet run
 
         # Add quantitation properties (Polyarc + IS method)
         self.mol_C = None  # Moles of carbon

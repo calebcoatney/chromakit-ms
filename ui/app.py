@@ -3424,7 +3424,7 @@ class ChromaKitApp(QMainWindow):
                          self.status_bar.showMessage(f"Spectral deconvolution: {pct}%"))
         )
         worker.signals.finished.connect(
-            lambda: self._on_deconvolve_ms_finished(progress_dialog)
+            lambda: self._on_deconvolve_ms_finished(progress_dialog, cancelled=worker.stopped_early)
         )
         worker.signals.error.connect(
             lambda msg: self._on_deconvolve_ms_error(msg, progress_dialog)
@@ -3434,48 +3434,38 @@ class ChromaKitApp(QMainWindow):
         QThreadPool.globalInstance().start(worker)
 
     def _get_spectral_deconv_params(self):
-        """Read DeconvolutionParams and WindowGroupingParams from QSettings."""
-        from logic.spectral_deconvolution import DeconvolutionParams
-        from logic.spectral_deconv_runner import WindowGroupingParams
+        """Read spectral deconvolution and window grouping params from QSettings."""
+        from logic.spectral_deconv_settings import load_spectral_deconv_settings
+        return load_spectral_deconv_settings(QSettings("CalebCoatney", "ChromaKit"))
 
-        s = QSettings("CalebCoatney", "ChromaKit")
-
-        deconv = DeconvolutionParams(
-            min_cluster_distance=s.value("ms_spectral_deconv/min_cluster_distance", 0.005, float),
-            min_cluster_size=s.value("ms_spectral_deconv/min_cluster_size", 2, int),
-            min_cluster_intensity=s.value("ms_spectral_deconv/min_cluster_intensity", 200.0, float),
-            min_eic_prominence=s.value("ms_spectral_deconv/min_eic_prominence", 1000.0, float),
-            shape_sim_threshold=s.value("ms_spectral_deconv/shape_sim_threshold", 30.0, float),
-            model_peak_choice=s.value("ms_spectral_deconv/model_peak_choice", "sharpness", str),
-            excluded_mz=[
-                float(x.strip())
-                for x in s.value("ms_spectral_deconv/excluded_mz", "", str).split(",")
-                if x.strip()
-            ],
-        )
-
-        raw_gap = s.value("ms_spectral_deconv/gap_tolerance", 0.0, float)
-        grouping = WindowGroupingParams(
-            gap_tolerance=None if raw_gap == 0.0 else raw_gap,
-            padding_fraction=s.value("ms_spectral_deconv/padding_fraction", 0.5, float),
-            rt_match_tolerance=s.value("ms_spectral_deconv/rt_match_tolerance", 0.05, float),
-            max_window_peaks=s.value("ms_spectral_deconv/max_window_peaks", 10, int),
-        )
-
-        return deconv, grouping
-
-    def _on_deconvolve_ms_finished(self, progress_dialog=None):
+    def _on_deconvolve_ms_finished(self, progress_dialog=None, cancelled=False):
+        """A run ended. ``cancelled``: Cancel stopped it before its last window (worker.stopped_early),
+        so the windows it skipped kept no spectrum."""
         if progress_dialog:
             progress_dialog.setValue(100)
             progress_dialog.close()
 
-        n_deconv = sum(
+        k = sum(
             1 for p in getattr(self, 'integrated_peaks', [])
             if getattr(p, 'deconvolved_spectrum', None) is not None
         )
-        self.status_bar.showMessage(
-            f"Spectral deconvolution complete — {n_deconv} of {len(getattr(self, 'integrated_peaks', []))} peaks deconvolved"
-        )
+        n = len(getattr(self, 'integrated_peaks', []))
+        if cancelled:
+            message = (f"Spectral deconvolution cancelled: {k} of {n} peaks have a deconvolved "
+                       "spectrum; the rest use the fallback spectrum. Click Deconvolve MS to run "
+                       "the whole file.")
+        elif k == n:
+            message = (f"Spectral deconvolution complete: all {n} peaks have a deconvolved "
+                       "spectrum. Click MS Search All to search with them.")
+        elif k > 0:
+            message = (f"Spectral deconvolution complete: {k} of {n} peaks have a deconvolved "
+                       f"spectrum; the other {n - k} use the fallback spectrum (MS Options → "
+                       "Spectrum Extraction). Click MS Search All to search with them.")
+        else:
+            message = ("Spectral deconvolution complete: no peak got a deconvolved spectrum, so "
+                       f"all {n} use the fallback spectrum. Click Inspect on the MS tab to check "
+                       "the settings.")
+        self.status_bar.showMessage(message)
         self._deconvolve_ms_run = True
         self.ms_frame.inspect_btn.setEnabled(True)
         self._refresh_current_peak_ms_display()
@@ -3485,10 +3475,19 @@ class ChromaKitApp(QMainWindow):
             self._deconv_inspector.refresh_current_window()
 
     def _on_deconvolve_ms_error(self, msg: str, progress_dialog=None):
+        """``msg`` is the worker's full traceback: it goes to the console, its last line to the user."""
         if progress_dialog:
             progress_dialog.close()
+        print(f"Spectral deconvolution failed:\n{msg}")
+        lines = [ln for ln in msg.strip().splitlines() if ln.strip()]
+        reason = lines[-1] if lines else "unknown error"
         self.status_bar.showMessage("Spectral deconvolution failed")
-        QMessageBox.critical(self, "Deconvolution Error", msg)
+        # The Inspector disabled its controls for the rerun; give them back.
+        if self._deconv_inspector is not None and self._deconv_inspector.isVisible():
+            self._deconv_inspector.set_controls_enabled(True)
+        QMessageBox.critical(
+            self, "Deconvolution Error",
+            f"Spectral deconvolution failed: {reason}\n\nThe full error is printed in the console.")
 
     def _refresh_current_peak_ms_display(self):
         """Re-display spectrum for the last-viewed peak (picks up deconvolved spectrum)."""
@@ -3574,7 +3573,7 @@ class ChromaKitApp(QMainWindow):
                          self.status_bar.showMessage(f"Spectral deconvolution: {pct}%"))
         )
         worker.signals.finished.connect(
-            lambda: self._on_deconvolve_ms_finished(progress_dialog)
+            lambda: self._on_deconvolve_ms_finished(progress_dialog, cancelled=worker.stopped_early)
         )
         worker.signals.error.connect(
             lambda msg: self._on_deconvolve_ms_error(msg, progress_dialog)
@@ -3590,6 +3589,13 @@ class ChromaKitApp(QMainWindow):
 
         from logic.sidecar_offsets import DEFAULT_SIDECAR_PATH, save_offset
 
+        # Save Offset saves the shown settings too, and reruns exactly what it saved. Save them
+        # first: if that raises, the offset is neither persisted nor applied.
+        if self._deconv_inspector is not None:
+            deconv_params, grouping_params = self._deconv_inspector.save_shown_settings()
+        else:
+            deconv_params, grouping_params = self._get_spectral_deconv_params()
+
         data_path = str(self.data_handler.current_directory_path)
         save_offset(data_path, offset_min, source=source, sidecar_path=DEFAULT_SIDECAR_PATH)
         self.data_handler.ms_time_offset = offset_min
@@ -3598,10 +3604,7 @@ class ChromaKitApp(QMainWindow):
             self.plot_frame.set_ms_time_offset(offset_min)
 
         if self._deconv_inspector is not None:
-            deconv_params, grouping_params = self._deconv_inspector.read_current_params()
             self._deconv_inspector.close()
-        else:
-            deconv_params, grouping_params = self._get_spectral_deconv_params()
 
         self.status_bar.showMessage(
             f"MS offset applied: {offset_min:+.4f} min ({source}). "
@@ -3629,7 +3632,7 @@ class ChromaKitApp(QMainWindow):
             QMessageBox.information(
                 self, "No Sibling Files",
                 "No sibling .D files found in this folder. "
-                "Use the 'Apply' button to set the offset for the current file only."
+                "Use Save Offset to set the offset for the current file only."
             )
             return
 
@@ -3685,18 +3688,13 @@ class ChromaKitApp(QMainWindow):
         Uses MSFrame's ms_toolkit and search settings, then routes results
         back to the inspector's inline results panel.
         """
-        if not hasattr(self.ms_frame, 'ms_toolkit') or self.ms_frame.ms_toolkit is None:
+        if (getattr(self.ms_frame, 'ms_toolkit', None) is None
+                or not self.ms_frame.library_loaded):
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "MS Library Not Loaded",
-                "The MS library must be loaded before searching.\n"
-                "Go to the MS tab and load a library first.",
-            )
-            return
-
-        if not self.ms_frame.library_loaded:
-            from PySide6.QtWidgets import QMessageBox
+            # Replace the Inspector's "searching the library…" before the warning opens.
+            if self._deconv_inspector:
+                self._deconv_inspector.show_status(
+                    "Load an MS library on the MS tab to search groups.")
             QMessageBox.warning(
                 self,
                 "MS Library Not Loaded",
@@ -3754,7 +3752,7 @@ class ChromaKitApp(QMainWindow):
         except Exception as e:
             if self._deconv_inspector:
                 self._deconv_inspector.show_search_results([], rt)
-                self._deconv_inspector._status_label.setText(f"Search error: {e}")
+                self._deconv_inspector.show_status(f"Search error: {e}")
             return
 
         if self._deconv_inspector:
