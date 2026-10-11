@@ -33,7 +33,17 @@ class SpectralDeconvWorker(QRunnable):
         self.grouping_params = grouping_params or WindowGroupingParams()
         self.ms_time_offset = ms_time_offset
         self.signals = SpectralDeconvWorkerSignals()
-        self.cancelled = False
+        self.cancelled = False       # set by the UI's Cancel
+        self.stopped_early = False   # the runner skipped windows because of it
+
+    def _should_cancel(self) -> bool:
+        """The runner asks before each window and breaks on True, so True means it stopped early.
+
+        A Cancel clicked after the last window has started is never seen: that run is complete.
+        """
+        if self.cancelled:
+            self.stopped_early = True
+        return self.cancelled
 
     @Slot()
     def run(self):
@@ -44,7 +54,7 @@ class SpectralDeconvWorker(QRunnable):
                 deconv_params=self.deconv_params,
                 grouping_params=self.grouping_params,
                 progress_callback=self.signals.progress.emit,
-                should_cancel=lambda: self.cancelled,
+                should_cancel=self._should_cancel,
                 ms_time_offset=self.ms_time_offset,
             )
             self.signals.finished.emit()

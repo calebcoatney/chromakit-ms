@@ -84,10 +84,48 @@ def _dispatch(monkeypatch, start):
 @pytest.mark.parametrize("cancel", [True, False])
 def test_both_call_sites_say_whether_the_run_was_cancelled(monkeypatch, start, cancel):
     app, worker = _dispatch(monkeypatch, start)
-    worker.cancelled = cancel
+    worker.cancelled = worker.stopped_early = cancel
     worker.signals.finished.emit()
     assert app._on_deconvolve_ms_finished.call_count == 1
     assert app._on_deconvolve_ms_finished.call_args.kwargs == {"cancelled": cancel}
+
+
+@pytest.mark.parametrize("start", [
+    lambda app: ChromaKitApp._on_deconvolve_ms_clicked(app),
+    lambda app: ChromaKitApp._on_inspector_rerun_requested(app, *app._get_spectral_deconv_params()),
+], ids=["deconvolve-ms-button", "inspector-rerun"])
+def test_cancel_after_the_last_window_reports_complete(monkeypatch, start):
+    """Cancel clicked once every window had run: the run is complete, not cancelled."""
+    app, worker = _dispatch(monkeypatch, start)
+    worker.cancelled = True                      # clicked, but the runner never stopped early
+    worker.signals.finished.emit()
+    assert app._on_deconvolve_ms_finished.call_args.kwargs == {"cancelled": False}
+
+
+def _run_worker(monkeypatch, peaks, cancel_at_progress=None):
+    """Run SpectralDeconvWorker synchronously on the fake .D; optionally cancel at a progress %."""
+    from logic.spectral_deconv_worker import SpectralDeconvWorker
+    from logic.correlation_grouping import CorrelationDeconvParams
+    from logic.spectral_deconv_runner import WindowGroupingParams
+    _fake_rainbow(monkeypatch)
+    worker = SpectralDeconvWorker(peaks=peaks, ms_data_path="/fake.D",
+                                  deconv_params=CorrelationDeconvParams(search_range=0.03),
+                                  grouping_params=WindowGroupingParams(gap_tolerance=0.1))
+    if cancel_at_progress is not None:
+        worker.signals.progress.connect(
+            lambda pct: setattr(worker, "cancelled", True) if pct >= cancel_at_progress else None)
+    worker.run()
+    return worker
+
+
+def test_worker_reports_stopping_early_only_when_a_window_was_skipped(monkeypatch):
+    two_windows = [_peak(1.0, 0.96, 1.04), _peak(1.6, 1.56, 1.64)]
+    w = _run_worker(monkeypatch, list(two_windows), cancel_at_progress=50)   # after window 1
+    assert w.cancelled and w.stopped_early
+    w = _run_worker(monkeypatch, list(two_windows), cancel_at_progress=100)  # after the last
+    assert w.cancelled and not w.stopped_early
+    w = _run_worker(monkeypatch, list(two_windows))
+    assert not w.cancelled and not w.stopped_early
 
 
 # ── #15: a failed rerun re-enables the Inspector; no raw traceback ─────────────
@@ -174,6 +212,18 @@ def test_save_offset_saves_the_shown_settings_and_reruns_them(offset_app, inspec
     assert saved[0].excluded_mz == [73.0, 147.0]
     offset_app._on_inspector_rerun_requested.assert_called_once()
     assert tuple(offset_app._on_inspector_rerun_requested.call_args.args) == saved
+
+
+def test_settings_that_fail_to_save_leave_the_offset_untouched(offset_app, inspector):
+    """save_shown_settings() runs first: if it raises, no offset is saved or applied."""
+    inspector._excluded_mz_edit.setText("73 abc")
+    with pytest.raises(ValueError):
+        ChromaKitApp._on_inspector_apply_offset_requested(offset_app, 0.01, "manual")
+    assert offset_app._offsets == []
+    assert offset_app.data_handler.ms_time_offset == 0.0
+    offset_app.plot_frame.set_ms_time_offset.assert_not_called()
+    offset_app._on_inspector_rerun_requested.assert_not_called()
+    assert _saved(inspector) is None
 
 
 def _fake_batch_dialog(monkeypatch, accepted):

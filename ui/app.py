@@ -3424,7 +3424,7 @@ class ChromaKitApp(QMainWindow):
                          self.status_bar.showMessage(f"Spectral deconvolution: {pct}%"))
         )
         worker.signals.finished.connect(
-            lambda: self._on_deconvolve_ms_finished(progress_dialog, cancelled=worker.cancelled)
+            lambda: self._on_deconvolve_ms_finished(progress_dialog, cancelled=worker.stopped_early)
         )
         worker.signals.error.connect(
             lambda msg: self._on_deconvolve_ms_error(msg, progress_dialog)
@@ -3439,7 +3439,8 @@ class ChromaKitApp(QMainWindow):
         return load_spectral_deconv_settings(QSettings("CalebCoatney", "ChromaKit"))
 
     def _on_deconvolve_ms_finished(self, progress_dialog=None, cancelled=False):
-        """A run ended: ``cancelled`` means it stopped early (its windows after that kept none)."""
+        """A run ended. ``cancelled``: Cancel stopped it before its last window (worker.stopped_early),
+        so the windows it skipped kept no spectrum."""
         if progress_dialog:
             progress_dialog.setValue(100)
             progress_dialog.close()
@@ -3572,7 +3573,7 @@ class ChromaKitApp(QMainWindow):
                          self.status_bar.showMessage(f"Spectral deconvolution: {pct}%"))
         )
         worker.signals.finished.connect(
-            lambda: self._on_deconvolve_ms_finished(progress_dialog, cancelled=worker.cancelled)
+            lambda: self._on_deconvolve_ms_finished(progress_dialog, cancelled=worker.stopped_early)
         )
         worker.signals.error.connect(
             lambda msg: self._on_deconvolve_ms_error(msg, progress_dialog)
@@ -3588,6 +3589,13 @@ class ChromaKitApp(QMainWindow):
 
         from logic.sidecar_offsets import DEFAULT_SIDECAR_PATH, save_offset
 
+        # Save Offset saves the shown settings too, and reruns exactly what it saved. Save them
+        # first: if that raises, the offset is neither persisted nor applied.
+        if self._deconv_inspector is not None:
+            deconv_params, grouping_params = self._deconv_inspector.save_shown_settings()
+        else:
+            deconv_params, grouping_params = self._get_spectral_deconv_params()
+
         data_path = str(self.data_handler.current_directory_path)
         save_offset(data_path, offset_min, source=source, sidecar_path=DEFAULT_SIDECAR_PATH)
         self.data_handler.ms_time_offset = offset_min
@@ -3596,11 +3604,7 @@ class ChromaKitApp(QMainWindow):
             self.plot_frame.set_ms_time_offset(offset_min)
 
         if self._deconv_inspector is not None:
-            # Save Offset saves the shown settings too, and reruns exactly what it saved.
-            deconv_params, grouping_params = self._deconv_inspector.save_shown_settings()
             self._deconv_inspector.close()
-        else:
-            deconv_params, grouping_params = self._get_spectral_deconv_params()
 
         self.status_bar.showMessage(
             f"MS offset applied: {offset_min:+.4f} min ({source}). "
