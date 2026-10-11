@@ -177,8 +177,9 @@ def run_spectral_deconvolution(
         ms_time_offset: Minutes added to MS scan times to align them with the FID.
 
     Returns:
-        The same peaks list with deconvolved_spectrum / deconvolution_component_count
-        populated in-place on matched peaks.
+        The same peaks list. Every peak's deconvolved_spectrum /
+        deconvolution_component_count is reset first, then populated in-place for
+        the windows that run (spectrum only on matched peaks).
     """
     if deconv_params is None:
         deconv_params = CorrelationDeconvParams()
@@ -194,6 +195,13 @@ def run_spectral_deconvolution(
     noise_levels = whole_run_noise_levels(data, deconv_params.noise_percentile)
     rt_min = float(xlabels[0])
     rt_max = float(xlabels[-1])
+
+    # A run replaces earlier results: clear them up front so a peak that loses its
+    # match (new settings, new MS offset, cancelled run) falls back to its apex
+    # spectrum instead of keeping a spectrum from the previous settings.
+    for peak in peaks:
+        peak.deconvolved_spectrum = None
+        peak.deconvolution_component_count = None
 
     windows = _group_peaks_into_windows(peaks, grouping_params, rt_min, rt_max)
     total = max(len(windows), 1)

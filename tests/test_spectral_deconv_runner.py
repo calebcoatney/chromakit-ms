@@ -256,3 +256,63 @@ def test_split_at_largest_gap():
     assert len(windows) == 2
     assert len(windows[0][2]) == 3
     assert len(windows[1][2]) == 2
+
+
+def _two_run_peak_and_ms():
+    mz_axis = [43.0, 57.0, 71.0, 85.0]
+    ms = _synthetic_ms([(0.80, {43: 8000, 57: 20000, 71: 6000, 85: 5000})], mz_axis)
+    peak = _make_chromatographic_peak(0.80, 0.76, 0.84)
+    data_dir = MagicMock()
+    data_dir.get_file.return_value = ms
+    return peak, data_dir
+
+
+def test_rerun_without_a_match_clears_the_previous_spectrum():
+    """A rerun replaces results: a peak that loses its match must not keep the old spectrum."""
+    peak, data_dir = _two_run_peak_and_ms()
+    grouping = WindowGroupingParams(gap_tolerance=0.1)
+    with patch('logic.spectral_deconv_runner.rb.read', return_value=data_dir):
+        run_spectral_deconvolution([peak], '/fake.D',
+                                   deconv_params=CorrelationDeconvParams(search_range=0.03),
+                                   grouping_params=grouping)
+        assert peak.deconvolved_spectrum is not None
+        assert peak.deconvolution_component_count == 1
+
+        # Second run: min_ions above the ion count of the planted compound -> no component.
+        run_spectral_deconvolution([peak], '/fake.D',
+                                   deconv_params=CorrelationDeconvParams(search_range=0.03,
+                                                                         min_ions=10),
+                                   grouping_params=grouping)
+    assert peak.deconvolved_spectrum is None
+    assert peak.deconvolution_component_count == 0
+
+
+def test_rerun_with_shifted_ms_offset_clears_the_previous_spectrum():
+    """The inspector's offset 'Apply' reruns: a component pushed out of reach must not linger."""
+    peak, data_dir = _two_run_peak_and_ms()
+    grouping = WindowGroupingParams(gap_tolerance=0.1, rt_match_tolerance=0.02)
+    params = CorrelationDeconvParams(search_range=0.03)
+    with patch('logic.spectral_deconv_runner.rb.read', return_value=data_dir):
+        run_spectral_deconvolution([peak], '/fake.D', deconv_params=params,
+                                   grouping_params=grouping)
+        assert peak.deconvolved_spectrum is not None
+
+        run_spectral_deconvolution([peak], '/fake.D', deconv_params=params,
+                                   grouping_params=grouping, ms_time_offset=0.05)
+    assert peak.deconvolved_spectrum is None
+    assert peak.deconvolution_component_count == 1      # a component exists, none within reach
+
+
+def test_cancelled_rerun_leaves_unprocessed_peaks_on_the_apex_fallback():
+    """Results are reset up front, so a run cancelled before a window leaves None, not stale data."""
+    peak, data_dir = _two_run_peak_and_ms()
+    grouping = WindowGroupingParams(gap_tolerance=0.1)
+    params = CorrelationDeconvParams(search_range=0.03)
+    with patch('logic.spectral_deconv_runner.rb.read', return_value=data_dir):
+        run_spectral_deconvolution([peak], '/fake.D', deconv_params=params,
+                                   grouping_params=grouping)
+        assert peak.deconvolved_spectrum is not None
+        run_spectral_deconvolution([peak], '/fake.D', deconv_params=params,
+                                   grouping_params=grouping, should_cancel=lambda: True)
+    assert peak.deconvolved_spectrum is None
+    assert peak.deconvolution_component_count is None
