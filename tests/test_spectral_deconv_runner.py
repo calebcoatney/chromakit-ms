@@ -316,3 +316,33 @@ def test_cancelled_rerun_leaves_unprocessed_peaks_on_the_apex_fallback():
                                    grouping_params=grouping, should_cancel=lambda: True)
     assert peak.deconvolved_spectrum is None
     assert peak.deconvolution_component_count is None
+
+
+def test_runner_passes_whole_run_noise_to_every_window():
+    """Noise levels come from the whole run, never from the window slice (spec 3, step 2)."""
+    from logic.correlation_grouping import deconvolve_window as real_deconvolve_window
+    from logic.ion_peak_resolver import whole_run_noise_levels
+    mz_axis = [29.0, 43.0, 57.0, 71.0, 85.0, 99.0]
+    ms = _synthetic_ms([(0.8, {43: 8000, 57: 20000, 71: 6000, 85: 5000}),
+                        (1.4, {29: 7000, 43: 9000, 57: 15000, 99: 6000})], mz_axis)
+    p1 = _make_chromatographic_peak(0.8, 0.76, 0.84)
+    p2 = _make_chromatographic_peak(1.4, 1.36, 1.44)
+    data_dir = MagicMock()
+    data_dir.get_file.return_value = ms
+    params = CorrelationDeconvParams(search_range=0.03, noise_percentile=0.7)
+
+    with patch('logic.spectral_deconv_runner.rb.read', return_value=data_dir), \
+         patch('logic.spectral_deconv_runner.deconvolve_window',
+               wraps=real_deconvolve_window) as spy:
+        run_spectral_deconvolution([p1, p2], '/fake.D', deconv_params=params,
+                                   grouping_params=WindowGroupingParams(gap_tolerance=0.1))
+
+    assert spy.call_count == 2
+    full = np.asarray(ms.data, dtype=float)
+    expected = whole_run_noise_levels(full, params.noise_percentile)
+    for call in spy.call_args_list:
+        rt_window, ms_slice, _mz_axis, noise_levels, _params = call.args
+        np.testing.assert_array_equal(noise_levels, expected)
+        assert ms_slice.shape[0] < full.shape[0]            # it really was a window slice...
+        # ...whose own noise would have differed, so this test can tell the two apart
+        assert not np.allclose(whole_run_noise_levels(ms_slice, params.noise_percentile), expected)

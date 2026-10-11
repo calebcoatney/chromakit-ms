@@ -185,3 +185,15 @@ def test_deconvolve_window_empty_when_nothing_above_height():
     params = CorrelationDeconvParams()
     noise = whole_run_noise_levels(data, params.noise_percentile)
     assert deconvolve_window(X, data, mz_axis, noise, params) == []
+
+
+def test_component_rt_comes_from_the_lead_ion_not_the_representative():
+    """Excluded representative (highest, apex 1.000) vs lead (apex 1.005): rt follows the lead."""
+    peaks = [ion(73, 1.00, 10000), ion(57, 1.005, 8000), ion(43, 1.005, 5000), ion(85, 1.005, 2000)]
+    groups, _ = group_ion_peaks(peaks, CorrelationDeconvParams(excluded_mz=[73.0]))
+    g = groups[0]
+    assert g.members[0].mz == 73.0 and g.lead.mz == 57.0
+    assert g.members[0].rt_apex != g.lead.rt_apex
+    comp = build_components(groups)[0]
+    assert comp.rt == pytest.approx(1.005)
+    assert comp.rt == g.lead.rt_apex and comp.rt != g.members[0].rt_apex

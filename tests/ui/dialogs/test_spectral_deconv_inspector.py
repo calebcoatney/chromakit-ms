@@ -124,3 +124,27 @@ def test_bad_excluded_mz_never_reaches_the_app(dialog, qtbot):
     with qtbot.assertNotEmitted(dialog.apply_offset_to_folder_requested):
         dialog._on_offset_apply_folder_clicked()
     assert dialog._status_label.text().startswith("Invalid excluded m/z:")
+
+
+def test_noise_levels_are_whole_run_and_cached(dialog):
+    """The preview uses the same whole-run noise as the runner (spec 3, step 2)."""
+    from logic.ion_peak_resolver import whole_run_noise_levels
+    for q in (0.85, 0.5):
+        got = dialog._noise_levels(q)
+        np.testing.assert_array_equal(got, whole_run_noise_levels(dialog._ms_data, q))
+    assert dialog._noise_levels(0.5) is dialog._noise_levels(0.5)      # cached per percentile
+
+
+def test_preview_components_match_the_runner(dialog):
+    """Preview and production give the same spectrum for the same window and settings."""
+    from logic.spectral_deconv_runner import run_spectral_deconvolution
+    dp, gp = dialog._read_params_or_report()
+    twin = _peak(1.0, 0.96, 1.04)
+    run_spectral_deconvolution([twin], "/fake.D", deconv_params=dp, grouping_params=gp)
+
+    preview = dialog._last_result['components']
+    assert len(preview) == 1 and twin.deconvolved_spectrum is not None
+    spec = preview[0].spectrum
+    np.testing.assert_array_equal(twin.deconvolved_spectrum['mz'], sorted(spec))
+    np.testing.assert_allclose(twin.deconvolved_spectrum['intensities'],
+                               [spec[m] for m in sorted(spec)])
