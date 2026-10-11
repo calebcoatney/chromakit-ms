@@ -1,12 +1,14 @@
 """Spectral deconvolution chunk inspector dialog.
 
-Shows DBSCAN RT clustering and EIC traces for each peak window,
-with parameter controls for interactive tuning.
+Shows each peak window's ion peaks, their correlation groups and the rejected
+ion peaks, plus the ion traces behind them, with parameter controls for
+interactive tuning. Previews run the same ``deconvolve_window`` as the runner.
 """
 from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal, QObject, QRunnable, Slot, QThreadPool
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QVBoxLayout, QSplitter, QWidget,
     QGroupBox, QFormLayout, QLabel, QDoubleSpinBox, QSpinBox,
@@ -18,9 +20,10 @@ from matplotlib.figure import Figure
 
 from scipy.spatial import cKDTree
 
-from logic.spectral_deconvolution import DeconvolutionParams, deconvolve
+from logic.correlation_grouping import CorrelationDeconvParams, deconvolve_window
+from logic.ion_peak_resolver import whole_run_noise_levels
+from logic.spectral_deconv_settings import save_spectral_deconv_settings, parse_mz_list
 from logic.spectral_deconv_runner import WindowGroupingParams, _group_peaks_into_windows
-from logic.eic_extractor import extract_eic_peaks
 from logic.ms_time import shifted_xlabels
 
 
@@ -30,15 +33,17 @@ class _PreviewWorkerSignals(QObject):
 
 
 class _PreviewWorker(QRunnable):
-    """Background worker: extract EICs + run deconvolve() for one window."""
+    """Background worker: run deconvolve_window() for one window."""
 
-    def __init__(self, ms, w_start: float, w_end: float,
-                 win_peaks: list, deconv_params: DeconvolutionParams,
-                 top_n: int, ms_time_offset: float = 0.0):
+    def __init__(self, xlabels, ms_data, mz_axis, noise_levels, w_start: float, w_end: float,
+                 win_peaks: list, deconv_params: CorrelationDeconvParams, top_n: int,
+                 ms_time_offset: float = 0.0):
         super().__init__()
-        self._ms = ms
-        self._w_start = w_start
-        self._w_end = w_end
+        self._xlabels = xlabels          # already shifted by ms_time_offset
+        self._ms_data = ms_data
+        self._mz_axis = mz_axis
+        self._noise_levels = noise_levels
+        self._w_start, self._w_end = w_start, w_end
         self._win_peaks = win_peaks
         self._deconv_params = deconv_params
         self._top_n = top_n
@@ -48,59 +53,35 @@ class _PreviewWorker(QRunnable):
     @Slot()
     def run(self):
         try:
-            eic_peaks = extract_eic_peaks(
-                self._ms,
-                t_start=self._w_start,
-                t_end=self._w_end,
-                min_intensity=self._deconv_params.min_cluster_intensity,
-                min_prominence=self._deconv_params.min_eic_prominence,
-                ms_time_offset=self._ms_time_offset,
-            )
-
-            if not eic_peaks:
-                self.signals.finished.emit({
-                    'eic_peaks': [],
-                    'components': [],
-                    'intermediates': {'rt_clusters': [], 'noise_peaks': [], 'model_peaks': []},
-                    'win_peaks': self._win_peaks,
-                    'top_n': self._top_n,
-                    'w_start': self._w_start,
-                    'w_end': self._w_end,
-                    'ms_time_offset': self._ms_time_offset,
-                    'empty': True,
-                })
+            mask = (self._xlabels >= self._w_start) & (self._xlabels <= self._w_end)
+            rt_window = self._xlabels[mask]
+            ms_slice = self._ms_data[mask, :]
+            base = {'win_peaks': self._win_peaks, 'top_n': self._top_n, 'w_start': self._w_start,
+                    'w_end': self._w_end, 'ms_time_offset': self._ms_time_offset,
+                    'rt_window': rt_window}
+            if rt_window.size == 0:
+                self.signals.finished.emit({**base, 'ion_peaks': [], 'groups': [], 'rejected': [],
+                                            'components': [], 'top_ions': [], 'traces': {},
+                                            'empty': True})
                 return
-
-            # Sort by descending max intensity; keep top_n for EIC plot
-            eic_sorted = sorted(eic_peaks, key=lambda p: -p.intensity_array.max())
-            top_eic = eic_sorted[:self._top_n]
-
-            # Run deconvolution on all EIC peaks (not just top N) for accuracy
-            components, intermediates = deconvolve(
-                eic_peaks, self._deconv_params, return_intermediates=True
-            )
-
-            self.signals.finished.emit({
-                'eic_peaks': eic_peaks,
-                'top_eic': top_eic,
-                'components': components,
-                'intermediates': intermediates,
-                'win_peaks': self._win_peaks,
-                'top_n': self._top_n,
-                'w_start': self._w_start,
-                'w_end': self._w_end,
-                'ms_time_offset': self._ms_time_offset,
-                'empty': False,
-            })
+            components, inter = deconvolve_window(
+                rt_window, ms_slice, self._mz_axis, self._noise_levels, self._deconv_params,
+                return_intermediates=True)
+            col = {float(m): j for j, m in enumerate(self._mz_axis)}
+            top_ions = sorted(inter['ion_peaks'], key=lambda p: -p.height)[:self._top_n]
+            traces = {id(p): ms_slice[:, col[float(p.mz)]] for p in top_ions}
+            self.signals.finished.emit({**base, **inter, 'components': components,
+                                        'top_ions': top_ions, 'traces': traces,
+                                        'empty': not inter['ion_peaks']})
         except Exception:
             import traceback
             self.signals.error.emit(traceback.format_exc())
 
 
 class SpectralDeconvInspectorDialog(QDialog):
-    """Non-modal dialog for inspecting ADAP-GC deconvolution per window."""
+    """Non-modal dialog for inspecting spectral deconvolution per window."""
 
-    rerun_requested = Signal(object, object)  # (DeconvolutionParams, WindowGroupingParams)
+    rerun_requested = Signal(object, object)  # (CorrelationDeconvParams, WindowGroupingParams)
     cluster_search_requested = Signal(object, float)  # (spectrum_dict: dict, rt: float)
     apply_offset_requested = Signal(float, str)  # (offset_min, source)
     apply_offset_to_folder_requested = Signal(float, str)  # (offset_min, source)
@@ -109,7 +90,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         self,
         peaks: list,
         ms_data_path: str,
-        deconv_params: DeconvolutionParams,
+        deconv_params: CorrelationDeconvParams,
         grouping_params: WindowGroupingParams,
         initial_peak_index: int = 0,
         initial_offset_min: float = 0.0,
@@ -127,6 +108,9 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._peaks = peaks           # live reference — not a copy
         self._ms_data_path = ms_data_path
         self._ms = None               # opened once on first use
+        self._ms_data = None          # cached [scans x m/z] array of self._ms
+        self._mz_axis = None          # cached m/z of each column
+        self._noise_cache: dict = {}  # noise percentile -> whole-run noise levels
         self._windows: list = []      # [(w_start, w_end, [peaks_in_window]), ...]
         self._current_window_idx: int = 0
         self._preview_worker = None
@@ -254,72 +238,101 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         layout.addWidget(wg_group)
 
-        # ADAP-GC Parameters group
-        adap_group = QGroupBox("ADAP-GC Parameters")
-        adap_form = QFormLayout(adap_group)
+        # --- Ion Peak Detection (local minimum resolver, after mzmine) ---
+        peak_group = QGroupBox("Ion Peak Detection")
+        peak_form = QFormLayout(peak_group)
 
-        self._min_dist_spin = QDoubleSpinBox()
-        self._min_dist_spin.setRange(0.0001, 1.0)
-        self._min_dist_spin.setDecimals(4)
-        self._min_dist_spin.setSingleStep(0.001)
-        self._min_dist_spin.setToolTip("DBSCAN eps — max RT gap within a cluster (min)")
-        adap_form.addRow("Min cluster distance (min):", self._min_dist_spin)
+        self._noise_percentile_spin = QDoubleSpinBox()
+        self._noise_percentile_spin.setRange(0.0, 1.0)
+        self._noise_percentile_spin.setDecimals(3)
+        self._noise_percentile_spin.setSingleStep(0.05)
+        self._noise_percentile_spin.setToolTip(
+            "Ignore each ion's weakest points: the cut is this percentile of that ion's\n"
+            "intensities over the whole run.")
+        peak_form.addRow("Noise percentile:", self._noise_percentile_spin)
 
-        self._min_size_spin = QSpinBox()
-        self._min_size_spin.setRange(1, 50)
-        self._min_size_spin.setToolTip("DBSCAN min_samples — minimum EIC peaks per cluster")
-        adap_form.addRow("Min cluster size:", self._min_size_spin)
+        self._search_range_spin = QDoubleSpinBox()
+        self._search_range_spin.setRange(0.001, 1.0)
+        self._search_range_spin.setDecimals(3)
+        self._search_range_spin.setSingleStep(0.005)
+        self._search_range_spin.setToolTip(
+            "A dip that is the lowest point within ± this range (min) splits two peaks.\n"
+            "Set near one peak width.")
+        peak_form.addRow("Search range (min):", self._search_range_spin)
 
-        self._min_intensity_spin = QDoubleSpinBox()
-        self._min_intensity_spin.setRange(0.0, 1e8)
-        self._min_intensity_spin.setDecimals(0)
-        self._min_intensity_spin.setSingleStep(100.0)
-        self._min_intensity_spin.setToolTip("Drop clusters below this max intensity (counts)")
-        adap_form.addRow("Min cluster intensity:", self._min_intensity_spin)
+        self._min_peak_height_spin = QDoubleSpinBox()
+        self._min_peak_height_spin.setRange(0.0, 1e9)
+        self._min_peak_height_spin.setDecimals(0)
+        self._min_peak_height_spin.setSingleStep(100.0)
+        self._min_peak_height_spin.setToolTip("Ignore ion peaks below this height (counts).")
+        peak_form.addRow("Min peak height (counts):", self._min_peak_height_spin)
 
-        self._prominence_spin = QDoubleSpinBox()
-        self._prominence_spin.setRange(0.0, 1e8)
-        self._prominence_spin.setDecimals(0)
-        self._prominence_spin.setSingleStep(500.0)
-        self._prominence_spin.setSpecialValueText("Off")
-        self._prominence_spin.setToolTip(
-            "Min prominence (counts) for EIC peak detection.\n"
-            "Rejects noise bumps that don't rise meaningfully above\n"
-            "their local baseline. 0 = disabled. Recommended: 1000-5000."
-        )
-        adap_form.addRow("Min EIC prominence:", self._prominence_spin)
+        self._min_top_edge_ratio_spin = QDoubleSpinBox()
+        self._min_top_edge_ratio_spin.setRange(1.0, 100.0)
+        self._min_top_edge_ratio_spin.setDecimals(2)
+        self._min_top_edge_ratio_spin.setSingleStep(0.1)
+        self._min_top_edge_ratio_spin.setToolTip("A peak's top must exceed each edge by this factor.")
+        peak_form.addRow("Min peak top/edge ratio:", self._min_top_edge_ratio_spin)
 
-        self._shape_sim_spin = QDoubleSpinBox()
-        self._shape_sim_spin.setRange(0.0, 90.0)
-        self._shape_sim_spin.setDecimals(1)
-        self._shape_sim_spin.setToolTip("Max angle (°) between EIC shapes in the same cluster")
-        adap_form.addRow("Shape similarity (°):", self._shape_sim_spin)
+        self._min_points_spin = QSpinBox()
+        self._min_points_spin.setRange(1, 100)
+        self._min_points_spin.setToolTip("Ignore ion peaks with fewer points (spikes).")
+        peak_form.addRow("Min points per peak:", self._min_points_spin)
+        layout.addWidget(peak_group)
 
-        self._model_peak_combo = QComboBox()
-        self._model_peak_combo.addItems(["sharpness", "intensity", "mz"])
-        self._model_peak_combo.setToolTip("Criterion for selecting the representative EIC peak")
-        adap_form.addRow("Model peak choice:", self._model_peak_combo)
+        # --- Grouping (RT grouping + shape correlation, after mzmine) ---
+        group_box = QGroupBox("Grouping")
+        group_form = QFormLayout(group_box)
+
+        self._rt_tolerance_spin = QDoubleSpinBox()
+        self._rt_tolerance_spin.setRange(0.001, 1.0)
+        self._rt_tolerance_spin.setDecimals(3)
+        self._rt_tolerance_spin.setSingleStep(0.005)
+        self._rt_tolerance_spin.setToolTip(
+            "How far (min) an ion's apex may sit from its group's representative ion.")
+        group_form.addRow("RT tolerance (min):", self._rt_tolerance_spin)
+
+        self._min_r_spin = QDoubleSpinBox()
+        self._min_r_spin.setRange(0.0, 1.0)
+        self._min_r_spin.setDecimals(2)
+        self._min_r_spin.setSingleStep(0.05)
+        self._min_r_spin.setToolTip(
+            "Pearson correlation an ion's peak shape needs with the representative ion to join.")
+        group_form.addRow("Min shape correlation (r):", self._min_r_spin)
+
+        self._min_ions_spin = QSpinBox()
+        self._min_ions_spin.setRange(1, 100)
+        self._min_ions_spin.setToolTip("Drop groups with fewer ions.")
+        group_form.addRow("Min ions per spectrum:", self._min_ions_spin)
 
         self._excluded_mz_edit = QLineEdit()
         self._excluded_mz_edit.setPlaceholderText("e.g. 73, 147, 221")
-        self._excluded_mz_edit.setToolTip("Comma-separated m/z values to exclude (e.g. TMS artifacts)")
-        adap_form.addRow("Excluded m/z:", self._excluded_mz_edit)
-        layout.addWidget(adap_group)
+        self._excluded_mz_edit.setToolTip(
+            "Comma-separated m/z values (±0.5) that can't be a group's lead ion.")
+        group_form.addRow("Excluded m/z:", self._excluded_mz_edit)
+        layout.addWidget(group_box)
 
         # Top N traces + display options
         top_n_layout = QFormLayout()
         self._top_n_spin = QSpinBox()
         self._top_n_spin.setRange(1, 200)
         self._top_n_spin.setValue(20)
-        top_n_layout.addRow("Top N EIC traces:", self._top_n_spin)
+        top_n_layout.addRow("Top N ion traces:", self._top_n_spin)
         layout.addLayout(top_n_layout)
 
-        self._normalize_eic_check = QCheckBox("Normalize EIC traces")
+        self._normalize_eic_check = QCheckBox("Normalize traces")
         self._normalize_eic_check.setToolTip(
-            "Scale each EIC trace to its own maximum\n"
+            "Scale each ion trace to its own maximum\n"
             "so shapes can be compared regardless of intensity"
         )
         layout.addWidget(self._normalize_eic_check)
+
+        self._show_rejected_check = QCheckBox("Show rejected traces")
+        self._show_rejected_check.setToolTip(
+            "Also draw the traces of rejected ion peaks (dashed gray) in the lower plot"
+        )
+        self._show_rejected_check.toggled.connect(self._on_show_rejected_toggled)
+        layout.addWidget(self._show_rejected_check)
 
         layout.addStretch()
 
@@ -375,7 +388,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         layout.addWidget(self._status_label)
 
         # Inline search results panel
-        self._results_label = QLabel("Click a cluster to search")
+        self._results_label = QLabel("Click a group to search")
         self._results_label.setStyleSheet("font-weight: bold; margin-top: 4px;")
         layout.addWidget(self._results_label)
 
@@ -392,49 +405,57 @@ class SpectralDeconvInspectorDialog(QDialog):
 
     # ── Params load/save ───────────────────────────────────────────────────────
 
-    def _load_params(self, dp: DeconvolutionParams, gp: WindowGroupingParams):
+    def _load_params(self, dp: CorrelationDeconvParams, gp: WindowGroupingParams):
         self._gap_spin.setValue(gp.gap_tolerance or 0.0)
         self._padding_spin.setValue(gp.padding_fraction)
         self._rt_match_spin.setValue(gp.rt_match_tolerance)
         self._max_window_peaks_spin.setValue(gp.max_window_peaks)
 
-        self._min_dist_spin.setValue(dp.min_cluster_distance)
-        self._min_size_spin.setValue(dp.min_cluster_size)
-        self._min_intensity_spin.setValue(dp.min_cluster_intensity)
-        self._prominence_spin.setValue(dp.min_eic_prominence)
-        self._shape_sim_spin.setValue(dp.shape_sim_threshold)
-        idx = self._model_peak_combo.findText(dp.model_peak_choice)
-        if idx >= 0:
-            self._model_peak_combo.setCurrentIndex(idx)
-        self._excluded_mz_edit.setText(
-            ", ".join(str(m) for m in dp.excluded_mz)
-        )
+        self._noise_percentile_spin.setValue(dp.noise_percentile)
+        self._search_range_spin.setValue(dp.search_range)
+        self._min_peak_height_spin.setValue(dp.min_peak_height)
+        self._min_top_edge_ratio_spin.setValue(dp.min_top_edge_ratio)
+        self._min_points_spin.setValue(dp.min_points)
+        self._rt_tolerance_spin.setValue(dp.rt_tolerance)
+        self._min_r_spin.setValue(dp.min_r)
+        self._min_ions_spin.setValue(dp.min_ions)
+        self._excluded_mz_edit.setText(", ".join(f"{m:g}" for m in dp.excluded_mz))
 
-    def _read_params(self) -> tuple[DeconvolutionParams, WindowGroupingParams]:
+    def _read_grouping_params(self) -> WindowGroupingParams:
         raw_gap = self._gap_spin.value()
-        gp = WindowGroupingParams(
+        return WindowGroupingParams(
             gap_tolerance=None if raw_gap == 0.0 else raw_gap,
             padding_fraction=self._padding_spin.value(),
             rt_match_tolerance=self._rt_match_spin.value(),
             max_window_peaks=self._max_window_peaks_spin.value(),
         )
-        excluded = [
-            float(x.strip())
-            for x in self._excluded_mz_edit.text().split(",")
-            if x.strip()
-        ]
-        dp = DeconvolutionParams(
-            min_cluster_distance=self._min_dist_spin.value(),
-            min_cluster_size=self._min_size_spin.value(),
-            min_cluster_intensity=self._min_intensity_spin.value(),
-            min_eic_prominence=self._prominence_spin.value(),
-            shape_sim_threshold=self._shape_sim_spin.value(),
-            model_peak_choice=self._model_peak_combo.currentText(),
+
+    def _read_params(self) -> tuple[CorrelationDeconvParams, WindowGroupingParams]:
+        """Widget values as (CorrelationDeconvParams, WindowGroupingParams); ValueError on bad m/z."""
+        excluded = parse_mz_list(self._excluded_mz_edit.text(), strict=True)
+        gp = self._read_grouping_params()
+        dp = CorrelationDeconvParams(
+            noise_percentile=self._noise_percentile_spin.value(),
+            search_range=self._search_range_spin.value(),
+            min_peak_height=self._min_peak_height_spin.value(),
+            min_top_edge_ratio=self._min_top_edge_ratio_spin.value(),
+            min_points=self._min_points_spin.value(),
+            rt_tolerance=self._rt_tolerance_spin.value(),
+            min_r=self._min_r_spin.value(),
+            min_ions=self._min_ions_spin.value(),
             excluded_mz=excluded,
         )
         return dp, gp
 
-    def read_current_params(self) -> tuple[DeconvolutionParams, WindowGroupingParams]:
+    def _read_params_or_report(self):
+        """``_read_params()``, or None with the error in the status line (bad excluded m/z)."""
+        try:
+            return self._read_params()
+        except ValueError as e:
+            self._status_label.setText(f"Invalid excluded m/z: {e}")
+            return None
+
+    def read_current_params(self) -> tuple[CorrelationDeconvParams, WindowGroupingParams]:
         """Return current deconvolution/grouping params for external rerun requests."""
         return self._read_params()
 
@@ -486,9 +507,14 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._render_plots(self._last_render_payload)
 
     def _on_offset_apply_clicked(self) -> None:
+        # The app reruns with read_current_params(); refuse here on a bad excluded m/z.
+        if self._read_params_or_report() is None:
+            return
         self.apply_offset_requested.emit(self._current_preview_offset_min, self._offset_source)
 
     def _on_offset_apply_folder_clicked(self) -> None:
+        if self._read_params_or_report() is None:
+            return
         self.apply_offset_to_folder_requested.emit(
             self._current_preview_offset_min, self._offset_source
         )
@@ -501,8 +527,11 @@ class SpectralDeconvInspectorDialog(QDialog):
         if self._ms is None:
             data_dir = rb.read(self._ms_data_path)
             self._ms = data_dir.get_file('data.ms')
+            self._ms_data = np.asarray(self._ms.data, dtype=float)
+            self._mz_axis = np.asarray(self._ms.ylabels, dtype=float)
+            self._noise_cache = {}
 
-        _, gp = self._read_params()
+        gp = self._read_grouping_params()   # no excluded-m/z parse: windows never need it
         _xlabels = shifted_xlabels(self._ms, self._current_preview_offset_min)
         rt_min = float(_xlabels[0])
         rt_max = float(_xlabels[-1])
@@ -519,6 +548,12 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._window_combo.blockSignals(False)
         self._prev_btn.setEnabled(self._current_window_idx > 0)
         self._next_btn.setEnabled(self._current_window_idx < n - 1)
+
+    def _noise_levels(self, q: float):
+        key = round(float(q), 6)
+        if key not in self._noise_cache:
+            self._noise_cache[key] = whole_run_noise_levels(self._ms_data, q)
+        return self._noise_cache[key]
 
     def _populate_combo(self):
         self._window_combo.blockSignals(True)
@@ -570,10 +605,11 @@ class SpectralDeconvInspectorDialog(QDialog):
                   self._next_btn, self._window_combo,
                   self._gap_spin, self._padding_spin, self._rt_match_spin,
                   self._max_window_peaks_spin,
-                  self._min_dist_spin, self._min_size_spin, self._min_intensity_spin, self._prominence_spin,
-                  self._shape_sim_spin, self._model_peak_combo,
-                  self._excluded_mz_edit, self._top_n_spin,
-            self._normalize_eic_check):
+                  self._noise_percentile_spin, self._search_range_spin,
+                  self._min_peak_height_spin, self._min_top_edge_ratio_spin,
+                  self._min_points_spin, self._rt_tolerance_spin, self._min_r_spin,
+                  self._min_ions_spin, self._excluded_mz_edit, self._top_n_spin,
+                  self._normalize_eic_check, self._show_rejected_check):
             w.setEnabled(enabled)
         for w in (self._offset_slider, self._offset_auto_btn, self._offset_reset_btn,
                   self._offset_apply_btn, self._offset_apply_folder_btn):
@@ -594,27 +630,25 @@ class SpectralDeconvInspectorDialog(QDialog):
     # ── Preview / Apply ────────────────────────────────────────────────────────
 
     def _on_preview_clicked(self):
+        if self._read_params_or_report() is None:
+            return
         self._rebuild_windows()   # re-group in case grouping params changed
         self._run_preview()
 
     def _on_apply_clicked(self):
-        dp, gp = self._read_params()
-        from PySide6.QtCore import QSettings
-        s = QSettings("CalebCoatney", "ChromaKit")
-        s.setValue("ms_spectral_deconv/min_cluster_distance", dp.min_cluster_distance)
-        s.setValue("ms_spectral_deconv/min_cluster_size", dp.min_cluster_size)
-        s.setValue("ms_spectral_deconv/min_cluster_intensity", dp.min_cluster_intensity)
-        s.setValue("ms_spectral_deconv/min_eic_prominence", dp.min_eic_prominence)
-        s.setValue("ms_spectral_deconv/shape_sim_threshold", dp.shape_sim_threshold)
-        s.setValue("ms_spectral_deconv/model_peak_choice", dp.model_peak_choice)
-        s.setValue("ms_spectral_deconv/excluded_mz",
-                   ", ".join(str(m) for m in dp.excluded_mz))
-        s.setValue("ms_spectral_deconv/gap_tolerance", self._gap_spin.value())
-        s.setValue("ms_spectral_deconv/padding_fraction", gp.padding_fraction)
-        s.setValue("ms_spectral_deconv/rt_match_tolerance", gp.rt_match_tolerance)
-        s.setValue("ms_spectral_deconv/max_window_peaks", gp.max_window_peaks)
-        
+        params = self._read_params_or_report()
+        if params is None:
+            return
+        dp, gp = params
+        save_spectral_deconv_settings(QSettings("CalebCoatney", "ChromaKit"), dp, gp)
         self.rerun_requested.emit(dp, gp)
+
+    def _on_show_rejected_toggled(self, _checked: bool):
+        if self._last_render_payload is None:
+            return
+        self._render_plots(self._last_render_payload)
+        if self._selected_cluster_idx is not None:
+            self._highlight_cluster(self._selected_cluster_idx)
 
     def _run_preview(self):
         """Launch background worker for the current window."""
@@ -625,15 +659,22 @@ class SpectralDeconvInspectorDialog(QDialog):
         if self._ms is None:
             self._status_label.setText("Error: MS data file could not be opened.")
             return
+        params = self._read_params_or_report()
+        if params is None:
+            return
+        dp, _ = params
 
         self.set_controls_enabled(False)
         self._status_label.setText("Running deconvolution…")
 
         w_start, w_end, win_peaks = self._windows[self._current_window_idx]
-        dp, _ = self._read_params()
 
         self._preview_worker = _PreviewWorker(
-            ms=self._ms,
+            xlabels=np.asarray(shifted_xlabels(self._ms, self._current_preview_offset_min),
+                               dtype=float),
+            ms_data=self._ms_data,
+            mz_axis=self._mz_axis,
+            noise_levels=self._noise_levels(dp.noise_percentile),
             w_start=w_start,
             w_end=w_end,
             win_peaks=win_peaks,
@@ -651,7 +692,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._last_render_payload = result
         self._selected_cluster_idx = None
         self._results_tree.clear()
-        self._results_label.setText("Click a cluster to search")
+        self._results_label.setText("Click a group to search")
         self.set_controls_enabled(True)
         self._render_plots(result)
 
@@ -662,8 +703,18 @@ class SpectralDeconvInspectorDialog(QDialog):
 
     # ── Click-to-search ────────────────────────────────────────────────────────
 
+    def _spectrum_for_group(self, group_idx: int):
+        """(spectrum, RT at the current preview offset) of group ``group_idx``, or None."""
+        if self._last_result is None:
+            return None
+        comps = self._last_result.get('components', [])
+        if not (0 <= group_idx < len(comps)) or not comps[group_idx].spectrum:
+            return None
+        offset = self._current_preview_offset_min - float(self._last_result.get('ms_time_offset', 0.0))
+        return comps[group_idx].spectrum, comps[group_idx].rt + offset
+
     def _on_scatter_click(self, event):
-        """Handle click on the scatter plot to select a cluster for search."""
+        """Handle click on the scatter plot to select a group for search."""
         if event.inaxes is not self._ax_scatter:
             return
         if self._preview_worker is not None:
@@ -686,8 +737,9 @@ class SpectralDeconvInspectorDialog(QDialog):
         cluster_id = self._scatter_cluster_ids[idx]
 
         if cluster_id == -1:
-            self._status_label.setText("Noise point — not assigned to any component")
+            # Clear first: clearing re-renders, which rewrites the status line.
             self._clear_cluster_selection()
+            self._status_label.setText("Rejected ion peak — not in any spectrum")
             return
 
         if cluster_id == self._selected_cluster_idx:
@@ -697,128 +749,27 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._selected_cluster_idx = cluster_id
         self._highlight_cluster(cluster_id)
 
-        # Find the component for this cluster by RT proximity.
-        # Every cluster produces a component (either via NNLS or the fallback
-        # interpolation path in deconvolve()), and every cluster now has its
-        # model peak in intermediates['model_peaks'].
-        components = self._last_result.get('components', [])
-        rt_clusters = self._last_result['intermediates']['rt_clusters']
-
-        cluster_peaks = rt_clusters[cluster_id]
-        offset = self._current_preview_offset_min - float(self._last_result.get('ms_time_offset', 0.0))
-        cluster_median_rt = float(np.median([p.rt_apex + offset for p in cluster_peaks]))
-
-        # Match to the component with the closest RT
-        target_component = None
-        best_dist = float('inf')
-        for comp in components:
-            d = abs((comp.rt + offset) - cluster_median_rt)
-            if d < best_dist:
-                best_dist = d
-                target_component = comp
-
-        if target_component is None or not target_component.spectrum:
-            self._status_label.setText(
-                f"Cluster {cluster_id}: no spectrum available"
-            )
+        found = self._spectrum_for_group(cluster_id)
+        if found is None:
+            self._status_label.setText(f"Group {cluster_id}: no spectrum available")
             return
-
-        n_ions = len(target_component.spectrum)
+        spec, rt = found
         self._status_label.setText(
-            f"Cluster {cluster_id} selected — RT {target_component.rt + offset:.3f} min, "
-            f"{n_ions} m/z ions — searching…"
+            f"Group {cluster_id} selected — RT {rt:.3f} min, {len(spec)} ions — searching…"
         )
-        self.cluster_search_requested.emit(target_component.spectrum, target_component.rt + offset)
+        self.cluster_search_requested.emit(spec, rt)
 
     def _highlight_cluster(self, cluster_idx: int):
-        """Re-render scatter with the selected cluster highlighted."""
+        """Re-render the top plot with the selected group highlighted, the others dimmed."""
         if self._last_result is None:
             return
-
-        intermediates = self._last_result['intermediates']
-        rt_clusters = intermediates['rt_clusters']
-        noise_peaks = intermediates['noise_peaks']
-        model_peaks = intermediates['model_peaks']
-        model_peak_ids = {id(mp) for mp in model_peaks}
-        win_peaks = self._last_result['win_peaks']
-        fid_rts = [p.retention_time for p in win_peaks]
         offset = self._current_preview_offset_min - float(self._last_result.get('ms_time_offset', 0.0))
-
-        import matplotlib.pyplot as plt
-        cmap = plt.get_cmap('tab10')
-
         self._ax_scatter.clear()
-
-        # FID span shading
-        if fid_rts:
-            fid_min, fid_max = min(fid_rts), max(fid_rts)
-            half_gap = (self._last_result['w_end'] - self._last_result['w_start']) * 0.05
-            self._ax_scatter.axvspan(
-                fid_min - half_gap, fid_max + half_gap,
-                alpha=0.08, color='steelblue', zorder=1,
-            )
-
-        # Noise points — always dimmed
-        if noise_peaks:
-            self._ax_scatter.scatter(
-                [p.rt_apex + offset for p in noise_peaks],
-                [p.mz for p in noise_peaks],
-                color='gray', s=10, alpha=0.15, zorder=2,
-            )
-
-        # Clustered points — selected vs dimmed
-        for ci, cluster in enumerate(rt_clusters):
-            color = cmap(ci % 10)
-            rts = [p.rt_apex + offset for p in cluster]
-            mzs = [p.mz for p in cluster]
-            is_selected = (ci == cluster_idx)
-
-            self._ax_scatter.scatter(
-                rts, mzs,
-                color=color,
-                s=30 if is_selected else 18,
-                alpha=1.0 if is_selected else 0.25,
-                edgecolors='black' if is_selected else 'none',
-                linewidths=0.8 if is_selected else 0,
-                zorder=5 if is_selected else 3,
-            )
-
-            if is_selected:
-                for peak in cluster:
-                    if id(peak) in model_peak_ids:
-                        self._ax_scatter.scatter(
-                            [peak.rt_apex + offset], [peak.mz],
-                            color=color, marker='*', s=120,
-                            edgecolors='black', linewidths=0.8, zorder=6,
-                        )
-            else:
-                for peak in cluster:
-                    if id(peak) in model_peak_ids:
-                        self._ax_scatter.scatter(
-                            [peak.rt_apex + offset], [peak.mz],
-                            color=color, marker='*', s=50, alpha=0.25, zorder=4,
-                        )
-
-        # FID peak RT lines
-        for rt in fid_rts:
-            self._ax_scatter.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
-            self._ax_scatter.text(
-                rt, 1.01, f"{rt:.3f}",
-                transform=self._ax_scatter.get_xaxis_transform(),
-                ha='center', va='bottom', fontsize=7, color='steelblue',
-            )
-
-        n_clusters = len(rt_clusters)
-        n_noise = len(noise_peaks)
-        self._ax_scatter.set_title(
-            f"RT Clusters — {n_clusters} cluster(s), {n_noise} noise — "
-            f"cluster {cluster_idx} selected"
-        )
-        self._ax_scatter.set_ylabel("m/z")
+        self._draw_group_scatter(self._last_result, offset, selected=cluster_idx)
         self._canvas.draw()
 
     def _clear_cluster_selection(self):
-        """Remove cluster highlight and restore normal render."""
+        """Remove group highlight and restore normal render."""
         if self._selected_cluster_idx is None:
             return
         self._selected_cluster_idx = None
@@ -847,14 +798,89 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._results_tree.addTopLevelItem(item)
 
         self._status_label.setText(
-            f"Cluster search complete — {len(results)} result(s) at RT = {rt:.3f} min"
+            f"Group search complete — {len(results)} result(s) at RT = {rt:.3f} min"
         )
 
-    # Scatter becomes unreadable beyond this many clusters; show guidance instead.
+    # Scatter becomes unreadable beyond this many groups; show guidance instead.
     _MAX_RENDERABLE_CLUSTERS = 100
 
+    @staticmethod
+    def _group_colors(n_groups: int) -> dict:
+        import matplotlib.pyplot as plt
+        cmap = plt.get_cmap('tab10')
+        return {i: cmap(i % 10) for i in range(n_groups)}
+
+    def _draw_group_scatter(self, result: dict, offset: float, selected: int | None = None):
+        """Draw the top plot: FID span and lines, ion groups (lead = star), hollow rejected ions.
+
+        With ``selected``, that group is highlighted and the others dimmed.
+        """
+        ax = self._ax_scatter
+        groups = result['groups']
+        rejected = result['rejected']
+        fid_rts = [p.retention_time for p in result['win_peaks']]
+        cluster_colors = self._group_colors(len(groups))
+        dim = selected is not None
+
+        # Shade FID peak span to distinguish "in-window" from padding zone
+        if fid_rts:
+            fid_min, fid_max = min(fid_rts), max(fid_rts)
+            # Add a half-peak-width margin so isolated peaks get a visible band
+            half_gap = (result['w_end'] - result['w_start']) * 0.05
+            ax.axvspan(
+                fid_min - half_gap, fid_max + half_gap,
+                alpha=0.08, color='steelblue', zorder=1, label='FID span'
+            )
+
+        # Rejected ion peaks: hollow gray markers
+        for reason, marker, label in (("shape", 'o', 'rejected: shape'),
+                                      ("small_group", 's', 'rejected: small group')):
+            pts = [r.peak for r in rejected if r.reason == reason]
+            if pts:
+                ax.scatter(
+                    [p.rt_apex + offset for p in pts], [p.mz for p in pts],
+                    marker=marker, facecolors='none', edgecolors='gray', s=24,
+                    alpha=0.3 if dim else None, zorder=2, label=label,
+                )
+
+        # Groups: members filled, lead ion as a star
+        for i, g in enumerate(groups):
+            color = cluster_colors[i]
+            rts = [p.rt_apex + offset for p in g.members]
+            mzs = [p.mz for p in g.members]
+            lead_xy = ([g.lead.rt_apex + offset], [g.lead.mz])
+            if not dim:
+                ax.scatter(rts, mzs, color=color, s=18, zorder=3)
+                ax.scatter(*lead_xy, color=color, marker='*', s=80, zorder=4)
+            elif i == selected:
+                ax.scatter(rts, mzs, color=color, s=30, edgecolors='black',
+                           linewidths=0.8, zorder=5)
+                ax.scatter(*lead_xy, color=color, marker='*', s=120,
+                           edgecolors='black', linewidths=0.8, zorder=6)
+            else:
+                ax.scatter(rts, mzs, color=color, s=18, alpha=0.25, edgecolors='none', zorder=3)
+                ax.scatter(*lead_xy, color=color, marker='*', s=50, alpha=0.25, zorder=4)
+
+        # FID peak RT lines with RT labels
+        for rt in fid_rts:
+            ax.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
+            ax.text(
+                rt, 1.01, f"{rt:.3f}",
+                transform=ax.get_xaxis_transform(),
+                ha='center', va='bottom', fontsize=7, color='steelblue',
+            )
+
+        if rejected:
+            ax.legend(fontsize=7)
+
+        title = f"Ion groups — {len(groups)} group(s), {len(rejected)} rejected ion peak(s)"
+        if dim:
+            title += f" — group {selected} selected"
+        ax.set_title(title)
+        ax.set_ylabel("m/z")
+
     def _render_plots(self, result: dict):
-        """Render DBSCAN scatter (top) and EIC traces (bottom) from preview result."""
+        """Render ion groups (top) and ion traces (bottom) from a preview result."""
         self._last_render_payload = result
         offset = self._current_preview_offset_min - float(result.get('ms_time_offset', 0.0))
         self._ax_scatter.clear()
@@ -864,117 +890,54 @@ class SpectralDeconvInspectorDialog(QDialog):
         fid_rts = [p.retention_time for p in win_peaks]
 
         if result.get('empty'):
-            self._ax_scatter.set_title("No EIC peaks found in this window")
-            self._ax_eic.set_title("(check Min Cluster Intensity setting)")
+            self._ax_scatter.set_title("No ion peaks in this window")
+            self._ax_eic.set_title("(check Min peak height / Noise percentile)")
             self._canvas.draw()
             self._scatter_coords = None
             self._scatter_cluster_ids = []
             self._scatter_tree = None
             self._status_label.setText(
-                "No EIC peaks found in this window — try lowering Min Cluster Intensity."
+                "No ion peaks in this window (check Min peak height / Noise percentile)"
             )
             return
 
-        intermediates = result['intermediates']
-        rt_clusters = intermediates['rt_clusters']
-        noise_peaks = intermediates['noise_peaks']
-        model_peaks = intermediates['model_peaks']
-        top_eic = result['top_eic']
+        ion_peaks = result['ion_peaks']
+        groups = result['groups']
+        rejected = result['rejected']
         components = result['components']
+        cluster_colors = self._group_colors(len(groups))
+        n_groups = len(groups)
 
-        import matplotlib.pyplot as plt
-        cmap = plt.get_cmap('tab10')
-        cluster_colors: dict[int, tuple] = {}
-        eic_to_color: dict[int, tuple] = {}
-
-        for ci, cluster in enumerate(rt_clusters):
-            color = cmap(ci % 10)
-            cluster_colors[ci] = color
-            for peak in cluster:
-                eic_to_color[id(peak)] = color
-
-        model_peak_ids = {id(mp) for mp in model_peaks}
-        n_clusters = len(rt_clusters)
-        n_noise = len(noise_peaks)
-
-        # ── Top subplot: DBSCAN scatter ────────────────────────────────────────
-        if n_clusters > self._MAX_RENDERABLE_CLUSTERS:
+        # ── Top subplot: ion groups ────────────────────────────────────────────
+        if n_groups > self._MAX_RENDERABLE_CLUSTERS:
             self._ax_scatter.text(
                 0.5, 0.5,
-                f"{n_clusters} clusters from {len(result['eic_peaks'])} EIC peaks\n\n"
-                "Too many clusters to display usefully.\n\n"
-                "Suggestions:\n"
-                "• ↑ Min Cluster Size (currently too low for this data density)\n"
-                "• ↑ Min Cluster Intensity (filters weak EIC peaks)\n"
-                "• ↑ Min Cluster Distance (merges nearby clusters)\n"
-                "• ↓ Padding fraction (reduces EIC extraction range)",
+                f"{n_groups} groups from {len(ion_peaks)} ion peaks\n\n"
+                "Too many groups to display usefully.\n\n"
+                "Try ↑ Min shape correlation or ↑ Min ions",
                 transform=self._ax_scatter.transAxes,
                 ha='center', va='center', fontsize=10, color='#cc3300',
                 multialignment='center',
                 bbox=dict(boxstyle='round,pad=0.5', fc='#fff5f5', ec='#cc3300', alpha=0.9),
             )
             self._ax_scatter.set_title(
-                f"RT Clusters — {n_clusters} cluster(s), {n_noise} noise point(s) (too many to render)"
+                f"Ion groups — {n_groups} group(s), {len(rejected)} rejected ion peak(s)"
+                " (too many to render)"
             )
+            self._ax_scatter.set_ylabel("m/z")
             self._scatter_coords = None
             self._scatter_cluster_ids = []
             self._scatter_tree = None
         else:
-            # Shade FID peak span to distinguish "in-window" from padding zone
-            if fid_rts:
-                fid_min, fid_max = min(fid_rts), max(fid_rts)
-                # Add a half-peak-width margin so isolated peaks get a visible band
-                half_gap = (result['w_end'] - result['w_start']) * 0.05
-                self._ax_scatter.axvspan(
-                    fid_min - half_gap, fid_max + half_gap,
-                    alpha=0.08, color='steelblue', zorder=1, label='FID span'
-                )
+            self._draw_group_scatter(result, offset)
 
-            # Noise points
-            if noise_peaks:
-                noise_rts = [p.rt_apex + offset for p in noise_peaks]
-                noise_mzs = [p.mz for p in noise_peaks]
-                self._ax_scatter.scatter(
-                    noise_rts, noise_mzs, color='gray', s=10, alpha=0.5,
-                    label='Noise', zorder=2
-                )
-
-            # Clustered points
-            for ci, cluster in enumerate(rt_clusters):
-                color = cluster_colors[ci]
-                rts = [p.rt_apex + offset for p in cluster]
-                mzs = [p.mz for p in cluster]
-                self._ax_scatter.scatter(rts, mzs, color=color, s=18, zorder=3)
-                for peak in cluster:
-                    if id(peak) in model_peak_ids:
-                        self._ax_scatter.scatter(
-                            [peak.rt_apex + offset], [peak.mz],
-                            color=color, marker='*', s=80, zorder=4
-                        )
-
-            # FID peak RT lines with RT labels
-            for rt in fid_rts:
-                self._ax_scatter.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
-                self._ax_scatter.text(
-                    rt, 1.01, f"{rt:.3f}",
-                    transform=self._ax_scatter.get_xaxis_transform(),
-                    ha='center', va='bottom', fontsize=7, color='steelblue',
-                )
-
-            self._ax_scatter.set_title(
-                f"RT Clusters — {n_clusters} cluster(s), {n_noise} noise point(s)"
-            )
-
-            # Build spatial index for click-to-search
-            all_coords = []
-            all_cluster_ids = []
-            for peak in noise_peaks:
-                all_coords.append([peak.rt_apex + offset, peak.mz])
-                all_cluster_ids.append(-1)
-            for ci, cluster in enumerate(rt_clusters):
-                for peak in cluster:
-                    all_coords.append([peak.rt_apex + offset, peak.mz])
-                    all_cluster_ids.append(ci)
+            # Build spatial index for click-to-search: rejected ions -1, members their group
+            all_coords = [[r.peak.rt_apex + offset, r.peak.mz] for r in rejected]
+            all_cluster_ids = [-1] * len(rejected)
+            for gi, g in enumerate(groups):
+                for p in g.members:
+                    all_coords.append([p.rt_apex + offset, p.mz])
+                    all_cluster_ids.append(gi)
             if all_coords:
                 self._scatter_coords = np.array(all_coords)
                 self._scatter_cluster_ids = all_cluster_ids
@@ -984,31 +947,42 @@ class SpectralDeconvInspectorDialog(QDialog):
                 self._scatter_cluster_ids = []
                 self._scatter_tree = None
 
-        self._ax_scatter.set_ylabel("m/z")
-
-        # ── Bottom subplot: EIC traces ─────────────────────────────────────────
+        # ── Bottom subplot: ion traces ─────────────────────────────────────────
         normalize = self._normalize_eic_check.isChecked()
-        for peak in top_eic:
-            color = eic_to_color.get(id(peak), 'gray')
-            lw = 2.5 if id(peak) in model_peak_ids else 1.0
-            y = peak.intensity_array.astype(float)
-            if normalize:
-                peak_max = y.max()
-                if peak_max > 0:
-                    y = y / peak_max
-            self._ax_eic.plot(peak.rt_array + offset, y, color=color, linewidth=lw, alpha=0.8)
+        member_of = {id(m): (gi, g.r[k], m is g.lead)
+                     for gi, g in enumerate(groups) for k, m in enumerate(g.members)}
+        rejected_ids = {id(r.peak) for r in rejected}
+        rt_window = result['rt_window'] + offset
+        n_labelled = 0
+        for p in result['top_ions']:
+            y = np.asarray(result['traces'][id(p)], dtype=float)
+            if normalize and y.max() > 0:
+                y = y / y.max()
+            if id(p) in member_of:
+                gi, r, is_lead = member_of[id(p)]
+                color = cluster_colors[gi]
+                self._ax_eic.plot(rt_window, y, color=color, linewidth=2.5 if is_lead else 1.0,
+                                  alpha=0.85, label=f"{p.mz:g} (r={r:.2f})")
+                self._ax_eic.axvspan(p.rt_array[0] + offset, p.rt_array[-1] + offset,
+                                     color=color, alpha=0.06, zorder=0)
+                n_labelled += 1
+            elif id(p) in rejected_ids and self._show_rejected_check.isChecked():
+                self._ax_eic.plot(rt_window, y, color='gray', linestyle='--', linewidth=0.8,
+                                  alpha=0.7)
 
         for rt in fid_rts:
             self._ax_eic.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
 
-        shown = len(top_eic)
-        total = len(result['eic_peaks'])
+        shown = len(result['top_ions'])
+        total = len(ion_peaks)
         self._ax_eic.set_xlabel("Retention Time (min)")
         self._ax_eic.set_ylabel("Norm. Intensity" if normalize else "Intensity")
         self._ax_eic.set_title(
-            f"EIC Traces (top {shown} of {total} shown"
+            f"Ion traces (top {shown} of {total} ion peaks"
             + (", normalized)" if normalize else ")")
         )
+        if 0 < n_labelled <= 12:
+            self._ax_eic.legend(fontsize=7)
 
         self._canvas.draw()
 
@@ -1031,13 +1005,17 @@ class SpectralDeconvInspectorDialog(QDialog):
                 + (f" — {unmatched} unmatched" if unmatched > 0 else "")
             )
 
-        # Hint when padding is pulling in far-from-peak EIC data
-        total_eic = len(result['eic_peaks'])
-        if total_eic > 0 and n_noise / max(total_eic, 1) > 0.4:
-            status += f"  ⚠ High noise ratio ({n_noise}/{total_eic} EIC peaks) — try ↑ Min Cluster Size or ↓ Padding"
+        if len(rejected) / max(len(ion_peaks), 1) > 0.4:
+            status += (
+                f"  ⚠ Many rejected ion peaks ({len(rejected)}/{len(ion_peaks)}) — "
+                "try ↓ Min shape correlation or ↑ Search range"
+            )
 
         self._status_label.setText(status)
 
     def closeEvent(self, event):
-        self._ms = None  # release rainbow data
+        self._ms = None  # release rainbow data and the cached arrays
+        self._ms_data = None
+        self._mz_axis = None
+        self._noise_cache = {}
         super().closeEvent(event)
