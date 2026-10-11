@@ -6,6 +6,9 @@ interactive tuning. Previews run the same ``deconvolve_window`` as the runner.
 """
 from __future__ import annotations
 
+import textwrap
+from types import SimpleNamespace
+
 import numpy as np
 from PySide6.QtCore import Qt, Signal, QObject, QRunnable, Slot, QThreadPool
 from PySide6.QtCore import QSettings
@@ -23,9 +26,78 @@ from scipy.spatial import cKDTree
 from logic.correlation_grouping import CorrelationDeconvParams, deconvolve_window
 from logic.ion_peak_resolver import whole_run_noise_levels
 from logic.spectral_deconv_settings import save_spectral_deconv_settings, parse_mz_list
-from logic.spectral_deconv_runner import WindowGroupingParams, _group_peaks_into_windows
+from logic.spectral_deconv_runner import (
+    WindowGroupingParams, _assign_components_to_peaks, _group_peaks_into_windows,
+)
 from logic.ms_time import shifted_xlabels
-from ui.dialogs.spectral_deconv_fields import build_setting_boxes, invalid_mz_message
+from ui.dialogs.spectral_deconv_fields import build_setting_boxes, invalid_mz_message, tooltip_html
+
+
+STALE_PREVIEW = "Settings changed — click Preview to update this window."
+NO_MS_SCANS = ("No MS scans cover this window. Its FID peaks may fall in the MS solvent delay, "
+               "or the MS time offset is off.")
+TOO_MANY_GROUPS = "Too many groups to display. Raise Min ions per spectrum or Min peak height."
+_MAX_LISTED_RTS = 4   # FID RTs named in a window's combo label, and written over the top plot
+
+
+def _rt_list(rts: list) -> str:
+    """At most ``_MAX_LISTED_RTS`` RTs, then an ellipsis."""
+    text = ", ".join(f"{rt:.3f}" for rt in rts[:_MAX_LISTED_RTS])
+    return text + (", …" if len(rts) > _MAX_LISTED_RTS else "")
+
+
+def _window_label(i: int, w_start: float, w_end: float, win_peaks: list) -> str:
+    rts = [p.retention_time for p in win_peaks]
+    if w_end <= w_start:   # every FID peak is before the first MS scan (or after the last)
+        return f"Window {i+1} (no MS data; FID peak(s) at {_rt_list(rts)} min)"
+    n = len(rts)
+    return (f"Window {i+1} (RT {w_start:.2f}–{w_end:.2f} min, "
+            f"{n} FID peak{'' if n == 1 else 's'}: {_rt_list(rts)})")
+
+
+def _rejection_counts(rejected: list) -> tuple[int, int]:
+    """(rejected for shape, rejected because their group was too small)."""
+    n_shape = sum(1 for r in rejected if r.reason == "shape")
+    return n_shape, len(rejected) - n_shape
+
+
+def _no_spectra_status(rejected: list, dp: CorrelationDeconvParams) -> str:
+    """Why a window with ion peaks produced no spectrum, from the dominant rejection reason."""
+    n_shape, n_small = _rejection_counts(rejected)
+    if n_shape > n_small:
+        return (f"No spectra in this window: {n_shape} ion peaks didn't match the shape of a "
+                f"stronger ion nearby (r below {dp.min_r:.2f}). Lower Min shape correlation.")
+    return (f"No spectra in this window: every group had fewer than {dp.min_ions} ions "
+            "(Min ions per spectrum). Lower Min ions per spectrum.")
+
+
+def _rejection_warning(rejected: list, n_ion_peaks: int, dp: CorrelationDeconvParams) -> str:
+    """A hint when more than 40 % of the ion peaks were rejected, for the dominant reason."""
+    if len(rejected) / max(n_ion_peaks, 1) <= 0.4:
+        return ""
+    n_shape, n_small = _rejection_counts(rejected)
+    if n_shape > n_small:
+        return (f"  ⚠ {n_shape} of {n_ion_peaks} ion peaks rejected for shape: lower Min shape "
+                "correlation, or raise Search range if one compound's traces are split into "
+                "several peaks.")
+    return (f"  ⚠ {n_small} of {n_ion_peaks} ion peaks were in groups smaller than "
+            f"{dp.min_ions} ions: lower Min ions per spectrum.")
+
+
+def _preview_status(n_groups: int, matched_rts: list, n_fid: int) -> str:
+    m = len(matched_rts)
+    status = f"Preview: {n_groups} group(s); {m} of {n_fid} FID peak(s) matched"
+    if m:
+        status += f" (RT {', '.join(f'{rt:.3f}' for rt in matched_rts)} min)"
+    if m < n_fid:
+        status += f"; {n_fid - m} will use the fallback spectrum"
+    return status
+
+
+def _rejected_click_status(rej, rt: float, dp: CorrelationDeconvParams) -> str:
+    why = (f"its shape didn't match the stronger ion nearby (r below {dp.min_r:.2f})"
+           if rej.reason == "shape" else f"its group had fewer than {dp.min_ions} ions")
+    return f"m/z {rej.peak.mz:g} at {rt:.3f} min was rejected: {why}, so it is in no spectrum."
 
 
 class _PreviewWorkerSignals(QObject):
@@ -38,7 +110,7 @@ class _PreviewWorker(QRunnable):
 
     def __init__(self, xlabels, ms_data, mz_axis, noise_levels, w_start: float, w_end: float,
                  win_peaks: list, deconv_params: CorrelationDeconvParams, top_n: int,
-                 ms_time_offset: float = 0.0):
+                 ms_time_offset: float = 0.0, rt_match_tolerance: float = 0.05):
         super().__init__()
         self._xlabels = xlabels          # already shifted by ms_time_offset
         self._ms_data = ms_data
@@ -49,6 +121,7 @@ class _PreviewWorker(QRunnable):
         self._deconv_params = deconv_params
         self._top_n = top_n
         self._ms_time_offset = ms_time_offset
+        self._rt_match_tolerance = rt_match_tolerance
         self.signals = _PreviewWorkerSignals()
 
     @Slot()
@@ -59,7 +132,8 @@ class _PreviewWorker(QRunnable):
             ms_slice = self._ms_data[mask, :]
             base = {'win_peaks': self._win_peaks, 'top_n': self._top_n, 'w_start': self._w_start,
                     'w_end': self._w_end, 'ms_time_offset': self._ms_time_offset,
-                    'rt_window': rt_window}
+                    'rt_window': rt_window, 'deconv_params': self._deconv_params,
+                    'rt_match_tolerance': self._rt_match_tolerance}
             if rt_window.size == 0:
                 self.signals.finished.emit({**base, 'ion_peaks': [], 'groups': [], 'rejected': [],
                                             'components': [], 'top_ions': [], 'traces': {},
@@ -122,6 +196,9 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._fid_signal = fid_signal
         self._tic_time = tic_time
         self._tic_signal = tic_signal
+        self._auto_available = (fid_time is not None and fid_signal is not None
+                                and tic_time is not None and tic_signal is not None)
+        self._stale = False           # a setting changed since the plotted preview
 
         # Click-to-search spatial index state
         self._last_result: dict | None = None
@@ -134,6 +211,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._build_ui()
         self._set_offset_slider_value(self._current_preview_offset_min, source="manual")
         self._load_params(deconv_params, grouping_params)
+        self._connect_stale_cue()     # after loading, so loading isn't a change
         self._rebuild_windows()
 
         # Navigate to the window containing initial_peak_index
@@ -150,6 +228,10 @@ class SpectralDeconvInspectorDialog(QDialog):
         splitter.addWidget(self._build_params_panel())
         splitter.addWidget(self._build_plot_panel())
         splitter.setSizes([320, 780])
+        # Return previews. Only Preview is auto-default: otherwise QDialog makes the first
+        # auto-default button (Auto, when FID/TIC are loaded) the default, and Return clicks it.
+        # Set once the button is inside the dialog, so QDialog records it as its default.
+        self._preview_btn.setDefault(True)
 
     def _build_params_panel(self) -> QWidget:
         """Settings in a scroll area (taller than the dialog's minimum), buttons pinned below."""
@@ -175,17 +257,23 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         button_row = QHBoxLayout()
         self._offset_auto_btn = QPushButton("Auto")
+        self._offset_auto_btn.setToolTip(tooltip_html(
+            "Estimate the offset by aligning the TIC to the FID trace." if self._auto_available
+            else "Needs an FID trace and a TIC."))
         self._offset_reset_btn = QPushButton("Reset")
-        self._offset_apply_btn = QPushButton("Apply")
-        self._offset_apply_btn.setToolTip(
-            "Apply this offset to all windows of this .D file and persist it.\n"
-            "Slider drags only preview the current window."
-        )
-        self._offset_apply_folder_btn = QPushButton("Apply to folder...")
-        self._offset_apply_folder_btn.setToolTip(
-            "Open a dialog to apply this offset to multiple .D files\n"
-            "in the same parent folder."
-        )
+        self._offset_reset_btn.setToolTip(tooltip_html(
+            "Set the preview offset to 0 min. The saved offset changes only when you click "
+            "Save Offset."))
+        self._offset_apply_btn = QPushButton("Save Offset")
+        self._offset_apply_btn.setToolTip(tooltip_html(
+            "Save this MS time offset for this .D file and the settings shown here (Deconvolve "
+            "MS, MS Options and batch use them too), close the Inspector and rerun "
+            "deconvolution on the whole file."))
+        self._offset_apply_folder_btn = QPushButton("Save Offset to Folder…")
+        self._offset_apply_folder_btn.setToolTip(tooltip_html(
+            "Save this MS time offset for this .D file and for the other .D files you pick in "
+            "its folder, save the settings shown here, then close the Inspector and rerun "
+            "deconvolution on this file."))
         button_row.addWidget(self._offset_auto_btn)
         button_row.addWidget(self._offset_reset_btn)
         button_row.addStretch(1)
@@ -194,10 +282,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         offset_layout.addLayout(button_row)
         layout.addWidget(offset_group)
 
-        self._offset_auto_btn.setEnabled(
-            self._fid_time is not None and self._fid_signal is not None
-            and self._tic_time is not None and self._tic_signal is not None
-        )
+        self._offset_auto_btn.setEnabled(self._auto_available)
         self._offset_slider.valueChanged.connect(self._on_offset_slider_changed)
         self._offset_auto_btn.clicked.connect(self._on_offset_auto_clicked)
         self._offset_reset_btn.clicked.connect(self._on_offset_reset_clicked)
@@ -239,9 +324,9 @@ class SpectralDeconvInspectorDialog(QDialog):
         layout.addWidget(self._normalize_eic_check)
 
         self._show_rejected_check = QCheckBox("Show rejected traces")
-        self._show_rejected_check.setToolTip(
-            "Also draw the traces of rejected ion peaks (dashed gray) in the lower plot"
-        )
+        self._show_rejected_check.setToolTip(tooltip_html(
+            "Also draw rejected ion peaks as dashed gray traces in the lower plot (only those "
+            "among the Top N strongest ion peaks)."))
         self._show_rejected_check.toggled.connect(self._on_show_rejected_toggled)
         layout.addWidget(self._show_rejected_check)
 
@@ -264,16 +349,25 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         # Buttons, outside the scroll area so they are always visible
         self._preview_btn = QPushButton("Preview")
+        self._preview_btn.setToolTip(tooltip_html(
+            "Rerun only the window shown, with the settings above. Nothing is saved."))
         self._preview_btn.clicked.connect(self._on_preview_clicked)
         panel_layout.addWidget(self._preview_btn)
 
-        self._apply_btn = QPushButton("Apply to All && Rerun")
+        self._apply_btn = QPushButton("Save && Rerun File")
+        self._apply_btn.setToolTip(tooltip_html(
+            "Save these settings (Deconvolve MS, MS Options and batch use them too) and rerun "
+            "deconvolution on every window of this file."))
         self._apply_btn.clicked.connect(self._on_apply_clicked)
         panel_layout.addWidget(self._apply_btn)
 
         self._close_btn = QPushButton("Close")
         self._close_btn.clicked.connect(self.close)
         panel_layout.addWidget(self._close_btn)
+
+        for btn in (self._offset_auto_btn, self._offset_reset_btn, self._offset_apply_btn,
+                    self._offset_apply_folder_btn, self._apply_btn, self._close_btn):
+            btn.setAutoDefault(False)   # Return means Preview (see _build_ui)
 
         return panel
 
@@ -298,10 +392,13 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._next_btn = QPushButton("Next →")
         self._next_btn.clicked.connect(self._on_next)
         nav_layout.addWidget(self._next_btn)
+        for btn in (self._prev_btn, self._next_btn):
+            btn.setAutoDefault(False)
         layout.addLayout(nav_layout)
 
-        # Matplotlib canvas — 2-row subplot
-        self._fig = Figure(figsize=(8, 6), tight_layout=True)
+        # Matplotlib canvas — 2-row subplot. Constrained layout keeps both plots the same width
+        # with their legends outside on the right, where they can't cover ion peaks.
+        self._fig = Figure(figsize=(8, 6), layout="constrained")
         self._ax_scatter = self._fig.add_subplot(2, 1, 1)
         self._ax_eic = self._fig.add_subplot(2, 1, 2, sharex=self._ax_scatter)
         self._canvas = FigureCanvas(self._fig)
@@ -385,9 +482,38 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._excluded_mz_edit.selectAll()
             return None
 
-    def read_current_params(self) -> tuple[CorrelationDeconvParams, WindowGroupingParams]:
-        """Return current deconvolution/grouping params for external rerun requests."""
-        return self._read_params()
+    def save_shown_settings(self) -> tuple[CorrelationDeconvParams, WindowGroupingParams]:
+        """Save the settings shown (Deconvolve MS, MS Options and batch read them) and return them.
+
+        The app reruns with the returned values, so what reruns is what was saved.
+        ValueError on a bad excluded m/z.
+        """
+        dp, gp = self._read_params()
+        save_spectral_deconv_settings(QSettings("CalebCoatney", "ChromaKit"), dp, gp)
+        return dp, gp
+
+    def show_status(self, text: str) -> None:
+        """Set the status line under the plots (the app reports search problems here)."""
+        self._status_label.setText(text)
+
+    def _connect_stale_cue(self) -> None:
+        """Any of the 13 settings or Top N changing makes the plotted preview out of date."""
+        for spin in (self._gap_spin, self._padding_spin, self._rt_match_spin,
+                     self._max_window_peaks_spin, self._noise_percentile_spin,
+                     self._search_range_spin, self._min_peak_height_spin,
+                     self._min_top_edge_ratio_spin, self._min_points_spin,
+                     self._rt_tolerance_spin, self._min_r_spin, self._min_ions_spin,
+                     self._top_n_spin):
+            spin.valueChanged.connect(self._mark_stale)
+        self._excluded_mz_edit.textChanged.connect(self._mark_stale)
+
+    def _mark_stale(self, *_):
+        self._stale = True
+        self._status_label.setText(STALE_PREVIEW)
+
+    def _set_render_status(self, text: str) -> None:
+        """A re-render (offset slider, display toggles) must not hide that the preview is stale."""
+        self._status_label.setText(STALE_PREVIEW if self._stale else text)
 
     def _set_offset_slider_value(self, offset_min: float, source: str) -> None:
         clamped = max(-0.5, min(0.5, float(offset_min)))
@@ -437,7 +563,7 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._render_plots(self._last_render_payload)
 
     def _on_offset_apply_clicked(self) -> None:
-        # The app reruns with read_current_params(); refuse here on a bad excluded m/z.
+        # The app saves and reruns with save_shown_settings(); refuse here on a bad excluded m/z.
         if self._read_params_or_report() is None:
             return
         self.apply_offset_requested.emit(self._current_preview_offset_min, self._offset_source)
@@ -489,13 +615,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._window_combo.blockSignals(True)
         self._window_combo.clear()
         for i, (w_start, w_end, win_peaks) in enumerate(self._windows):
-            peak_rts = ", ".join(f"{p.retention_time:.3f}" for p in win_peaks)
-            label = (
-                f"Window {i+1} "
-                f"(RT {w_start:.2f}–{w_end:.2f}, "
-                f"{len(win_peaks)} peak(s): {peak_rts} min)"
-            )
-            self._window_combo.addItem(label)
+            self._window_combo.addItem(_window_label(i, w_start, w_end, win_peaks))
         self._window_combo.blockSignals(False)
 
     def _window_for_peak_index(self, peak_index: int) -> int:
@@ -541,9 +661,10 @@ class SpectralDeconvInspectorDialog(QDialog):
                   self._min_ions_spin, self._excluded_mz_edit, self._top_n_spin,
                   self._normalize_eic_check, self._show_rejected_check):
             w.setEnabled(enabled)
-        for w in (self._offset_slider, self._offset_auto_btn, self._offset_reset_btn,
+        for w in (self._offset_slider, self._offset_reset_btn,
                   self._offset_apply_btn, self._offset_apply_folder_btn):
             w.setEnabled(enabled)
+        self._offset_auto_btn.setEnabled(enabled and self._auto_available)
 
     # ── Navigation slots ───────────────────────────────────────────────────────
 
@@ -566,12 +687,9 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._run_preview()
 
     def _on_apply_clicked(self):
-        params = self._read_params_or_report()
-        if params is None:
+        if self._read_params_or_report() is None:
             return
-        dp, gp = params
-        save_spectral_deconv_settings(QSettings("CalebCoatney", "ChromaKit"), dp, gp)
-        self.rerun_requested.emit(dp, gp)
+        self.rerun_requested.emit(*self.save_shown_settings())
 
     def _on_show_rejected_toggled(self, _checked: bool):
         if self._last_render_payload is None:
@@ -592,7 +710,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         params = self._read_params_or_report()
         if params is None:
             return
-        dp, _ = params
+        dp, gp = params
 
         self.set_controls_enabled(False)
         self._status_label.setText("Running deconvolution…")
@@ -611,6 +729,7 @@ class SpectralDeconvInspectorDialog(QDialog):
             deconv_params=dp,
             top_n=self._top_n_spin.value(),
             ms_time_offset=self._current_preview_offset_min,
+            rt_match_tolerance=gp.rt_match_tolerance,
         )
         self._preview_worker.signals.finished.connect(self._on_preview_finished)
         self._preview_worker.signals.error.connect(self._on_preview_error)
@@ -618,6 +737,7 @@ class SpectralDeconvInspectorDialog(QDialog):
 
     def _on_preview_finished(self, result: dict):
         self._preview_worker = None
+        self._stale = False
         self._last_result = result
         self._last_render_payload = result
         self._selected_cluster_idx = None
@@ -627,9 +747,12 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._render_plots(result)
 
     def _on_preview_error(self, msg: str):
+        """``msg`` is a full traceback: print it, show its last line."""
         self._preview_worker = None
         self.set_controls_enabled(True)
-        self._status_label.setText(f"Error: {msg}")
+        print(f"[Spectral Deconvolution Inspector] Preview failed:\n{msg}")
+        lines = [ln for ln in msg.strip().splitlines() if ln.strip()]
+        self._status_label.setText(f"Preview failed: {lines[-1] if lines else 'unknown error'}")
 
     # ── Click-to-search ────────────────────────────────────────────────────────
 
@@ -669,7 +792,10 @@ class SpectralDeconvInspectorDialog(QDialog):
         if cluster_id == -1:
             # Clear first: clearing re-renders, which rewrites the status line.
             self._clear_cluster_selection()
-            self._status_label.setText("Rejected ion peak — not in any spectrum")
+            rej = self._last_result['rejected'][idx]   # rejected ions come first in the index
+            offset = self._current_preview_offset_min - float(self._last_result.get('ms_time_offset', 0.0))
+            self._status_label.setText(_rejected_click_status(
+                rej, rej.peak.rt_apex + offset, self._last_result['deconv_params']))
             return
 
         if cluster_id == self._selected_cluster_idx:
@@ -681,11 +807,12 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         found = self._spectrum_for_group(cluster_id)
         if found is None:
-            self._status_label.setText(f"Group {cluster_id}: no spectrum available")
+            self._status_label.setText(f"Group {cluster_id + 1}: no spectrum available")
             return
         spec, rt = found
         self._status_label.setText(
-            f"Group {cluster_id} selected — RT {rt:.3f} min, {len(spec)} ions — searching…"
+            f"Group {cluster_id + 1} selected (RT {rt:.3f} min, {len(spec)} ions): "
+            "searching the library…"
         )
         self.cluster_search_requested.emit(spec, rt)
 
@@ -699,7 +826,9 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._canvas.draw()
 
     def _clear_cluster_selection(self):
-        """Remove group highlight and restore normal render."""
+        """Remove group highlight and its library matches, and restore normal render."""
+        self._results_tree.clear()
+        self._results_label.setText("Click a group to search")
         if self._selected_cluster_idx is None:
             return
         self._selected_cluster_idx = None
@@ -711,15 +840,18 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         Args:
             results: list of (compound_name, match_score) tuples from ms_toolkit.
-            rt: Component retention time in minutes.
+            rt: The selected group's retention time in minutes.
         """
         self._results_tree.clear()
+        n = self._selected_cluster_idx
+        group = f"group {n + 1}" if n is not None else "the selected group"
+        self._status_label.setText(f"{group[0].upper()}{group[1:]}: {len(results)} library match(es)")
 
         if not results:
-            self._results_label.setText(f"No matches for component at RT = {rt:.3f} min")
+            self._results_label.setText(f"No library matches for {group} (RT {rt:.3f} min)")
             return
 
-        self._results_label.setText(f"Search results — component at RT = {rt:.3f} min")
+        self._results_label.setText(f"Library matches for {group} (RT {rt:.3f} min)")
 
         for rank, (name, score) in enumerate(results, start=1):
             item = QTreeWidgetItem([str(rank), str(name), f"{score:.4f}"])
@@ -727,21 +859,40 @@ class SpectralDeconvInspectorDialog(QDialog):
             item.setTextAlignment(2, Qt.AlignCenter)
             self._results_tree.addTopLevelItem(item)
 
-        self._status_label.setText(
-            f"Group search complete — {len(results)} result(s) at RT = {rt:.3f} min"
-        )
-
     # Scatter becomes unreadable beyond this many groups; show guidance instead.
     _MAX_RENDERABLE_CLUSTERS = 100
+    # Bottom legend: every trace up to this many, then only the lead ions.
+    _MAX_LEGEND_TRACES = 12
+    _LEGEND_OUTSIDE = dict(fontsize=7, loc='upper left', bbox_to_anchor=(1.01, 1.0),
+                           borderaxespad=0.0)
 
     @staticmethod
     def _group_colors(n_groups: int) -> dict:
+        """tab10 without its gray, which is reserved for rejected and dimmed ion peaks."""
         import matplotlib.pyplot as plt
         cmap = plt.get_cmap('tab10')
-        return {i: cmap(i % 10) for i in range(n_groups)}
+        palette = [cmap(i) for i in range(10) if i != 7]
+        return {i: palette[i % len(palette)] for i in range(n_groups)}
+
+    @staticmethod
+    def _symbol_legend(ax, member_color):
+        """One entry per symbol in the top plot, shown whatever this window contains."""
+        from matplotlib.lines import Line2D
+        handles = [
+            Line2D([], [], linestyle='none', marker='o', markersize=4, color=member_color,
+                   label='group member'),
+            Line2D([], [], linestyle='none', marker='*', markersize=9, color=member_color,
+                   label='★ lead ion (sets RT)'),
+            Line2D([], [], linestyle='none', marker='o', markersize=5, markerfacecolor='none',
+                   markeredgecolor='gray', label='rejected: shape'),
+            Line2D([], [], linestyle='none', marker='s', markersize=5, markerfacecolor='none',
+                   markeredgecolor='gray', label='rejected: group too small'),
+            Line2D([], [], color='steelblue', linestyle='--', linewidth=1, label='FID peak'),
+        ]
+        ax.legend(handles=handles, **SpectralDeconvInspectorDialog._LEGEND_OUTSIDE)
 
     def _draw_group_scatter(self, result: dict, offset: float, selected: int | None = None):
-        """Draw the top plot: FID span and lines, ion groups (lead = star), hollow rejected ions.
+        """Draw the top plot: FID span and lines, ion groups (lead = numbered star), hollow rejected.
 
         With ``selected``, that group is highlighted and the others dimmed.
         """
@@ -759,21 +910,20 @@ class SpectralDeconvInspectorDialog(QDialog):
             half_gap = (result['w_end'] - result['w_start']) * 0.05
             ax.axvspan(
                 fid_min - half_gap, fid_max + half_gap,
-                alpha=0.08, color='steelblue', zorder=1, label='FID span'
+                alpha=0.08, color='steelblue', zorder=1,
             )
 
         # Rejected ion peaks: hollow gray markers
-        for reason, marker, label in (("shape", 'o', 'rejected: shape'),
-                                      ("small_group", 's', 'rejected: small group')):
+        for reason, marker in (("shape", 'o'), ("small_group", 's')):
             pts = [r.peak for r in rejected if r.reason == reason]
             if pts:
                 ax.scatter(
                     [p.rt_apex + offset for p in pts], [p.mz for p in pts],
                     marker=marker, facecolors='none', edgecolors='gray', s=24,
-                    alpha=0.3 if dim else None, zorder=2, label=label,
+                    alpha=0.3 if dim else None, zorder=2,
                 )
 
-        # Groups: members filled, lead ion as a star
+        # Groups: members filled, lead ion as a star with its 1-based group number
         for i, g in enumerate(groups):
             color = cluster_colors[i]
             rts = [p.rt_apex + offset for p in g.members]
@@ -790,24 +940,57 @@ class SpectralDeconvInspectorDialog(QDialog):
             else:
                 ax.scatter(rts, mzs, color=color, s=18, alpha=0.25, edgecolors='none', zorder=3)
                 ax.scatter(*lead_xy, color=color, marker='*', s=50, alpha=0.25, zorder=4)
-
-        # FID peak RT lines with RT labels
-        for rt in fid_rts:
-            ax.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
-            ax.text(
-                rt, 1.01, f"{rt:.3f}",
-                transform=ax.get_xaxis_transform(),
-                ha='center', va='bottom', fontsize=7, color='steelblue',
+            ax.annotate(
+                str(i + 1), (lead_xy[0][0], lead_xy[1][0]), xytext=(4, 3),
+                textcoords='offset points', fontsize=7, color='black', zorder=7,
+                alpha=0.35 if dim and i != selected else 1.0,
+                fontweight='bold' if i == selected else 'normal',
             )
 
-        if rejected:
-            ax.legend(fontsize=7)
+        # FID peak RT lines; their RTs are written only where they don't collide
+        for rt in fid_rts:
+            ax.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
+            if len(fid_rts) <= _MAX_LISTED_RTS:
+                ax.text(
+                    rt, 1.01, f"{rt:.3f}",
+                    transform=ax.get_xaxis_transform(),
+                    ha='center', va='bottom', fontsize=7, color='steelblue',
+                )
+
+        self._symbol_legend(ax, self._group_colors(1)[0])
 
         title = f"Ion groups — {len(groups)} group(s), {len(rejected)} rejected ion peak(s)"
         if dim:
-            title += f" — group {selected} selected"
-        ax.set_title(title)
+            title += f" — group {selected + 1} selected"
+        ax.set_title(title, pad=14)
         ax.set_ylabel("m/z")
+
+    def _show_plot_message(self, message: str):
+        """An empty or unrenderable window: one centred message, no blank 0-1 axes."""
+        self._ax_scatter.text(
+            0.5, 0.5, textwrap.fill(message, 70), transform=self._ax_scatter.transAxes,
+            ha='center', va='center', fontsize=10, color='#444444', multialignment='center',
+        )
+        self._ax_scatter.set_axis_off()
+        self._ax_eic.set_axis_off()
+        self._canvas.draw()
+        self._scatter_coords = None
+        self._scatter_cluster_ids = []
+        self._scatter_tree = None
+
+    def _preview_matches(self, result: dict, offset: float) -> list:
+        """The window's FID peaks the previewed spectra match, by the runner's own rule.
+
+        Stand-ins keep the live peaks untouched; spectrum RTs move with the preview offset.
+        """
+        win_peaks = result['win_peaks']
+        stand_ins = [SimpleNamespace(retention_time=p.retention_time, deconvolved_spectrum=None)
+                     for p in win_peaks]
+        comps = [SimpleNamespace(rt=c.rt + offset, spectrum=c.spectrum)
+                 for c in result['components']]
+        if comps:
+            _assign_components_to_peaks(stand_ins, comps, result['rt_match_tolerance'])
+        return [p for p, s in zip(win_peaks, stand_ins) if s.deconvolved_spectrum is not None]
 
     def _render_plots(self, result: dict):
         """Render ion groups (top) and ion traces (bottom) from a preview result."""
@@ -818,23 +1001,22 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         win_peaks = result['win_peaks']
         fid_rts = [p.retention_time for p in win_peaks]
+        dp = result['deconv_params']
 
         if result.get('empty'):
-            self._ax_scatter.set_title("No ion peaks in this window")
-            self._ax_eic.set_title("(check Min peak height / Noise percentile)")
-            self._canvas.draw()
-            self._scatter_coords = None
-            self._scatter_cluster_ids = []
-            self._scatter_tree = None
-            self._status_label.setText(
-                "No ion peaks in this window (check Min peak height / Noise percentile)"
-            )
+            if np.asarray(result['rt_window']).size == 0:
+                message = NO_MS_SCANS
+            else:
+                message = (f"No ion peaks in this window: no ion rises above Min peak height "
+                           f"({dp.min_peak_height:g} counts) and its noise level. Lower Min "
+                           "peak height or Noise percentile.")
+            self._show_plot_message(message)
+            self._set_render_status(message)
             return
 
         ion_peaks = result['ion_peaks']
         groups = result['groups']
         rejected = result['rejected']
-        components = result['components']
         cluster_colors = self._group_colors(len(groups))
         n_groups = len(groups)
 
@@ -842,9 +1024,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         if n_groups > self._MAX_RENDERABLE_CLUSTERS:
             self._ax_scatter.text(
                 0.5, 0.5,
-                f"{n_groups} groups from {len(ion_peaks)} ion peaks\n\n"
-                "Too many groups to display usefully.\n\n"
-                "Try ↑ Min shape correlation or ↑ Min ions",
+                f"{n_groups} groups from {len(ion_peaks)} ion peaks\n\n{TOO_MANY_GROUPS}",
                 transform=self._ax_scatter.transAxes,
                 ha='center', va='center', fontsize=10, color='#cc3300',
                 multialignment='center',
@@ -852,7 +1032,7 @@ class SpectralDeconvInspectorDialog(QDialog):
             )
             self._ax_scatter.set_title(
                 f"Ion groups — {n_groups} group(s), {len(rejected)} rejected ion peak(s)"
-                " (too many to render)"
+                " (too many to render)", pad=14
             )
             self._ax_scatter.set_ylabel("m/z")
             self._scatter_coords = None
@@ -879,11 +1059,13 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         # ── Bottom subplot: ion traces ─────────────────────────────────────────
         normalize = self._normalize_eic_check.isChecked()
+        show_rejected = self._show_rejected_check.isChecked()
         member_of = {id(m): (gi, g.r[k], m is g.lead)
                      for gi, g in enumerate(groups) for k, m in enumerate(g.members)}
         rejected_ids = {id(r.peak) for r in rejected}
         rt_window = result['rt_window'] + offset
-        n_labelled = 0
+        trace_lines, lead_lines = [], []
+        any_rejected_shown = False
         for p in result['top_ions']:
             y = np.asarray(result['traces'][id(p)], dtype=float)
             if normalize and y.max() > 0:
@@ -891,14 +1073,20 @@ class SpectralDeconvInspectorDialog(QDialog):
             if id(p) in member_of:
                 gi, r, is_lead = member_of[id(p)]
                 color = cluster_colors[gi]
-                self._ax_eic.plot(rt_window, y, color=color, linewidth=2.5 if is_lead else 1.0,
-                                  alpha=0.85, label=f"{p.mz:g} (r={r:.2f})")
-                self._ax_eic.axvspan(p.rt_array[0] + offset, p.rt_array[-1] + offset,
-                                     color=color, alpha=0.06, zorder=0)
-                n_labelled += 1
-            elif id(p) in rejected_ids and self._show_rejected_check.isChecked():
-                self._ax_eic.plot(rt_window, y, color='gray', linestyle='--', linewidth=0.8,
-                                  alpha=0.7)
+                label = f"{p.mz:g} (r={r:.2f})" + (f", ★ group {gi + 1}" if is_lead else "")
+                line, = self._ax_eic.plot(rt_window, y, color=color,
+                                          linewidth=2.5 if is_lead else 1.0, alpha=0.85,
+                                          label=label)
+                trace_lines.append(line)
+                if is_lead:   # one band per group: per-member bands stack into a solid block
+                    lead_lines.append(line)
+                    self._ax_eic.axvspan(p.rt_array[0] + offset, p.rt_array[-1] + offset,
+                                         color=color, alpha=0.06, zorder=0)
+            elif id(p) in rejected_ids and show_rejected:
+                line, = self._ax_eic.plot(rt_window, y, color='gray', linestyle='--',
+                                          linewidth=0.8, alpha=0.7, label=f"{p.mz:g} rejected")
+                trace_lines.append(line)
+                any_rejected_shown = True
 
         for rt in fid_rts:
             self._ax_eic.axvline(rt, color='steelblue', linestyle='--', alpha=0.7, linewidth=1)
@@ -910,38 +1098,24 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._ax_eic.set_title(
             f"Ion traces (top {shown} of {total} ion peaks"
             + (", normalized)" if normalize else ")")
+            + (" — no rejected ion peaks among these" if show_rejected and not any_rejected_shown
+               else "")
         )
-        if 0 < n_labelled <= 12:
-            self._ax_eic.legend(fontsize=7)
+        legend_lines = (trace_lines if len(trace_lines) <= self._MAX_LEGEND_TRACES
+                        else lead_lines)
+        if legend_lines:
+            self._ax_eic.legend(handles=legend_lines, **self._LEGEND_OUTSIDE)
 
         self._canvas.draw()
 
-        # ── Status line ────────────────────────────────────────────────────────
-        n_comp = len(components)
-        matched = [
-            p for p in win_peaks
-            if getattr(p, 'deconvolved_spectrum', None) is not None
-        ]
-        if n_comp == 0:
-            status = "0 components found (all peaks filtered)"
+        # ── Status line: what this preview found ───────────────────────────────
+        if n_groups == 0:
+            status = _no_spectra_status(rejected, dp)
         else:
-            n_matched = len(matched)
-            matched_rts = ", ".join(f"{p.retention_time:.3f}" for p in matched)
-            unmatched = len(win_peaks) - n_matched
-            status = (
-                f"{n_comp} component(s) found — "
-                f"{n_matched} matched to FID peak(s)"
-                + (f" (RT {matched_rts} min)" if matched_rts else "")
-                + (f" — {unmatched} unmatched" if unmatched > 0 else "")
-            )
-
-        if len(rejected) / max(len(ion_peaks), 1) > 0.4:
-            status += (
-                f"  ⚠ Many rejected ion peaks ({len(rejected)}/{len(ion_peaks)}) — "
-                "try ↓ Min shape correlation or ↑ Search range"
-            )
-
-        self._status_label.setText(status)
+            matched = self._preview_matches(result, offset)
+            status = (_preview_status(n_groups, [p.retention_time for p in matched], len(win_peaks))
+                      + _rejection_warning(rejected, len(ion_peaks), dp))
+        self._set_render_status(status)
 
     def closeEvent(self, event):
         self._ms = None  # release rainbow data and the cached arrays

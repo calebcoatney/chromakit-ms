@@ -3574,7 +3574,8 @@ class ChromaKitApp(QMainWindow):
             self.plot_frame.set_ms_time_offset(offset_min)
 
         if self._deconv_inspector is not None:
-            deconv_params, grouping_params = self._deconv_inspector.read_current_params()
+            # Save Offset saves the shown settings too, and reruns exactly what it saved.
+            deconv_params, grouping_params = self._deconv_inspector.save_shown_settings()
             self._deconv_inspector.close()
         else:
             deconv_params, grouping_params = self._get_spectral_deconv_params()
@@ -3605,7 +3606,7 @@ class ChromaKitApp(QMainWindow):
             QMessageBox.information(
                 self, "No Sibling Files",
                 "No sibling .D files found in this folder. "
-                "Use the 'Apply' button to set the offset for the current file only."
+                "Use Save Offset to set the offset for the current file only."
             )
             return
 

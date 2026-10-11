@@ -1,6 +1,6 @@
 """Modal dialog: apply an MS time offset to multiple sibling .D files.
 
-Opened by ChromaKitApp when the user clicks 'Apply to folder...' in
+Opened by ChromaKitApp when the user clicks 'Save Offset to Folder…' in
 the spectral deconvolution inspector. The dialog presents a checkbox
 list of all sibling .D paths in the current file's parent folder,
 with existing-offset markers on rows that would be overwritten.
