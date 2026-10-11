@@ -20,7 +20,7 @@ def test_tab_shows_new_boxes_with_defaults(qtbot, ini_settings):
     dlg = MSOptionsDialog()
     qtbot.addWidget(dlg)
     assert dlg.noise_percentile_spin.value() == pytest.approx(0.85)
-    assert dlg.search_range_spin.value() == pytest.approx(0.05)
+    assert dlg.search_range_spin.value() == pytest.approx(0.03)
     assert dlg.min_peak_height_spin.value() == pytest.approx(1000.0)
     assert dlg.min_top_edge_ratio_spin.value() == pytest.approx(1.7)
     assert dlg.min_points_spin.value() == 4
@@ -100,7 +100,7 @@ def test_restore_defaults_resets_deconv_widgets(qtbot, ini_settings):
     dlg.excluded_mz_edit.setText("73")
     dlg._restore_defaults()
     assert dlg.noise_percentile_spin.value() == pytest.approx(0.85)
-    assert dlg.search_range_spin.value() == pytest.approx(0.05)
+    assert dlg.search_range_spin.value() == pytest.approx(0.03)
     assert dlg.min_peak_height_spin.value() == pytest.approx(1000.0)
     assert dlg.min_top_edge_ratio_spin.value() == pytest.approx(1.7)
     assert dlg.min_points_spin.value() == 4

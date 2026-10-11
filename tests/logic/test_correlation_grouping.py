@@ -30,7 +30,7 @@ def test_defaults_match_spec():
     p = CorrelationDeconvParams()
     assert (p.noise_percentile, p.search_range, p.min_peak_height, p.min_top_edge_ratio,
             p.min_points, p.rt_tolerance, p.min_r, p.min_ions, p.excluded_mz) == \
-        (0.85, 0.05, 1000.0, 1.7, 4, 0.04, 0.80, 4, [])
+        (0.85, 0.03, 1000.0, 1.7, 4, 0.04, 0.80, 4, [])
 
 
 def test_coeluting_same_shape_one_group():

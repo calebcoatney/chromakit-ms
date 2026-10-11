@@ -28,7 +28,7 @@ before.
 | Setting | Default | Raise it when… | Lower it when… |
 |---|---|---|---|
 | Noise percentile | 0.85 | noisy ions create junk peaks | weak real ions vanish |
-| Search range (min) | 0.05 | one compound splits into several peaks | close isomers merge (set near one peak width) |
+| Search range (min) | 0.03 | one compound splits into several peaks | close isomers merge (set near one peak width) |
 | Min peak height (counts) | 1000 | noise peaks get in | trace compounds are missed |
 | Min peak top/edge ratio | 1.7 | bumps on a high baseline count as peaks | real shouldered peaks are dropped |
 | Min points per peak | 4 | spikes appear | very fast peaks are dropped |

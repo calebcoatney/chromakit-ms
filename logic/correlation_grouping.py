@@ -54,7 +54,7 @@ EXCLUDED_MZ_TOLERANCE = 0.5
 class CorrelationDeconvParams:
     """Settings for ion peak detection and correlation grouping."""
     noise_percentile: float = 0.85    # whole-run percentile below which points are ignored
-    search_range: float = 0.05        # min; a dip lowest within ± this splits two peaks
+    search_range: float = 0.03        # min; a dip lowest within ± this splits two peaks
     min_peak_height: float = 1000.0   # counts
     min_top_edge_ratio: float = 1.7
     min_points: int = 4
