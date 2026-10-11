@@ -66,7 +66,7 @@ def test_auto_gap_tolerance_fallback_single_peak():
 
 import numpy as np
 from unittest.mock import MagicMock, patch
-from logic.spectral_deconvolution import DeconvolutionParams, DeconvolutedComponent
+from logic.correlation_grouping import CorrelationDeconvParams, DeconvolutedComponent
 from logic.spectral_deconv_runner import run_spectral_deconvolution, WindowGroupingParams
 
 
@@ -146,23 +146,18 @@ def test_deconvolved_spectrum_format():
 
 
 def test_run_spectral_deconvolution_empty_components_sets_count_zero():
-    """When deconvolve() returns empty, component_count must be 0 (not None)."""
+    """When deconvolve_window() returns nothing, component_count must be 0 (not None)."""
     peak = _make_chromatographic_peak(1.0, 0.9, 1.1)
 
     fake_ms = MagicMock()
     fake_ms.xlabels = np.linspace(0.0, 5.0, 100)
+    fake_ms.ylabels = np.arange(1.0, 201.0)
     fake_ms.data = np.zeros((100, 200))
-    # Add a non-zero trace so EIC extraction doesn't short-circuit
-    fake_ms.data[40:60, 49] = 500.0
-
     fake_data_dir = MagicMock()
     fake_data_dir.get_file.return_value = fake_ms
 
-    fake_eic_peak = MagicMock()
-
     with patch('logic.spectral_deconv_runner.rb.read', return_value=fake_data_dir), \
-         patch('logic.spectral_deconv_runner.extract_eic_peaks', return_value=[fake_eic_peak]), \
-         patch('logic.spectral_deconv_runner.deconvolve', return_value=[]):
+         patch('logic.spectral_deconv_runner.deconvolve_window', return_value=[]):
         run_spectral_deconvolution(
             [peak], ms_data_path='/fake/path.D',
             grouping_params=WindowGroupingParams(gap_tolerance=0.3)
@@ -170,6 +165,50 @@ def test_run_spectral_deconvolution_empty_components_sets_count_zero():
 
     assert peak.deconvolution_component_count == 0
     assert peak.deconvolved_spectrum is None
+
+
+def _synthetic_ms(compounds, mz_axis, t0=0.0, t1=2.0, dt=0.005, seed=0):
+    from types import SimpleNamespace
+    x = np.round(np.arange(t0, t1, dt), 6)
+    rng = np.random.default_rng(seed)
+    data = rng.uniform(0.0, 30.0, (x.size, len(mz_axis)))
+    col = {m: j for j, m in enumerate(mz_axis)}
+    for center, ions in compounds:
+        for m, h in ions.items():
+            data[:, col[m]] += h * np.exp(-0.5 * ((x - center) / 0.015) ** 2)
+    return SimpleNamespace(xlabels=x, ylabels=np.asarray(mz_axis, dtype=float), data=data)
+
+
+def test_runner_end_to_end_spectra_match_planted_ions():
+    mz_axis = [29.0, 43.0, 57.0, 71.0, 85.0, 99.0]
+    ms = _synthetic_ms([(0.8, {43: 8000, 57: 20000, 71: 6000, 85: 5000}),
+                        (1.4, {29: 7000, 43: 9000, 57: 15000, 99: 6000})], mz_axis)
+    p1 = _make_chromatographic_peak(0.8, 0.76, 0.84)
+    p2 = _make_chromatographic_peak(1.4, 1.36, 1.44)
+    data_dir = MagicMock()
+    data_dir.get_file.return_value = ms
+    with patch('logic.spectral_deconv_runner.rb.read', return_value=data_dir):
+        run_spectral_deconvolution([p1, p2], '/fake.D',
+                                   deconv_params=CorrelationDeconvParams(search_range=0.03),
+                                   grouping_params=WindowGroupingParams(gap_tolerance=0.1))
+    assert set(p1.deconvolved_spectrum['mz']) == {43.0, 57.0, 71.0, 85.0}
+    assert set(p2.deconvolved_spectrum['mz']) == {29.0, 43.0, 57.0, 99.0}
+
+
+def test_runner_applies_ms_time_offset():
+    mz_axis = [43.0, 57.0, 71.0, 85.0]
+    ms = _synthetic_ms([(0.80, {43: 8000, 57: 20000, 71: 6000, 85: 5000})], mz_axis)
+    peak = _make_chromatographic_peak(0.85, 0.81, 0.89)     # FID RT = MS RT + 0.05
+    data_dir = MagicMock()
+    data_dir.get_file.return_value = ms
+    with patch('logic.spectral_deconv_runner.rb.read', return_value=data_dir):
+        run_spectral_deconvolution([peak], '/fake.D',
+                                   deconv_params=CorrelationDeconvParams(search_range=0.03),
+                                   grouping_params=WindowGroupingParams(gap_tolerance=0.1,
+                                                                        rt_match_tolerance=0.02),
+                                   ms_time_offset=0.05)
+    assert peak.deconvolved_spectrum is not None
+    assert set(peak.deconvolved_spectrum['mz']) == {43.0, 57.0, 71.0, 85.0}
 
 
 def test_max_window_peaks_splits_large_cluster():

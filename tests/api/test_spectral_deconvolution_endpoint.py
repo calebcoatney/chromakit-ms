@@ -82,3 +82,37 @@ def test_deconvolution_422_on_empty_peaks(client, tmp_path):
         json={'peaks': [], 'ms_data_path': str(fake_data_dir)},
     )
     assert response.status_code == 422
+
+
+def test_deconvolution_422_on_old_adap_param_name(client, tmp_path):
+    fake_data_dir = tmp_path / "fake.D"
+    fake_data_dir.mkdir()
+    with patch('api.main.run_spectral_deconvolution') as run:
+        response = client.post('/api/spectral-deconvolution', json={
+            'peaks': [_peak_dict()], 'ms_data_path': str(fake_data_dir),
+            'deconv_params': {'shape_sim_threshold': 30.0},
+        })
+    assert response.status_code == 422
+    detail = response.json()['detail']
+    assert 'shape_sim_threshold' in detail and 'valid fields' in detail
+    run.assert_not_called()
+
+
+def test_deconvolution_passes_new_params(client, tmp_path):
+    from logic.correlation_grouping import CorrelationDeconvParams
+    fake_data_dir = tmp_path / "fake.D"
+    fake_data_dir.mkdir()
+    seen = {}
+
+    def fake_run(peaks, *args, **kwargs):
+        seen['dp'] = kwargs['deconv_params']
+        return peaks
+
+    with patch('api.main.run_spectral_deconvolution', side_effect=fake_run):
+        response = client.post('/api/spectral-deconvolution', json={
+            'peaks': [_peak_dict()], 'ms_data_path': str(fake_data_dir),
+            'deconv_params': {'min_r': 0.7, 'min_ions': 3},
+        })
+    assert response.status_code == 200
+    assert isinstance(seen['dp'], CorrelationDeconvParams)
+    assert seen['dp'].min_r == 0.7 and seen['dp'].min_ions == 3

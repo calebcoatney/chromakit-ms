@@ -303,11 +303,11 @@ class LibraryLoadResponse(BaseModel):
 
 
 class SpectralDeconvolutionRequest(BaseModel):
-    """Request to run ADAP-GC spectral deconvolution on integrated peaks."""
+    """Request to run spectral deconvolution on integrated peaks."""
     peaks: List[Dict[str, Any]] = Field(..., description="Integrated peaks (Peak.as_dict shape)")
     ms_data_path: str = Field(..., description="Path to the .D or .C directory")
     deconv_params: Optional[Dict[str, Any]] = Field(
-        None, description="Serialized DeconvolutionParams; None = defaults"
+        None, description="Serialized CorrelationDeconvParams; None = defaults"
     )
     grouping_params: Optional[Dict[str, Any]] = Field(
         None, description="Serialized WindowGroupingParams; None = defaults"

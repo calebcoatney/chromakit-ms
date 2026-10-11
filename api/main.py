@@ -4,6 +4,7 @@ FastAPI backend for ChromaKit-MS.
 Thin wrapper around the logic/ layer — all core processing is delegated
 to existing ChromaKit-MS modules with zero modifications.
 """
+import dataclasses
 import os
 import sys
 import json
@@ -26,7 +27,7 @@ from logic.spectral_deconv_runner import (
     run_spectral_deconvolution,
     WindowGroupingParams,
 )
-from logic.spectral_deconvolution import DeconvolutionParams
+from logic.correlation_grouping import CorrelationDeconvParams
 from logic.integration import ChromatographicPeak
 from logic.ms_search_core import run_batch_search, BatchSearchSummary
 from logic.json_exporter import (
@@ -389,9 +390,24 @@ async def extract_spectrum(request: SpectrumRequest):
 
 # ─── Spectral Deconvolution ──────────────────────────────────────────
 
+def _dataclass_from_request(cls, values, label: str):
+    """Build a params dataclass from a request dict; 422 on unknown or bad fields."""
+    valid = [f.name for f in dataclasses.fields(cls)]
+    unknown = sorted(set(values) - set(valid))
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown {label} field(s): {', '.join(unknown)}; valid fields: {', '.join(valid)}",
+        )
+    try:
+        return cls(**values)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=f"invalid {label}: {e}")
+
+
 @app.post("/api/spectral-deconvolution", response_model=SpectralDeconvolutionResponse)
 async def spectral_deconvolution(request: SpectralDeconvolutionRequest):
-    """Run ADAP-GC spectral deconvolution on a list of integrated peaks.
+    """Run spectral deconvolution (correlation grouping, after mzmine) on integrated peaks.
 
     Peaks come in as dicts (Peak.as_dict shape); we re-hydrate them via
     Peak.from_dict, call the pure runner, and serialize back.
@@ -412,11 +428,11 @@ async def spectral_deconvolution(request: SpectralDeconvolutionRequest):
         )
 
     deconv_params = (
-        DeconvolutionParams(**request.deconv_params)
-        if request.deconv_params else DeconvolutionParams()
+        _dataclass_from_request(CorrelationDeconvParams, request.deconv_params, "deconv_params")
+        if request.deconv_params else CorrelationDeconvParams()
     )
     grouping_params = (
-        WindowGroupingParams(**request.grouping_params)
+        _dataclass_from_request(WindowGroupingParams, request.grouping_params, "grouping_params")
         if request.grouping_params else WindowGroupingParams()
     )
 

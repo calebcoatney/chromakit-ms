@@ -1,6 +1,7 @@
 """Spectral deconvolution runner for ChromaKit-MS.
 
-Orchestrates: FID peak window grouping → EIC extraction → deconvolve() →
+Orchestrates: whole-run noise levels → FID peak window grouping →
+deconvolve_window() (ion peak resolver + correlation grouping, after mzmine) →
 component-to-peak matching → ChromatographicPeak.deconvolved_spectrum update.
 """
 from __future__ import annotations
@@ -9,8 +10,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import rainbow as rb
 
-from logic.spectral_deconvolution import DeconvolutionParams, deconvolve
-from logic.eic_extractor import extract_eic_peaks
+from logic.correlation_grouping import CorrelationDeconvParams, deconvolve_window
+from logic.ion_peak_resolver import whole_run_noise_levels
 from logic.ms_time import shifted_xlabels
 
 
@@ -158,38 +159,41 @@ def _assign_components_to_peaks(
 def run_spectral_deconvolution(
     peaks: list,
     ms_data_path: str,
-    deconv_params: DeconvolutionParams | None = None,
+    deconv_params: CorrelationDeconvParams | None = None,
     grouping_params: WindowGroupingParams | None = None,
     progress_callback=None,
     should_cancel=None,
     ms_time_offset: float = 0.0,
 ) -> list:
-    """Run ADAP-GC spectral deconvolution on all FID peaks.
+    """Run spectral deconvolution (correlation grouping, after mzmine) on all FID peaks.
 
     Args:
         peaks: List of ChromatographicPeak objects (already integrated).
         ms_data_path: Path to the Agilent .D directory.
-        deconv_params: ADAP-GC parameters. Uses defaults if None.
+        deconv_params: Ion peak / grouping settings. Uses defaults if None.
         grouping_params: Window grouping parameters. Uses defaults if None.
         progress_callback: Optional callable(int) -> None receiving 0-100 progress.
         should_cancel: Optional callable() -> bool; if True, abort early.
+        ms_time_offset: Minutes added to MS scan times to align them with the FID.
 
     Returns:
         The same peaks list with deconvolved_spectrum / deconvolution_component_count
         populated in-place on matched peaks.
     """
     if deconv_params is None:
-        deconv_params = DeconvolutionParams()
+        deconv_params = CorrelationDeconvParams()
     if grouping_params is None:
         grouping_params = WindowGroupingParams()
 
-    # Open MS data once
     data_dir = rb.read(ms_data_path)
     ms = data_dir.get_file('data.ms')
 
-    _xlabels = shifted_xlabels(ms, ms_time_offset)
-    rt_min = float(_xlabels[0])
-    rt_max = float(_xlabels[-1])
+    xlabels = np.asarray(shifted_xlabels(ms, ms_time_offset), dtype=float)
+    data = np.asarray(ms.data, dtype=float)
+    mz_axis = np.asarray(ms.ylabels, dtype=float)
+    noise_levels = whole_run_noise_levels(data, deconv_params.noise_percentile)
+    rt_min = float(xlabels[0])
+    rt_max = float(xlabels[-1])
 
     windows = _group_peaks_into_windows(peaks, grouping_params, rt_min, rt_max)
     total = max(len(windows), 1)
@@ -198,24 +202,14 @@ def run_spectral_deconvolution(
         if should_cancel is not None and should_cancel():
             break
 
-        eic_peaks = extract_eic_peaks(
-            ms,
-            t_start=window_start,
-            t_end=window_end,
-            min_intensity=deconv_params.min_cluster_intensity,
-            min_prominence=deconv_params.min_eic_prominence,
-            ms_time_offset=ms_time_offset,
-        )
-
-        if not eic_peaks:
-            if progress_callback is not None:
-                progress_callback(int(100 * (i + 1) / total))
-            continue
-
-        components = deconvolve(eic_peaks, deconv_params)
+        mask = (xlabels >= window_start) & (xlabels <= window_end)
+        components = []
+        if np.any(mask):
+            components = deconvolve_window(
+                xlabels[mask], data[mask, :], mz_axis, noise_levels, deconv_params,
+            )
 
         if not components:
-            # Ran but found nothing — still record count as 0
             for peak in window_peaks:
                 peak.deconvolution_component_count = 0
         else:

@@ -3434,35 +3434,9 @@ class ChromaKitApp(QMainWindow):
         QThreadPool.globalInstance().start(worker)
 
     def _get_spectral_deconv_params(self):
-        """Read DeconvolutionParams and WindowGroupingParams from QSettings."""
-        from logic.spectral_deconvolution import DeconvolutionParams
-        from logic.spectral_deconv_runner import WindowGroupingParams
-
-        s = QSettings("CalebCoatney", "ChromaKit")
-
-        deconv = DeconvolutionParams(
-            min_cluster_distance=s.value("ms_spectral_deconv/min_cluster_distance", 0.005, float),
-            min_cluster_size=s.value("ms_spectral_deconv/min_cluster_size", 2, int),
-            min_cluster_intensity=s.value("ms_spectral_deconv/min_cluster_intensity", 200.0, float),
-            min_eic_prominence=s.value("ms_spectral_deconv/min_eic_prominence", 1000.0, float),
-            shape_sim_threshold=s.value("ms_spectral_deconv/shape_sim_threshold", 30.0, float),
-            model_peak_choice=s.value("ms_spectral_deconv/model_peak_choice", "sharpness", str),
-            excluded_mz=[
-                float(x.strip())
-                for x in s.value("ms_spectral_deconv/excluded_mz", "", str).split(",")
-                if x.strip()
-            ],
-        )
-
-        raw_gap = s.value("ms_spectral_deconv/gap_tolerance", 0.0, float)
-        grouping = WindowGroupingParams(
-            gap_tolerance=None if raw_gap == 0.0 else raw_gap,
-            padding_fraction=s.value("ms_spectral_deconv/padding_fraction", 0.5, float),
-            rt_match_tolerance=s.value("ms_spectral_deconv/rt_match_tolerance", 0.05, float),
-            max_window_peaks=s.value("ms_spectral_deconv/max_window_peaks", 10, int),
-        )
-
-        return deconv, grouping
+        """Read spectral deconvolution and window grouping params from QSettings."""
+        from logic.spectral_deconv_settings import load_spectral_deconv_settings
+        return load_spectral_deconv_settings(QSettings("CalebCoatney", "ChromaKit"))
 
     def _on_deconvolve_ms_finished(self, progress_dialog=None):
         if progress_dialog:

@@ -5,7 +5,7 @@ Follows the same pattern as BatchSearchWorker.
 """
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
-from logic.spectral_deconvolution import DeconvolutionParams
+from logic.correlation_grouping import CorrelationDeconvParams
 from logic.spectral_deconv_runner import run_spectral_deconvolution, WindowGroupingParams
 
 
@@ -16,20 +16,20 @@ class SpectralDeconvWorkerSignals(QObject):
 
 
 class SpectralDeconvWorker(QRunnable):
-    """Run ADAP-GC spectral deconvolution on a background thread."""
+    """Run spectral deconvolution on a background thread."""
 
     def __init__(
         self,
         peaks: list,
         ms_data_path: str,
-        deconv_params: DeconvolutionParams | None = None,
+        deconv_params: CorrelationDeconvParams | None = None,
         grouping_params: WindowGroupingParams | None = None,
         ms_time_offset: float = 0.0,
     ):
         super().__init__()
         self.peaks = peaks
         self.ms_data_path = ms_data_path
-        self.deconv_params = deconv_params or DeconvolutionParams()
+        self.deconv_params = deconv_params or CorrelationDeconvParams()
         self.grouping_params = grouping_params or WindowGroupingParams()
         self.ms_time_offset = ms_time_offset
         self.signals = SpectralDeconvWorkerSignals()
