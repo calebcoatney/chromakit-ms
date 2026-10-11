@@ -98,7 +98,7 @@ logic/          Data loading, processing, integration, and export (shared by GUI
 ui/             PySide6 desktop interface
 api/            FastAPI REST API backend
 react-ui/       Vite/React web frontend (experimental)
-deconvolution/  Peak deconvolution models and training utilities
+unet-training/  U-Net model training utilities and notebook
 util/           Shared utilities
 resources/      Icons and static assets
 main.py         Desktop GUI entry point
@@ -109,6 +109,7 @@ setup.py        Package metadata and entry points
 
 ChromaKit-MS is released under the [Apache License 2.0](LICENSE). Third-party components included or linked:
 
+* `mzmine` (ported code in `logic/`) – MIT License, see [licenses/MZMINE-MIT.txt](licenses/MZMINE-MIT.txt)
 * `ms-toolkit-nrel` – Apache License 2.0
 * `rainbow-api` – GNU Lesser General Public License v3.0
 * `pybaselines` – BSD 3-Clause License

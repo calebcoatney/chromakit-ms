@@ -19,7 +19,8 @@ This project depends on (does not vendor):
 History: ChromaKit-MS versions up to commit 433d642 contained
 logic/spectral_deconvolution.py, a translation of ADAP-GC 3.2 (Du-Lab Team,
 GNU GPL version 2 or later; Smirnov et al., J. Proteome Res. 2018, 17,
-470-478). It was removed in favour of the mzmine-derived implementation above.
+470-478), and a second copy of that translation under deconvolution/. Both
+were removed in favour of the mzmine-derived implementation above.
 
 These third-party components are distributed under their respective licenses.
 The source code in this repository is licensed under the Apache License,
