@@ -197,8 +197,8 @@ def run_spectral_deconvolution(
     rt_max = float(xlabels[-1])
 
     # A run replaces earlier results: clear them up front so a peak that loses its
-    # match (new settings, new MS offset, cancelled run) falls back to its apex
-    # spectrum instead of keeping a spectrum from the previous settings.
+    # match (new settings, new MS offset, cancelled run) uses the fallback spectrum
+    # (Spectrum Extraction settings) instead of keeping one from the previous settings.
     for peak in peaks:
         peak.deconvolved_spectrum = None
         peak.deconvolution_component_count = None

@@ -34,6 +34,91 @@ def _fake_app(peaks=(), inspector=None):
         _deconvolve_ms_run=False)
 
 
+# ── #4: one message per outcome; a cancelled run is not "complete" ─────────────
+
+@pytest.mark.parametrize("flags, cancelled, message", [
+    ([True, False, False], True,
+     "Spectral deconvolution cancelled: 1 of 3 peaks have a deconvolved spectrum; the rest use "
+     "the fallback spectrum. Click Deconvolve MS to run the whole file."),
+    ([True, True, True], False,
+     "Spectral deconvolution complete: all 3 peaks have a deconvolved spectrum. Click MS Search "
+     "All to search with them."),
+    ([True, False, False], False,
+     "Spectral deconvolution complete: 1 of 3 peaks have a deconvolved spectrum; the other 2 use "
+     "the fallback spectrum (MS Options → Spectrum Extraction). Click MS Search All to search "
+     "with them."),
+    ([False, False, False], False,
+     "Spectral deconvolution complete: no peak got a deconvolved spectrum, so all 3 use the "
+     "fallback spectrum. Click Inspect on the MS tab to check the settings."),
+])
+def test_finished_message_per_outcome(flags, cancelled, message):
+    app = _fake_app([_pk(f) for f in flags])
+    ChromaKitApp._on_deconvolve_ms_finished(app, None, cancelled=cancelled)
+    app.status_bar.showMessage.assert_called_once_with(message)
+
+
+def _dispatch(monkeypatch, start):
+    """Run a dispatcher with the progress dialog and thread pool stubbed; return its worker."""
+    import ui.app as app_mod
+    from logic.correlation_grouping import CorrelationDeconvParams
+    from logic.spectral_deconv_runner import WindowGroupingParams
+    started = []
+    monkeypatch.setattr(app_mod, "QProgressDialog", MagicMock())
+    monkeypatch.setattr(app_mod, "QThreadPool", SimpleNamespace(
+        globalInstance=lambda: SimpleNamespace(start=started.append)))
+    app = _fake_app([_peak(1.0, 0.96, 1.04)], inspector=MagicMock())
+    app.data_handler = SimpleNamespace(current_directory_path="/x.D", ms_time_offset=0.0)
+    app._get_ms_data_path = lambda: "/x.D"
+    app._get_spectral_deconv_params = lambda: (CorrelationDeconvParams(), WindowGroupingParams())
+    app._on_deconvolve_ms_finished = MagicMock()
+    app._on_deconvolve_ms_error = MagicMock()
+    start(app)
+    assert len(started) == 1
+    return app, started[0]
+
+
+@pytest.mark.parametrize("start", [
+    lambda app: ChromaKitApp._on_deconvolve_ms_clicked(app),
+    lambda app: ChromaKitApp._on_inspector_rerun_requested(app, *app._get_spectral_deconv_params()),
+], ids=["deconvolve-ms-button", "inspector-rerun"])
+@pytest.mark.parametrize("cancel", [True, False])
+def test_both_call_sites_say_whether_the_run_was_cancelled(monkeypatch, start, cancel):
+    app, worker = _dispatch(monkeypatch, start)
+    worker.cancelled = cancel
+    worker.signals.finished.emit()
+    assert app._on_deconvolve_ms_finished.call_count == 1
+    assert app._on_deconvolve_ms_finished.call_args.kwargs == {"cancelled": cancel}
+
+
+# ── #15: a failed rerun re-enables the Inspector; no raw traceback ─────────────
+
+def test_failed_rerun_reenables_the_inspector_and_shows_a_plain_message(monkeypatch, capsys):
+    shown = []
+    monkeypatch.setattr(QMessageBox, "critical",
+                        staticmethod(lambda parent, title, text, *a, **k: shown.append((title, text))))
+    inspector = MagicMock()
+    inspector.isVisible.return_value = True
+    app = _fake_app(inspector=inspector)
+    ChromaKitApp._on_deconvolve_ms_error(app, TRACEBACK, MagicMock())
+    inspector.set_controls_enabled.assert_called_with(True)
+    assert len(shown) == 1
+    title, text = shown[0]
+    assert "ValueError: boom" in text and "Traceback" not in text and 'File "x.py"' not in text
+    assert "Traceback" in capsys.readouterr().out
+
+
+# ── #16: no library: the Inspector says so instead of "searching…" ─────────────
+
+@pytest.mark.parametrize("toolkit, loaded", [(None, False), (object(), False)])
+def test_cluster_search_without_a_library_sets_the_inspector_status(monkeypatch, toolkit, loaded):
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+    inspector = MagicMock()
+    app = _fake_app(inspector=inspector)
+    app.ms_frame = SimpleNamespace(ms_toolkit=toolkit, library_loaded=loaded)
+    ChromaKitApp._on_cluster_search_requested(app, {57.0: 100.0}, 1.0)
+    inspector.show_status.assert_called_once_with("Load an MS library on the MS tab to search groups.")
+
+
 # ── #12: Save Offset saves the shown settings, and reruns exactly those ────────
 
 @pytest.fixture

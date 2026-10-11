@@ -3424,7 +3424,7 @@ class ChromaKitApp(QMainWindow):
                          self.status_bar.showMessage(f"Spectral deconvolution: {pct}%"))
         )
         worker.signals.finished.connect(
-            lambda: self._on_deconvolve_ms_finished(progress_dialog)
+            lambda: self._on_deconvolve_ms_finished(progress_dialog, cancelled=worker.cancelled)
         )
         worker.signals.error.connect(
             lambda msg: self._on_deconvolve_ms_error(msg, progress_dialog)
@@ -3438,20 +3438,33 @@ class ChromaKitApp(QMainWindow):
         from logic.spectral_deconv_settings import load_spectral_deconv_settings
         return load_spectral_deconv_settings(QSettings("CalebCoatney", "ChromaKit"))
 
-    def _on_deconvolve_ms_finished(self, progress_dialog=None):
+    def _on_deconvolve_ms_finished(self, progress_dialog=None, cancelled=False):
+        """A run ended: ``cancelled`` means it stopped early (its windows after that kept none)."""
         if progress_dialog:
             progress_dialog.setValue(100)
             progress_dialog.close()
 
-        n_deconv = sum(
+        k = sum(
             1 for p in getattr(self, 'integrated_peaks', [])
             if getattr(p, 'deconvolved_spectrum', None) is not None
         )
-        n_total = len(getattr(self, 'integrated_peaks', []))
-        self.status_bar.showMessage(
-            f"Spectral deconvolution complete — {n_deconv} of {n_total} peaks have a deconvolved "
-            f"spectrum; the other {n_total - n_deconv} use the apex spectrum"
-        )
+        n = len(getattr(self, 'integrated_peaks', []))
+        if cancelled:
+            message = (f"Spectral deconvolution cancelled: {k} of {n} peaks have a deconvolved "
+                       "spectrum; the rest use the fallback spectrum. Click Deconvolve MS to run "
+                       "the whole file.")
+        elif k == n:
+            message = (f"Spectral deconvolution complete: all {n} peaks have a deconvolved "
+                       "spectrum. Click MS Search All to search with them.")
+        elif k > 0:
+            message = (f"Spectral deconvolution complete: {k} of {n} peaks have a deconvolved "
+                       f"spectrum; the other {n - k} use the fallback spectrum (MS Options → "
+                       "Spectrum Extraction). Click MS Search All to search with them.")
+        else:
+            message = ("Spectral deconvolution complete: no peak got a deconvolved spectrum, so "
+                       f"all {n} use the fallback spectrum. Click Inspect on the MS tab to check "
+                       "the settings.")
+        self.status_bar.showMessage(message)
         self._deconvolve_ms_run = True
         self.ms_frame.inspect_btn.setEnabled(True)
         self._refresh_current_peak_ms_display()
@@ -3461,10 +3474,19 @@ class ChromaKitApp(QMainWindow):
             self._deconv_inspector.refresh_current_window()
 
     def _on_deconvolve_ms_error(self, msg: str, progress_dialog=None):
+        """``msg`` is the worker's full traceback: it goes to the console, its last line to the user."""
         if progress_dialog:
             progress_dialog.close()
+        print(f"Spectral deconvolution failed:\n{msg}")
+        lines = [ln for ln in msg.strip().splitlines() if ln.strip()]
+        reason = lines[-1] if lines else "unknown error"
         self.status_bar.showMessage("Spectral deconvolution failed")
-        QMessageBox.critical(self, "Deconvolution Error", msg)
+        # The Inspector disabled its controls for the rerun; give them back.
+        if self._deconv_inspector is not None and self._deconv_inspector.isVisible():
+            self._deconv_inspector.set_controls_enabled(True)
+        QMessageBox.critical(
+            self, "Deconvolution Error",
+            f"Spectral deconvolution failed: {reason}\n\nThe full error is printed in the console.")
 
     def _refresh_current_peak_ms_display(self):
         """Re-display spectrum for the last-viewed peak (picks up deconvolved spectrum)."""
@@ -3550,7 +3572,7 @@ class ChromaKitApp(QMainWindow):
                          self.status_bar.showMessage(f"Spectral deconvolution: {pct}%"))
         )
         worker.signals.finished.connect(
-            lambda: self._on_deconvolve_ms_finished(progress_dialog)
+            lambda: self._on_deconvolve_ms_finished(progress_dialog, cancelled=worker.cancelled)
         )
         worker.signals.error.connect(
             lambda msg: self._on_deconvolve_ms_error(msg, progress_dialog)
@@ -3662,18 +3684,13 @@ class ChromaKitApp(QMainWindow):
         Uses MSFrame's ms_toolkit and search settings, then routes results
         back to the inspector's inline results panel.
         """
-        if not hasattr(self.ms_frame, 'ms_toolkit') or self.ms_frame.ms_toolkit is None:
+        if (getattr(self.ms_frame, 'ms_toolkit', None) is None
+                or not self.ms_frame.library_loaded):
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "MS Library Not Loaded",
-                "The MS library must be loaded before searching.\n"
-                "Go to the MS tab and load a library first.",
-            )
-            return
-
-        if not self.ms_frame.library_loaded:
-            from PySide6.QtWidgets import QMessageBox
+            # Replace the Inspector's "searching the library…" before the warning opens.
+            if self._deconv_inspector:
+                self._deconv_inspector.show_status(
+                    "Load an MS library on the MS tab to search groups.")
             QMessageBox.warning(
                 self,
                 "MS Library Not Loaded",
@@ -3731,7 +3748,7 @@ class ChromaKitApp(QMainWindow):
         except Exception as e:
             if self._deconv_inspector:
                 self._deconv_inspector.show_search_results([], rt)
-                self._deconv_inspector._status_label.setText(f"Search error: {e}")
+                self._deconv_inspector.show_status(f"Search error: {e}")
             return
 
         if self._deconv_inspector:
