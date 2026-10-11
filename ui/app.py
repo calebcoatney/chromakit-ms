@@ -3447,8 +3447,10 @@ class ChromaKitApp(QMainWindow):
             1 for p in getattr(self, 'integrated_peaks', [])
             if getattr(p, 'deconvolved_spectrum', None) is not None
         )
+        n_total = len(getattr(self, 'integrated_peaks', []))
         self.status_bar.showMessage(
-            f"Spectral deconvolution complete — {n_deconv} of {len(getattr(self, 'integrated_peaks', []))} peaks deconvolved"
+            f"Spectral deconvolution complete — {n_deconv} of {n_total} peaks have a deconvolved "
+            f"spectrum; the other {n_total - n_deconv} use the apex spectrum"
         )
         self._deconvolve_ms_run = True
         self.ms_frame.inspect_btn.setEnabled(True)

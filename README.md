@@ -114,3 +114,10 @@ ChromaKit-MS is released under the [Apache License 2.0](LICENSE). Third-party co
 * `pybaselines` – BSD 3-Clause License
 
 See the [NOTICE](NOTICE) file for full attribution details.
+
+## Acknowledgements
+
+- MS spectral deconvolution (ion peak detection and correlation grouping) is
+  ported from [mzmine](https://github.com/mzmine/mzmine) (MIT): Schmid, R. et al.
+  Integrative analysis of multimodal mass spectrometry data in MZmine 3.
+  *Nat. Biotechnol.* **41**, 447–449 (2023). See `NOTICE` and `licenses/`.

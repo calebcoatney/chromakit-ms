@@ -65,10 +65,10 @@ class BatchJobDialog(QDialog):
         self.ms_search_check.setChecked(True)
         options_layout.addWidget(self.ms_search_check)
 
-        # Spectral deconvolution (ADAP-GC)
+        # Spectral deconvolution (correlation grouping, after MZmine)
         self.spectral_deconv_check = QCheckBox("Run spectral deconvolution before MS search (GC-MS only)")
         self.spectral_deconv_check.setToolTip(
-            "Run ADAP-GC spectral deconvolution to separate coeluting analytes' mass spectra "
+            "Run spectral deconvolution (correlation grouping, after MZmine) to separate co-eluting analytes' mass spectra "
             "before MS library search. Uses parameters from MS Options → Spectral Deconvolution tab. "
             "Ignored for non-GC-MS data."
         )
