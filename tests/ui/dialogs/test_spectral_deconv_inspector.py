@@ -438,6 +438,21 @@ def test_return_in_a_field_previews_and_never_clicks_auto(qtbot, tmp_path, monke
     assert dlg._current_preview_offset_min == offset and dlg.isVisible()
 
 
+def test_navigation_after_a_grouping_change_uses_the_new_windows(qtbot, tmp_path, monkeypatch):
+    """Prev/Next/combo used to preview the old window layout, then clear the stale cue."""
+    dlg = _make(qtbot, tmp_path, monkeypatch, [_peak(1.0, 0.96, 1.04), _peak(1.2, 1.16, 1.24)])
+    assert len(dlg._windows) == 2 and dlg._next_btn.isEnabled()
+    dlg._gap_spin.setValue(0.2)                  # the two peaks now share one window
+    assert _status(dlg) == STALE
+    prev = dlg._last_result
+    dlg._on_next()
+    qtbot.waitUntil(lambda: dlg._preview_worker is None and dlg._last_result is not prev,
+                    timeout=10000)
+    assert len(dlg._windows) == 1 and dlg._window_combo.count() == 1
+    assert len(dlg._last_result['win_peaks']) == 2           # previewed the merged window
+    assert _status(dlg) != STALE
+
+
 # #11: crowded windows
 
 def test_group_colors_leave_gray_for_rejected():
@@ -475,7 +490,8 @@ def test_offset_and_rerun_buttons_say_what_they_save(dialog):
     assert dialog._preview_btn.toolTip() == tooltip_html(
         "Rerun only the window shown, with the settings above. Nothing is saved.")
     assert dialog._offset_reset_btn.toolTip() == tooltip_html(
-        "Set the preview offset to 0 min. The saved offset changes only when you click Save Offset.")
+        "Set the preview offset to 0 min. The saved offset changes only when you click Save "
+        "Offset or Save Offset to Folder…")
     tip = dialog._offset_apply_btn.toolTip()
     assert "settings shown here" in tip and "rerun deconvolution on the whole file" in tip
 

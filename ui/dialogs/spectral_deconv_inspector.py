@@ -187,6 +187,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._mz_axis = None          # cached m/z of each column
         self._noise_cache: dict = {}  # noise percentile -> whole-run noise levels
         self._windows: list = []      # [(w_start, w_end, [peaks_in_window]), ...]
+        self._windows_gp = None       # WindowGroupingParams the windows were built from
         self._current_window_idx: int = 0
         self._preview_worker = None
         self._current_preview_offset_min: float = float(initial_offset_min)
@@ -263,7 +264,7 @@ class SpectralDeconvInspectorDialog(QDialog):
         self._offset_reset_btn = QPushButton("Reset")
         self._offset_reset_btn.setToolTip(tooltip_html(
             "Set the preview offset to 0 min. The saved offset changes only when you click "
-            "Save Offset."))
+            "Save Offset or Save Offset to Folder…"))
         self._offset_apply_btn = QPushButton("Save Offset")
         self._offset_apply_btn.setToolTip(tooltip_html(
             "Save this MS time offset for this .D file and the settings shown here (Deconvolve "
@@ -588,6 +589,7 @@ class SpectralDeconvInspectorDialog(QDialog):
             self._noise_cache = {}
 
         gp = self._read_grouping_params()   # no excluded-m/z parse: windows never need it
+        self._windows_gp = gp               # what the current window list was built from
         _xlabels = shifted_xlabels(self._ms, self._current_preview_offset_min)
         rt_min = float(_xlabels[0])
         rt_max = float(_xlabels[-1])
@@ -711,6 +713,13 @@ class SpectralDeconvInspectorDialog(QDialog):
         if params is None:
             return
         dp, gp = params
+        # Prev/Next/the combo reach here without Preview's re-windowing. After a Gap tolerance,
+        # Padding fraction or Max peaks change, re-window first (the index is clamped), so the
+        # preview, and the cleared stale cue, never describe the old window layout.
+        if gp != self._windows_gp:
+            self._rebuild_windows()
+            if not self._windows:
+                return
 
         self.set_controls_enabled(False)
         self._status_label.setText("Running deconvolution…")
