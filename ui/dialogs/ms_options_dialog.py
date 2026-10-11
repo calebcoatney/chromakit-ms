@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QFormLayout,
     QLabel, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton,
-    QRadioButton, QButtonGroup, QGroupBox, QSlider, QLineEdit
+    QRadioButton, QButtonGroup, QGroupBox, QSlider, QLineEdit, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, QSettings
 
@@ -223,7 +223,7 @@ class MSOptionsDialog(QDialog):
         self.tab_widget.addTab(tab, "Background Subtraction (Fallback)")
     
     def _create_spectral_deconv_tab(self):
-        """Create the Spectral Deconvolution (ADAP-GC) options tab."""
+        """Create the Spectral Deconvolution (correlation grouping, after MZmine) options tab."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
@@ -270,59 +270,79 @@ class MSOptionsDialog(QDialog):
 
         layout.addWidget(grouping_group)
 
-        # --- ADAP-GC Parameters ---
-        adap_group = QGroupBox("ADAP-GC Parameters")
-        adap_layout = QFormLayout(adap_group)
+        # --- Ion Peak Detection (local minimum resolver, after mzmine) ---
+        peak_group = QGroupBox("Ion Peak Detection")
+        peak_form = QFormLayout(peak_group)
 
-        self.min_cluster_distance_spin = QDoubleSpinBox()
-        self.min_cluster_distance_spin.setRange(0.0001, 1.0)
-        self.min_cluster_distance_spin.setSingleStep(0.001)
-        self.min_cluster_distance_spin.setDecimals(4)
-        self.min_cluster_distance_spin.setToolTip("DBSCAN eps — max RT gap within a cluster (min)")
-        adap_layout.addRow("Min cluster distance (min):", self.min_cluster_distance_spin)
+        self.noise_percentile_spin = QDoubleSpinBox()
+        self.noise_percentile_spin.setRange(0.0, 1.0)
+        self.noise_percentile_spin.setDecimals(3)
+        self.noise_percentile_spin.setSingleStep(0.05)
+        self.noise_percentile_spin.setToolTip(
+            "Ignore each ion's weakest points: the cut is this percentile of that ion's\n"
+            "intensities over the whole run.")
+        peak_form.addRow("Noise percentile:", self.noise_percentile_spin)
 
-        self.min_cluster_size_spin = QSpinBox()
-        self.min_cluster_size_spin.setRange(1, 20)
-        self.min_cluster_size_spin.setToolTip("DBSCAN min_samples — minimum EIC peaks per cluster")
-        adap_layout.addRow("Min cluster size:", self.min_cluster_size_spin)
+        self.search_range_spin = QDoubleSpinBox()
+        self.search_range_spin.setRange(0.001, 1.0)
+        self.search_range_spin.setDecimals(3)
+        self.search_range_spin.setSingleStep(0.005)
+        self.search_range_spin.setToolTip(
+            "A dip that is the lowest point within ± this range (min) splits two peaks.\n"
+            "Set near one peak width.")
+        peak_form.addRow("Search range (min):", self.search_range_spin)
 
-        self.min_cluster_intensity_spin = QDoubleSpinBox()
-        self.min_cluster_intensity_spin.setRange(0.0, 1e8)
-        self.min_cluster_intensity_spin.setSingleStep(100.0)
-        self.min_cluster_intensity_spin.setDecimals(0)
-        self.min_cluster_intensity_spin.setToolTip("Drop clusters below this max intensity (counts)")
-        adap_layout.addRow("Min cluster intensity:", self.min_cluster_intensity_spin)
+        self.min_peak_height_spin = QDoubleSpinBox()
+        self.min_peak_height_spin.setRange(0.0, 1e9)
+        self.min_peak_height_spin.setDecimals(0)
+        self.min_peak_height_spin.setSingleStep(100.0)
+        self.min_peak_height_spin.setToolTip("Ignore ion peaks below this height (counts).")
+        peak_form.addRow("Min peak height (counts):", self.min_peak_height_spin)
 
-        self.min_eic_prominence_spin = QDoubleSpinBox()
-        self.min_eic_prominence_spin.setRange(0.0, 1e8)
-        self.min_eic_prominence_spin.setSingleStep(500.0)
-        self.min_eic_prominence_spin.setDecimals(0)
-        self.min_eic_prominence_spin.setSpecialValueText("Off")
-        self.min_eic_prominence_spin.setToolTip(
-            "Min prominence (counts) for EIC peak detection.\n"
-            "Rejects noise bumps that don't rise meaningfully above\n"
-            "their local baseline. 0 = disabled. Recommended: 1000-5000."
-        )
-        adap_layout.addRow("Min EIC prominence:", self.min_eic_prominence_spin)
+        self.min_top_edge_ratio_spin = QDoubleSpinBox()
+        self.min_top_edge_ratio_spin.setRange(1.0, 100.0)
+        self.min_top_edge_ratio_spin.setDecimals(2)
+        self.min_top_edge_ratio_spin.setSingleStep(0.1)
+        self.min_top_edge_ratio_spin.setToolTip("A peak's top must exceed each edge by this factor.")
+        peak_form.addRow("Min peak top/edge ratio:", self.min_top_edge_ratio_spin)
 
-        self.shape_sim_threshold_spin = QDoubleSpinBox()
-        self.shape_sim_threshold_spin.setRange(1.0, 90.0)
-        self.shape_sim_threshold_spin.setSingleStep(1.0)
-        self.shape_sim_threshold_spin.setDecimals(1)
-        self.shape_sim_threshold_spin.setToolTip("Max angle (°) between EIC shapes in the same cluster")
-        adap_layout.addRow("Shape similarity threshold (°):", self.shape_sim_threshold_spin)
+        self.min_points_spin = QSpinBox()
+        self.min_points_spin.setRange(1, 100)
+        self.min_points_spin.setToolTip("Ignore ion peaks with fewer points (spikes).")
+        peak_form.addRow("Min points per peak:", self.min_points_spin)
+        layout.addWidget(peak_group)
 
-        self.model_peak_choice_combo = QComboBox()
-        self.model_peak_choice_combo.addItems(["Sharpness", "Intensity", "m/z"])
-        self.model_peak_choice_combo.setToolTip("Criterion for selecting the representative EIC peak")
-        adap_layout.addRow("Model peak choice:", self.model_peak_choice_combo)
+        # --- Grouping (RT grouping + shape correlation, after mzmine) ---
+        group_box = QGroupBox("Grouping")
+        group_form = QFormLayout(group_box)
+
+        self.rt_tolerance_spin = QDoubleSpinBox()
+        self.rt_tolerance_spin.setRange(0.001, 1.0)
+        self.rt_tolerance_spin.setDecimals(3)
+        self.rt_tolerance_spin.setSingleStep(0.005)
+        self.rt_tolerance_spin.setToolTip(
+            "How far (min) an ion's apex may sit from its group's representative ion.")
+        group_form.addRow("RT tolerance (min):", self.rt_tolerance_spin)
+
+        self.min_r_spin = QDoubleSpinBox()
+        self.min_r_spin.setRange(0.0, 1.0)
+        self.min_r_spin.setDecimals(2)
+        self.min_r_spin.setSingleStep(0.05)
+        self.min_r_spin.setToolTip(
+            "Pearson correlation an ion's peak shape needs with the representative ion to join.")
+        group_form.addRow("Min shape correlation (r):", self.min_r_spin)
+
+        self.min_ions_spin = QSpinBox()
+        self.min_ions_spin.setRange(1, 100)
+        self.min_ions_spin.setToolTip("Drop groups with fewer ions.")
+        group_form.addRow("Min ions per spectrum:", self.min_ions_spin)
 
         self.excluded_mz_edit = QLineEdit()
-        self.excluded_mz_edit.setPlaceholderText("e.g. 73, 147, 221  (leave blank for none)")
-        self.excluded_mz_edit.setToolTip("Comma-separated m/z values to exclude (e.g. TMS artifacts)")
-        adap_layout.addRow("Excluded m/z:", self.excluded_mz_edit)
-
-        layout.addWidget(adap_group)
+        self.excluded_mz_edit.setPlaceholderText("e.g. 73, 147, 221")
+        self.excluded_mz_edit.setToolTip(
+            "Comma-separated m/z values (±0.5) that can't be a group's lead ion.")
+        group_form.addRow("Excluded m/z:", self.excluded_mz_edit)
+        layout.addWidget(group_box)
         layout.addStretch()
 
         self.tab_widget.addTab(tab, "Spectral Deconvolution")
@@ -544,30 +564,21 @@ class MSOptionsDialog(QDialog):
         self.high_corr_threshold_spin.setValue(self.settings.value("ms_search/high_corr_threshold", 0.5, float))
 
         # Spectral Deconvolution tab
-        self.gap_tolerance_spin.setValue(
-            self.settings.value("ms_spectral_deconv/gap_tolerance", 0.0, float))
-        self.padding_fraction_spin.setValue(
-            self.settings.value("ms_spectral_deconv/padding_fraction", 0.5, float))
-        self.rt_match_tolerance_spin.setValue(
-            self.settings.value("ms_spectral_deconv/rt_match_tolerance", 0.05, float))
-        self.max_window_peaks_spin.setValue(
-            self.settings.value("ms_spectral_deconv/max_window_peaks", 10, int))
-        self.min_cluster_distance_spin.setValue(
-            self.settings.value("ms_spectral_deconv/min_cluster_distance", 0.005, float))
-        self.min_cluster_size_spin.setValue(
-            self.settings.value("ms_spectral_deconv/min_cluster_size", 2, int))
-        self.min_cluster_intensity_spin.setValue(
-            self.settings.value("ms_spectral_deconv/min_cluster_intensity", 200.0, float))
-        self.min_eic_prominence_spin.setValue(
-            self.settings.value("ms_spectral_deconv/min_eic_prominence", 1000.0, float))
-        self.shape_sim_threshold_spin.setValue(
-            self.settings.value("ms_spectral_deconv/shape_sim_threshold", 30.0, float))
-        choice_map = {"sharpness": 0, "intensity": 1, "mz": 2}
-        self.model_peak_choice_combo.setCurrentIndex(
-            choice_map.get(
-                self.settings.value("ms_spectral_deconv/model_peak_choice", "sharpness", str), 0))
-        self.excluded_mz_edit.setText(
-            self.settings.value("ms_spectral_deconv/excluded_mz", "", str))
+        from logic.spectral_deconv_settings import load_spectral_deconv_settings
+        dp, gp = load_spectral_deconv_settings(self.settings)
+        self.gap_tolerance_spin.setValue(gp.gap_tolerance or 0.0)
+        self.padding_fraction_spin.setValue(gp.padding_fraction)
+        self.rt_match_tolerance_spin.setValue(gp.rt_match_tolerance)
+        self.max_window_peaks_spin.setValue(gp.max_window_peaks)
+        self.noise_percentile_spin.setValue(dp.noise_percentile)
+        self.search_range_spin.setValue(dp.search_range)
+        self.min_peak_height_spin.setValue(dp.min_peak_height)
+        self.min_top_edge_ratio_spin.setValue(dp.min_top_edge_ratio)
+        self.min_points_spin.setValue(dp.min_points)
+        self.rt_tolerance_spin.setValue(dp.rt_tolerance)
+        self.min_r_spin.setValue(dp.min_r)
+        self.min_ions_spin.setValue(dp.min_ions)
+        self.excluded_mz_edit.setText(", ".join(f"{m:g}" for m in dp.excluded_mz))
 
     def _save_settings(self):
         """Save settings to QSettings."""
@@ -616,29 +627,35 @@ class MSOptionsDialog(QDialog):
         self.settings.setValue("ms_search/high_corr_threshold", self.high_corr_threshold_spin.value())
 
         # Spectral Deconvolution tab
-        self.settings.setValue("ms_spectral_deconv/gap_tolerance",
-                               self.gap_tolerance_spin.value())
-        self.settings.setValue("ms_spectral_deconv/padding_fraction",
-                               self.padding_fraction_spin.value())
-        self.settings.setValue("ms_spectral_deconv/rt_match_tolerance",
-                               self.rt_match_tolerance_spin.value())
-        self.settings.setValue("ms_spectral_deconv/max_window_peaks",
-                               self.max_window_peaks_spin.value())
-        self.settings.setValue("ms_spectral_deconv/min_cluster_distance",
-                               self.min_cluster_distance_spin.value())
-        self.settings.setValue("ms_spectral_deconv/min_cluster_size",
-                               self.min_cluster_size_spin.value())
-        self.settings.setValue("ms_spectral_deconv/min_cluster_intensity",
-                               self.min_cluster_intensity_spin.value())
-        self.settings.setValue("ms_spectral_deconv/min_eic_prominence",
-                               self.min_eic_prominence_spin.value())
-        self.settings.setValue("ms_spectral_deconv/shape_sim_threshold",
-                               self.shape_sim_threshold_spin.value())
-        choice_list = ["sharpness", "intensity", "mz"]
-        self.settings.setValue("ms_spectral_deconv/model_peak_choice",
-                               choice_list[self.model_peak_choice_combo.currentIndex()])
-        self.settings.setValue("ms_spectral_deconv/excluded_mz",
-                               self.excluded_mz_edit.text().strip())
+        from logic.spectral_deconv_settings import save_spectral_deconv_settings
+        dp, gp = self._read_spectral_deconv_params()
+        save_spectral_deconv_settings(self.settings, dp, gp)
+
+    def _read_spectral_deconv_params(self):
+        """Widget values as (CorrelationDeconvParams, WindowGroupingParams); ValueError on bad m/z."""
+        from logic.correlation_grouping import CorrelationDeconvParams
+        from logic.spectral_deconv_runner import WindowGroupingParams
+        from logic.spectral_deconv_settings import parse_mz_list
+        excluded = parse_mz_list(self.excluded_mz_edit.text(), strict=True)
+        raw_gap = self.gap_tolerance_spin.value()
+        gp = WindowGroupingParams(
+            gap_tolerance=None if raw_gap == 0.0 else raw_gap,
+            padding_fraction=self.padding_fraction_spin.value(),
+            rt_match_tolerance=self.rt_match_tolerance_spin.value(),
+            max_window_peaks=self.max_window_peaks_spin.value(),
+        )
+        dp = CorrelationDeconvParams(
+            noise_percentile=self.noise_percentile_spin.value(),
+            search_range=self.search_range_spin.value(),
+            min_peak_height=self.min_peak_height_spin.value(),
+            min_top_edge_ratio=self.min_top_edge_ratio_spin.value(),
+            min_points=self.min_points_spin.value(),
+            rt_tolerance=self.rt_tolerance_spin.value(),
+            min_r=self.min_r_spin.value(),
+            min_ions=self.min_ions_spin.value(),
+            excluded_mz=excluded,
+        )
+        return dp, gp
 
     def _restore_defaults(self):
         """Restore default values."""
@@ -682,15 +699,21 @@ class MSOptionsDialog(QDialog):
         self.high_corr_threshold_spin.setValue(0.5)
 
         # Spectral Deconvolution tab
-        self.gap_tolerance_spin.setValue(0.0)
-        self.padding_fraction_spin.setValue(0.5)
-        self.rt_match_tolerance_spin.setValue(0.05)
-        self.max_window_peaks_spin.setValue(10)
-        self.min_cluster_distance_spin.setValue(0.005)
-        self.min_cluster_size_spin.setValue(2)
-        self.min_cluster_intensity_spin.setValue(200.0)
-        self.shape_sim_threshold_spin.setValue(30.0)
-        self.model_peak_choice_combo.setCurrentIndex(0)
+        from logic.correlation_grouping import CorrelationDeconvParams
+        from logic.spectral_deconv_runner import WindowGroupingParams
+        dp, gp = CorrelationDeconvParams(), WindowGroupingParams()
+        self.gap_tolerance_spin.setValue(gp.gap_tolerance or 0.0)
+        self.padding_fraction_spin.setValue(gp.padding_fraction)
+        self.rt_match_tolerance_spin.setValue(gp.rt_match_tolerance)
+        self.max_window_peaks_spin.setValue(gp.max_window_peaks)
+        self.noise_percentile_spin.setValue(dp.noise_percentile)
+        self.search_range_spin.setValue(dp.search_range)
+        self.min_peak_height_spin.setValue(dp.min_peak_height)
+        self.min_top_edge_ratio_spin.setValue(dp.min_top_edge_ratio)
+        self.min_points_spin.setValue(dp.min_points)
+        self.rt_tolerance_spin.setValue(dp.rt_tolerance)
+        self.min_r_spin.setValue(dp.min_r)
+        self.min_ions_spin.setValue(dp.min_ions)
         self.excluded_mz_edit.clear()
 
     def get_options(self):
@@ -742,6 +765,11 @@ class MSOptionsDialog(QDialog):
         return options
     
     def accept(self):
-        """Save settings when OK is clicked."""
+        """Save settings when OK is clicked; refuse to close on an invalid excluded m/z."""
+        try:
+            self._read_spectral_deconv_params()
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid excluded m/z", str(e))
+            return
         self._save_settings()
         super().accept()
