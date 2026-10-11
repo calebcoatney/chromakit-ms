@@ -8,6 +8,8 @@ pytest.importorskip("pytestqt")
 
 from PySide6.QtCore import QSettings
 
+BAD_MZ = "Excluded m/z must be numbers separated by commas or spaces, e.g. 73, 147, 207 ("
+
 
 def _fake_rainbow(monkeypatch):
     x = np.round(np.arange(0.0, 2.0, 0.005), 6)
@@ -106,10 +108,10 @@ def test_invalid_excluded_mz_blocks_preview_and_apply(dialog, qtbot):
     dialog._excluded_mz_edit.setText("73, abc")
     with qtbot.assertNotEmitted(dialog.rerun_requested):
         dialog._on_apply_clicked()
-    assert dialog._status_label.text().startswith("Invalid excluded m/z:")
+    assert dialog._status_label.text().startswith(BAD_MZ)
     dialog._status_label.setText("")
     dialog._on_preview_clicked()
-    assert dialog._status_label.text().startswith("Invalid excluded m/z:")
+    assert dialog._status_label.text().startswith(BAD_MZ)
     assert dialog._preview_worker is None
     s = QSettings(dialog._ini_path, QSettings.IniFormat)
     assert s.value("ms_spectral_deconv/excluded_mz", None) is None   # nothing saved
@@ -123,7 +125,7 @@ def test_bad_excluded_mz_never_reaches_the_app(dialog, qtbot):
         dialog._on_offset_apply_clicked()
     with qtbot.assertNotEmitted(dialog.apply_offset_to_folder_requested):
         dialog._on_offset_apply_folder_clicked()
-    assert dialog._status_label.text().startswith("Invalid excluded m/z:")
+    assert dialog._status_label.text().startswith(BAD_MZ)
 
 
 def test_noise_levels_are_whole_run_and_cached(dialog):
@@ -148,3 +150,46 @@ def test_preview_components_match_the_runner(dialog):
     np.testing.assert_array_equal(twin.deconvolved_spectrum['mz'], sorted(spec))
     np.testing.assert_allclose(twin.deconvolved_spectrum['intensities'],
                                [spec[m] for m in sorted(spec)])
+
+
+def test_bad_excluded_mz_explains_and_selects_the_field(dialog):
+    """Review #8: the error went to the status line, away from the field, with no fix."""
+    dialog._excluded_mz_edit.setText("73 abc")
+    dialog._on_preview_clicked()
+    assert dialog._status_label.text() == BAD_MZ + "'abc' is not a number)."
+    assert dialog.focusWidget() is dialog._excluded_mz_edit
+    assert dialog._excluded_mz_edit.selectedText() == "73 abc"
+
+
+def test_space_separated_excluded_mz_previews(dialog, qtbot):
+    dialog._excluded_mz_edit.setText("73 147")
+    dp, _ = dialog._read_params_or_report()
+    assert dp.excluded_mz == [73.0, 147.0]
+
+
+def test_settings_scroll_and_the_buttons_stay_pinned(dialog, qtbot):
+    """Review #13: the 829 px settings panel squeezed its spin boxes at the 650 px minimum."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QFrame, QScrollArea
+    scrolls = dialog.findChildren(QScrollArea)
+    assert len(scrolls) == 1
+    scroll = scrolls[0]
+    assert scroll.widgetResizable() and scroll.frameShape() == QFrame.Shape.NoFrame
+    assert scroll.focusPolicy() == Qt.FocusPolicy.NoFocus
+    inner = scroll.widget()
+    for w in (dialog._offset_slider, dialog._gap_spin, dialog._noise_percentile_spin,
+              dialog._min_r_spin, dialog._excluded_mz_edit, dialog._top_n_spin,
+              dialog._show_rejected_check):
+        assert inner.isAncestorOf(w)
+    for btn in (dialog._preview_btn, dialog._apply_btn, dialog._close_btn):
+        assert not scroll.isAncestorOf(btn)
+    assert dialog._close_btn.text() == "Close"
+
+    dialog.resize(1100, 650)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    for spin in (dialog._gap_spin, dialog._noise_percentile_spin, dialog._min_ions_spin):
+        assert spin.height() >= spin.minimumSizeHint().height()      # not squeezed
+    bottom = dialog._close_btn.mapTo(dialog, dialog._close_btn.rect().bottomLeft()).y()
+    assert bottom <= dialog.height()                                  # buttons on screen
+    assert scroll.verticalScrollBar().maximum() > 0                   # the panel scrolls instead

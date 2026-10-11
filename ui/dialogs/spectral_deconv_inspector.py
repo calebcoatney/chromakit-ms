@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QVBoxLayout, QSplitter, QWidget,
     QGroupBox, QFormLayout, QLabel, QSpinBox,
     QComboBox, QCheckBox, QPushButton, QProgressBar,
-    QTreeWidget, QTreeWidgetItem, QHeaderView, QSlider,
+    QTreeWidget, QTreeWidgetItem, QHeaderView, QSlider, QScrollArea, QFrame,
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -25,7 +25,7 @@ from logic.ion_peak_resolver import whole_run_noise_levels
 from logic.spectral_deconv_settings import save_spectral_deconv_settings, parse_mz_list
 from logic.spectral_deconv_runner import WindowGroupingParams, _group_peaks_into_windows
 from logic.ms_time import shifted_xlabels
-from ui.dialogs.spectral_deconv_fields import build_setting_boxes
+from ui.dialogs.spectral_deconv_fields import build_setting_boxes, invalid_mz_message
 
 
 class _PreviewWorkerSignals(QObject):
@@ -152,8 +152,10 @@ class SpectralDeconvInspectorDialog(QDialog):
         splitter.setSizes([320, 780])
 
     def _build_params_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
+        """Settings in a scroll area (taller than the dialog's minimum), buttons pinned below."""
+        settings = QWidget()
+        layout = QVBoxLayout(settings)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignTop)
 
         # MS time offset group
@@ -245,18 +247,32 @@ class SpectralDeconvInspectorDialog(QDialog):
 
         layout.addStretch()
 
-        # Buttons
+        scroll = QScrollArea()
+        scroll.setWidget(settings)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFocusPolicy(Qt.NoFocus)   # no invisible tab stop; Tab still scrolls to fields
+        # Scroll vertically only; keep the panel as wide as its contents need.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(settings.minimumSizeHint().width()
+                               + scroll.verticalScrollBar().sizeHint().width())
+
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.addWidget(scroll, 1)
+
+        # Buttons, outside the scroll area so they are always visible
         self._preview_btn = QPushButton("Preview")
         self._preview_btn.clicked.connect(self._on_preview_clicked)
-        layout.addWidget(self._preview_btn)
+        panel_layout.addWidget(self._preview_btn)
 
         self._apply_btn = QPushButton("Apply to All && Rerun")
         self._apply_btn.clicked.connect(self._on_apply_clicked)
-        layout.addWidget(self._apply_btn)
+        panel_layout.addWidget(self._apply_btn)
 
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.close)
-        layout.addWidget(close_btn)
+        self._close_btn = QPushButton("Close")
+        self._close_btn.clicked.connect(self.close)
+        panel_layout.addWidget(self._close_btn)
 
         return panel
 
@@ -357,11 +373,13 @@ class SpectralDeconvInspectorDialog(QDialog):
         return dp, gp
 
     def _read_params_or_report(self):
-        """``_read_params()``, or None with the error in the status line (bad excluded m/z)."""
+        """``_read_params()``, or None: a bad excluded m/z is explained and its field selected."""
         try:
             return self._read_params()
         except ValueError as e:
-            self._status_label.setText(f"Invalid excluded m/z: {e}")
+            self._status_label.setText(invalid_mz_message(e))
+            self._excluded_mz_edit.setFocus()
+            self._excluded_mz_edit.selectAll()
             return None
 
     def read_current_params(self) -> tuple[CorrelationDeconvParams, WindowGroupingParams]:
