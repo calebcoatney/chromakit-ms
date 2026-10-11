@@ -645,6 +645,10 @@ class SpectralDeconvInspectorDialog(QDialog):
 
     def navigate_to_peak(self, peak_index: int):
         """Called by ChromaKitApp when user clicks a peak while dialog is open."""
+        # Re-window first after an unpreviewed grouping change: the index must come from the
+        # window list _run_preview will use, or the window shown may not hold the clicked peak.
+        if self._read_grouping_params() != self._windows_gp:
+            self._rebuild_windows()
         self._navigate_to(self._window_for_peak_index(peak_index), auto_run=True)
 
     def refresh_current_window(self):

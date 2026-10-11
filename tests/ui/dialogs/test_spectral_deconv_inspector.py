@@ -453,6 +453,26 @@ def test_navigation_after_a_grouping_change_uses_the_new_windows(qtbot, tmp_path
     assert _status(dlg) != STALE
 
 
+def test_navigate_to_peak_after_a_grouping_change_shows_that_peak(qtbot, tmp_path, monkeypatch):
+    """Inspect on the MS tab with an unpreviewed grouping edit: the window shown holds the peak.
+
+    The index used to come from the old window list, then _run_preview re-windowed and reused
+    it: gap 0.1 -> 0.25 gave windows [0.3, 0.5], [0.9, 1.1] and showed index 1 for peak 0.5.
+    """
+    rts = [0.3, 0.5, 0.9, 1.1]
+    dlg = _make(qtbot, tmp_path, monkeypatch, [_peak(rt, rt - 0.02, rt + 0.02) for rt in rts])
+    assert len(dlg._windows) == 4
+    dlg._gap_spin.setValue(0.25)
+    prev = dlg._last_result
+    dlg.navigate_to_peak(1)                                   # the 0.5 min peak
+    qtbot.waitUntil(lambda: dlg._preview_worker is None and dlg._last_result is not prev,
+                    timeout=10000)
+    assert [[p.retention_time for p in w[2]] for w in dlg._windows] == [[0.3, 0.5], [0.9, 1.1]]
+    assert dlg._peaks[1] in dlg._windows[dlg._current_window_idx][2]
+    assert dlg._peaks[1] in dlg._last_result['win_peaks']
+    assert dlg._window_combo.currentIndex() == dlg._current_window_idx == 0
+
+
 # #11: crowded windows
 
 def test_group_colors_leave_gray_for_rejected():
