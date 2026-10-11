@@ -5,7 +5,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QSettings
 
-from ui.dialogs.spectral_deconv_fields import build_setting_boxes
+from ui.dialogs.spectral_deconv_fields import (
+    INVALID_MZ_TITLE, build_setting_boxes, invalid_mz_message,
+)
 
 class MSOptionsDialog(QDialog):
     """Dialog for configuring MS search options."""
@@ -36,8 +38,10 @@ class MSOptionsDialog(QDialog):
         # Create button layout
         button_layout = QHBoxLayout()
         
-        # Create restore defaults button
+        # Create restore defaults button. Not auto-default: as the first push button it
+        # would otherwise become the default, and Return in any field would restore defaults.
         self.restore_button = QPushButton("Restore Defaults")
+        self.restore_button.setAutoDefault(False)
         self.restore_button.clicked.connect(self._restore_defaults)
         button_layout.addWidget(self.restore_button)
         
@@ -46,10 +50,12 @@ class MSOptionsDialog(QDialog):
         
         # Create OK and Cancel buttons
         self.ok_button = QPushButton("OK")
+        self.ok_button.setDefault(True)   # Return = OK (accept() still validates)
         self.ok_button.clicked.connect(self.accept)
         button_layout.addWidget(self.ok_button)
         
         self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setAutoDefault(False)
         self.cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(self.cancel_button)
         
@@ -58,6 +64,13 @@ class MSOptionsDialog(QDialog):
         
         # Load saved settings
         self._load_settings()
+
+        # Open wide enough for every tab name; the scroll-arrow tab bar caps the
+        # size hint at 200 px, which hid the later tabs. Users may still shrink to 450.
+        margins = self.layout.contentsMargins()
+        tabs_width = (self.tab_widget.tabBar().sizeHint().width()
+                      + margins.left() + margins.right() + 8)   # 8: slack for the style's tab frame
+        self.resize(max(self.sizeHint().width(), tabs_width), self.sizeHint().height())
     
     def _create_general_tab(self):
         """Create the general options tab."""
@@ -227,11 +240,15 @@ class MSOptionsDialog(QDialog):
     def _create_spectral_deconv_tab(self):
         """Create the Spectral Deconvolution (correlation grouping, after MZmine) options tab."""
         tab = QWidget()
+        self._spectral_deconv_tab = tab
         layout = QVBoxLayout(tab)
 
         info = QLabel(
-            "Deconvolved spectra replace point-in-time extraction for library search.\n"
-            "Run via 'Deconvolve MS' button after FID integration."
+            "Spectral deconvolution gives each integrated FID peak a cleaner spectrum for "
+            "library search, keeping only the ions that elute together with the same peak "
+            "shape. It runs when you click Deconvolve MS, and in batch runs before MS search. "
+            "FID peaks without a matching spectrum use the fallback spectrum (Spectrum "
+            "Extraction tab)."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -678,7 +695,11 @@ class MSOptionsDialog(QDialog):
         try:
             self._read_spectral_deconv_params()
         except ValueError as e:
-            QMessageBox.warning(self, "Invalid excluded m/z", str(e))
+            # Show the field behind the box; Qt returns focus (and the selection) to it after.
+            self.tab_widget.setCurrentWidget(self._spectral_deconv_tab)
+            self.excluded_mz_edit.setFocus()
+            self.excluded_mz_edit.selectAll()
+            QMessageBox.warning(self, INVALID_MZ_TITLE, invalid_mz_message(e))
             return
         self._save_settings()
         super().accept()

@@ -124,3 +124,112 @@ def test_options_dialog_rejects_bad_excluded_mz(qtbot, ini_settings, monkeypatch
     s = QSettings(ini_settings, QSettings.IniFormat)
     assert s.value("ms_spectral_deconv/excluded_mz", None) is None   # nothing saved
     assert s.allKeys() == []   # no tab's settings were written, not only the m/z key
+
+
+def _shown_on_deconv_tab(qtbot, mod):
+    dlg = mod.MSOptionsDialog()
+    qtbot.addWidget(dlg)
+    dlg.show()
+    qtbot.waitExposed(dlg)
+    dlg.tab_widget.setCurrentWidget(dlg.excluded_mz_edit.parentWidget().parentWidget())
+    return dlg
+
+
+def _type_into(qtbot, spin, text):
+    spin.setFocus()
+    spin.selectAll()
+    qtbot.keyClicks(spin, text)
+
+
+def test_return_in_a_field_saves_like_ok(qtbot, ini_settings):
+    """Review #1: Restore Defaults was the first auto-default button, so Return restored defaults."""
+    from PySide6.QtCore import Qt
+    from logic.spectral_deconv_settings import load_spectral_deconv_settings
+    from ui.dialogs import ms_options_dialog as mod
+    dlg = _shown_on_deconv_tab(qtbot, mod)
+    assert dlg.ok_button.isDefault()
+    assert not dlg.restore_button.autoDefault() and not dlg.cancel_button.autoDefault()
+    dlg.excluded_mz_edit.setText("73")
+    _type_into(qtbot, dlg.min_r_spin, "0.7")
+    qtbot.keyClick(dlg.min_r_spin, Qt.Key_Return)
+    assert dlg.result() == QDialog.DialogCode.Accepted.value
+    assert not dlg.isVisible()
+    dp, _ = load_spectral_deconv_settings(QSettings(ini_settings, QSettings.IniFormat))
+    assert dp.min_r == pytest.approx(0.7) and dp.excluded_mz == [73.0]   # not the defaults
+
+
+def test_return_with_bad_excluded_mz_keeps_the_dialog_and_the_edits(qtbot, ini_settings, monkeypatch):
+    from PySide6.QtCore import Qt
+    from ui.dialogs import ms_options_dialog as mod
+    warned = []
+    monkeypatch.setattr(mod.QMessageBox, "warning", lambda *a, **k: warned.append(a))
+    dlg = _shown_on_deconv_tab(qtbot, mod)
+    dlg.excluded_mz_edit.setText("73 abc")
+    _type_into(qtbot, dlg.min_r_spin, "0.7")
+    qtbot.keyClick(dlg.min_r_spin, Qt.Key_Return)
+    assert warned and dlg.isVisible()
+    assert dlg.min_r_spin.value() == pytest.approx(0.7)          # nothing restored
+    assert dlg.excluded_mz_edit.text() == "73 abc"
+    assert QSettings(ini_settings, QSettings.IniFormat).allKeys() == []
+
+
+def test_bad_excluded_mz_opens_its_tab_and_selects_the_field(qtbot, ini_settings, monkeypatch):
+    """Review #8: the warning named no location and the dialog stayed on whatever tab was open."""
+    from ui.dialogs import ms_options_dialog as mod
+    warned = []
+    monkeypatch.setattr(mod.QMessageBox, "warning",
+                        lambda parent, title, text, *a, **k: warned.append((title, text)))
+    dlg = mod.MSOptionsDialog()
+    qtbot.addWidget(dlg)
+    dlg.show()
+    dlg.tab_widget.setCurrentIndex(0)                              # General
+    dlg.excluded_mz_edit.setText("73 147; 207")
+    dlg.accept()
+    assert warned == [("Excluded m/z not valid",
+                       "Excluded m/z must be numbers separated by commas or spaces, "
+                       "e.g. 73, 147, 207 ('147;' is not a number).")]
+    assert dlg.tab_widget.tabText(dlg.tab_widget.currentIndex()) == "Spectral Deconvolution"
+    assert dlg.focusWidget() is dlg.excluded_mz_edit
+    assert dlg.excluded_mz_edit.selectedText() == "73 147; 207"
+
+
+def test_space_separated_excluded_mz_is_saved(qtbot, ini_settings):
+    from logic.spectral_deconv_settings import load_spectral_deconv_settings
+    from ui.dialogs.ms_options_dialog import MSOptionsDialog
+    dlg = MSOptionsDialog()
+    qtbot.addWidget(dlg)
+    dlg.excluded_mz_edit.setText("73 147 207")
+    dlg.accept()
+    dp, _ = load_spectral_deconv_settings(QSettings(ini_settings, QSettings.IniFormat))
+    assert dp.excluded_mz == [73.0, 147.0, 207.0]
+
+
+def test_intro_explains_where_it_runs_and_the_fallback(qtbot, ini_settings):
+    """Review #20."""
+    from PySide6.QtWidgets import QLabel
+    from ui.dialogs.ms_options_dialog import MSOptionsDialog
+    dlg = MSOptionsDialog()
+    qtbot.addWidget(dlg)
+    tab = dlg.excluded_mz_edit.parentWidget().parentWidget()
+    texts = [lbl.text() for lbl in tab.findChildren(QLabel) if lbl.wordWrap()]
+    assert texts == [
+        "Spectral deconvolution gives each integrated FID peak a cleaner spectrum for library "
+        "search, keeping only the ions that elute together with the same peak shape. It runs "
+        "when you click Deconvolve MS, and in batch runs before MS search. FID peaks without a "
+        "matching spectrum use the fallback spectrum (Spectrum Extraction tab)."]
+
+
+def test_opens_wide_enough_to_show_every_tab(qtbot, ini_settings):
+    """Review #23: at 450 px the Spectral Deconvolution tab hid behind tab-bar scroll arrows."""
+    from PySide6.QtWidgets import QToolButton
+    from ui.dialogs.ms_options_dialog import MSOptionsDialog
+    dlg = MSOptionsDialog()
+    qtbot.addWidget(dlg)
+    dlg.show()
+    qtbot.waitExposed(dlg)
+    bar = dlg.tab_widget.tabBar()
+    assert not [b for b in bar.findChildren(QToolButton) if b.isVisible()]   # no scroll arrows
+    for i in range(bar.count()):
+        assert bar.tabRect(i).right() <= bar.width()
+        assert bar.tabRect(i).width() >= bar.tabSizeHint(i).width()      # not elided
+    assert dlg.minimumWidth() == 450
