@@ -65,12 +65,13 @@ class BatchJobDialog(QDialog):
         self.ms_search_check.setChecked(True)
         options_layout.addWidget(self.ms_search_check)
 
-        # Spectral deconvolution (correlation grouping, after MZmine)
+        # Spectral deconvolution (correlation grouping, after mzmine)
         self.spectral_deconv_check = QCheckBox("Run spectral deconvolution before MS search (GC-MS only)")
         self.spectral_deconv_check.setToolTip(
-            "Run spectral deconvolution (correlation grouping, after MZmine) to separate co-eluting analytes' mass spectra "
-            "before MS library search. Uses parameters from MS Options → Spectral Deconvolution tab. "
-            "Ignored for non-GC-MS data."
+            "<p>Before MS library search, give each FID peak a cleaner mass spectrum built from the "
+            "ions that elute with it, using the settings in MS Options → Spectral Deconvolution. "
+            "Compounds closer than about 1.5 peak widths usually still come out as one spectrum. "
+            "Ignored for non-GC-MS data.</p>"
         )
         self.spectral_deconv_check.setChecked(True)
         options_layout.addWidget(self.spectral_deconv_check)

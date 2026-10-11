@@ -213,3 +213,25 @@ def test_no_siblings_message_names_save_offset(offset_app, monkeypatch):
     offset_app.data_handler.available_directories = ["/a.D"]
     ChromaKitApp._on_inspector_apply_offset_to_folder_requested(offset_app, 0.01, "manual")
     assert shown and "Save Offset" in shown[0] and "'Apply'" not in shown[0]
+
+
+# ── #5, #21: tooltips say what the option does ─────────────────────────────────
+
+def test_batch_deconvolution_tooltip(qtbot):
+    from ui.dialogs.batch_job_dialog import BatchJobDialog
+    dlg = BatchJobDialog()
+    qtbot.addWidget(dlg)
+    assert dlg.spectral_deconv_check.toolTip() == (
+        "<p>Before MS library search, give each FID peak a cleaner mass spectrum built from the "
+        "ions that elute with it, using the settings in MS Options → Spectral Deconvolution. "
+        "Compounds closer than about 1.5 peak widths usually still come out as one spectrum. "
+        "Ignored for non-GC-MS data.</p>")
+
+
+def test_deconvolve_ms_button_tooltip(qtbot):
+    from ui.frames.buttons import ButtonFrame
+    frame = ButtonFrame()
+    qtbot.addWidget(frame)
+    assert frame.deconvolve_ms_button.toolTip() == (
+        "<p>Give each integrated FID peak a cleaner mass spectrum, built from the ions that "
+        "elute with it. Settings: MS Options → Spectral Deconvolution.</p>")

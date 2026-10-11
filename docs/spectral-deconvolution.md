@@ -25,8 +25,8 @@ groups of FID peaks.
    ion (the strongest not on the excluded list) sets its retention time, and
    it is matched to the nearest FID peak within the RT match tolerance.
 
-FID peaks with no matched group are searched with their apex spectrum, as
-before.
+FID peaks with no matched group are searched with the fallback spectrum (MS
+Options → Spectrum Extraction (Fallback)), as before.
 
 ## Settings (MS Options → Spectral Deconvolution, and the Inspector)
 
@@ -47,15 +47,22 @@ before.
 | Excluded m/z | (empty) | — | — (values here, ±0.5, can't lead a group, e.g. column-bleed ions; they stay in its spectrum. If every ion of a group is excluded, its strongest ion leads) |
 
 The **Spectral Deconvolution Inspector** previews one window at a time.
-- **Top plot:** ion peaks coloured by group, ★ = lead ion, hollow = rejected.
-- **Bottom plot:** traces with each peak's extent shaded and its correlation r.
+- **Top plot:** ion peaks coloured by group, ★ = lead ion (labelled with its
+  group number), hollow = rejected.
+- **Bottom plot:** traces with each ion's correlation r, and each lead ion's
+  extent shaded.
 - Click a group to library-search its spectrum.
+- **Preview** (or Return) reruns only the window shown and saves nothing.
+  **Save & Rerun File** saves the settings, which Deconvolve MS, MS Options and
+  batch then use, and reruns the whole file. **Save Offset** saves the MS time
+  offset for this .D file and the settings, then reruns the whole file; **Save
+  Offset to Folder…** also gives the offset to the other .D files you pick.
 
 ## Known limits
 
 - **Close co-eluters usually merge.** Compounds whose apexes are closer than
   about 1.5 peak widths (FWHM) usually come out as one spectrum, assigned to one
-  of the FID peaks; the other FID peak is searched with its apex spectrum. In a
+  of the FID peaks; the other FID peak is searched with the fallback spectrum. In a
   simulation with 1.7 s wide (FWHM) peaks, two equal compounds 2 s apart merged
   and 3 s apart separated at the default settings; changing the search range or
   the RT tolerance did not separate the 2 s pair.
