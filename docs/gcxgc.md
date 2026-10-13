@@ -60,8 +60,8 @@ Layout and detection settings take effect when you click Integrate.
   (under the plot) searches every peak, writes the best hit into the Compound and Match Score columns
   and records the top hits in the JSON. Each MS Search All starts by clearing the previous IDs; if you
   cancel it, the peaks it did not reach have no ID and the JSON's `search_complete` is false. Both need
-  a loaded library. Use Vector Search (the default) or Word2Vec Search, set under Configure…; Hybrid
-  Search is not available with the current ms-toolkit.
+  a loaded library. Use Vector Search (the default, weighted with NIST11) or Word2Vec Search, set
+  under Configure…; Hybrid Search is not available with the current ms-toolkit.
 
 ## Export
 

@@ -199,3 +199,49 @@ def test_ms_search_explicit_options_top_n_wins_over_convenience_field(client):
     assert call_kwargs.get('top_n') == 3, (
         f"options['top_n']=3 must win over top-level top_n=10, got {call_kwargs.get('top_n')}"
     )
+
+
+def test_ms_search_defaults_to_vector_search_with_nist11(client):
+    """A request with no options searches by vector with NIST11 weighting."""
+    ms_toolkit = MagicMock()
+    ms_toolkit.search_vector.return_value = [("Hexane", 0.93)]
+    ms_toolkit.library = {}
+    singleton._toolkit = ms_toolkit
+    singleton._loaded_paths = {'library_path': '/x'}
+
+    response = client.post(
+        '/api/ms/search',
+        json={'spectrum': {'mz': [50.0, 73.0], 'intensities': [1000.0, 500.0]}},
+    )
+
+    assert response.status_code == 200
+    ms_toolkit.search_vector.assert_called_once()
+    ms_toolkit.search_w2v.assert_not_called()
+    assert ms_toolkit.search_vector.call_args.kwargs["weighting_scheme"] == "NIST11"
+
+
+def test_ms_search_honours_an_explicit_weighting(client):
+    ms_toolkit = MagicMock()
+    ms_toolkit.search_vector.return_value = []
+    ms_toolkit.library = {}
+    singleton._toolkit = ms_toolkit
+    singleton._loaded_paths = {'library_path': '/x'}
+
+    response = client.post(
+        '/api/ms/search',
+        json={
+            'spectrum': {'mz': [50.0], 'intensities': [1000.0]},
+            'options': {'weighting': 'NIST_GC'},
+        },
+    )
+
+    assert response.status_code == 200
+    assert ms_toolkit.search_vector.call_args.kwargs["weighting_scheme"] == "NIST_GC"
+
+
+def test_api_model_text_names_the_nist11_default():
+    """The documented request defaults say NIST11, not NIST_GC."""
+    from api.models import MSBatchSearchRequest
+    text = MSBatchSearchRequest.model_fields['options'].description
+    assert "'weighting': 'NIST11'" in text
+    assert "NIST_GC" not in text

@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from logic.ms_weighting import DEFAULT_WEIGHTING
 from logic.spectrum_extractor import SpectrumExtractor
 
 
@@ -69,7 +70,7 @@ def do_single_search(ms_toolkit, query_spectrum, options: dict) -> list:
             method=options.get('hybrid_method', 'auto'),
             top_n=options.get('top_n', 5),
             intensity_power=options.get('intensity_power', 0.6),
-            weighting_scheme=options.get('weighting', 'NIST_GC'),
+            weighting_scheme=options.get('weighting', DEFAULT_WEIGHTING),
             composite=(options.get('similarity', 'composite') == 'composite'),
             unmatched_method=options.get('unmatched', 'keep_all'),
             top_k_clusters=options.get('top_k_clusters', 10),
@@ -78,7 +79,7 @@ def do_single_search(ms_toolkit, query_spectrum, options: dict) -> list:
         query_spectrum,
         top_n=options.get('top_n', 5),
         composite=(options.get('similarity', 'composite') == 'composite'),
-        weighting_scheme=options.get('weighting', 'NIST_GC'),
+        weighting_scheme=options.get('weighting', DEFAULT_WEIGHTING),
         unmatched_method=options.get('unmatched', 'keep_all'),
         top_k_clusters=options.get('top_k_clusters', 10),
     )

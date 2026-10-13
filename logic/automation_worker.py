@@ -5,6 +5,7 @@ import traceback
 import datetime
 import json
 from logic.c_folder import CFolder
+from logic.ms_weighting import DEFAULT_WEIGHTING
 from logic.signal_profiles import SignalProfileRegistry, PipelineStage
 from util.thread_helpers import main_thread_dispatcher
 
@@ -727,7 +728,7 @@ class AutomationWorker(QRunnable):
                 f"MS search parameters: "
                 f"mz_shift={self.app.ms_frame.ms_toolkit.mz_shift if hasattr(self.app.ms_frame, 'ms_toolkit') else 'unknown'}, "
                 f"method={options.get('search_method', 'vector')}, "
-                f"weighting={options.get('weighting', 'NIST_GC')}"
+                f"weighting={options.get('weighting', DEFAULT_WEIGHTING)}"
             )
             self.signals.log_message.emit(param_msg)
             
