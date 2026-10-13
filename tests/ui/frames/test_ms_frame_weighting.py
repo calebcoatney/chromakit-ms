@@ -68,3 +68,22 @@ def test_frame_starts_with_vector_and_nist11(qtbot, ini_settings):
     assert frame.search_options["search_method"] == "vector"
     assert frame.search_options["weighting"] == "NIST11"
 
+
+
+def test_frame_with_no_stored_key_searches_ten_clusters(qtbot, ini_settings):
+    """A fresh install must not search with 1 cluster before MS Options is ever opened."""
+    from ui.frames.ms import MSFrame
+    frame = MSFrame()
+    qtbot.addWidget(frame)
+    assert frame.search_options["top_k_clusters"] == 10
+
+
+def test_loader_with_no_stored_key_gives_ten_clusters(ini_settings):
+    assert _loaded_options(ini_settings)["top_k_clusters"] == 10
+
+
+def test_a_stored_cluster_count_still_wins(ini_settings):
+    store = QSettings(ini_settings, QSettings.IniFormat)
+    store.setValue("ms_search/top_k_clusters", 50)
+    store.sync()
+    assert _loaded_options(ini_settings)["top_k_clusters"] == 50

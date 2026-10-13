@@ -297,11 +297,12 @@ class MSOptionsDialog(QDialog):
             self.weighting_combo.addItem(weighting_label(scheme), scheme)
         self.weighting_combo.setToolTip(
             "How m/z and intensity are weighted before a spectrum is compared with the library.\n"
-            "NIST11 is the default. On the NIST replicate benchmark it puts the right compound "
-            "first 81.7 % of the time, against 75.3 % for NIST_GC, and it also scored better on "
-            "real FPO samples.\n"
-            "Raising Clusters to Consider to 50 can add a little accuracy, at about 4 times the "
-            "search time."
+            "NIST11 is the default. In a library-against-library replicate test on NIST14, "
+            "searching all clusters, it put the right compound first 81.7 % of the time, "
+            "against 75.3 % for NIST_GC. It also scored better on real fast-pyrolysis oil "
+            "samples.\n"
+            "Raising Clusters to Consider to 50 can add a little accuracy, but the search "
+            "takes at least 4 times as long."
         )
         vector_layout.addRow("Weighting Scheme:", self.weighting_combo)
         

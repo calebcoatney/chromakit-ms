@@ -64,7 +64,7 @@ class MSFrame(QWidget):
             'unmatched': 'keep_all',
             'intensity_power': 0.6,
             'top_n': 5,
-            'top_k_clusters': 1,
+            'top_k_clusters': 10,
         }
         self._load_search_options_from_settings()
         
@@ -748,7 +748,7 @@ class MSFrame(QWidget):
             'unmatched': _idx("ms_search/unmatched", 0, unmatched_map),
             'intensity_power': s.value("ms_search/intensity_power", 0.6, float),
             'top_n': s.value("ms_search/top_n", 5, int),
-            'top_k_clusters': s.value("ms_search/top_k_clusters", 1, int),
+            'top_k_clusters': s.value("ms_search/top_k_clusters", 10, int),
         })
     
     def _init_mstoolkit(self):

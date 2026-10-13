@@ -151,6 +151,7 @@ def test_weighting_tooltip_explains_the_default(qtbot, ini_settings):
     tip = dlg.weighting_combo.toolTip()
     assert "NIST11" in tip and "default" in tip.lower()
     assert "81.7" in tip and "75.3" in tip and "NIST_GC" in tip
-    assert "FPO" in tip
+    assert "NIST14" in tip and "all clusters" in tip
+    assert "fast-pyrolysis oil" in tip and "FPO" not in tip
     assert "Clusters to Consider" in tip and "50" in tip
-    assert "4" in tip
+    assert "at least 4" in tip
