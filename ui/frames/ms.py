@@ -18,6 +18,7 @@ except ImportError:
 
 # Add this import at the top
 from ui.dialogs.ms_options_dialog import MSOptionsDialog
+from logic.ms_weighting import DEFAULT_WEIGHTING, read_weighting_scheme
 
 class MSFrame(QWidget):
     """Frame for MS library search and peak identification tools."""
@@ -59,7 +60,7 @@ class MSFrame(QWidget):
             'subtraction_method': 'min_tic',
             'subtract_weight': 0.1,
             'similarity': 'composite',
-            'weighting': 'NIST_GC',
+            'weighting': DEFAULT_WEIGHTING,
             'unmatched': 'keep_all',
             'intensity_power': 0.6,
             'top_n': 5,
@@ -727,7 +728,6 @@ class MSFrame(QWidget):
         hybrid_map = ['auto', 'fast', 'ensemble']
         subtraction_map = ['left', 'right', 'min_tic', 'average']
         similarity_map = ['cosine', 'composite']
-        weighting_map = ['None', 'NIST', 'NIST_GC']
         unmatched_map = ['keep_all', 'remove_all', 'keep_library', 'keep_experimental']
 
         def _idx(key, default, choices):
@@ -744,7 +744,7 @@ class MSFrame(QWidget):
             'subtraction_method': _idx("ms_search/subtraction_method", 2, subtraction_map),
             'subtract_weight': s.value("ms_search/subtract_weight", 0.1, float),
             'similarity': _idx("ms_search/similarity", 1, similarity_map),
-            'weighting': _idx("ms_search/weighting", 2, weighting_map),
+            'weighting': read_weighting_scheme(s),
             'unmatched': _idx("ms_search/unmatched", 0, unmatched_map),
             'intensity_power': s.value("ms_search/intensity_power", 0.6, float),
             'top_n': s.value("ms_search/top_n", 5, int),

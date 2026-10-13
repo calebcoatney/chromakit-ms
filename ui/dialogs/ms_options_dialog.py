@@ -5,6 +5,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QSettings
 
+from logic.ms_weighting import (
+    DEFAULT_WEIGHTING, read_weighting_scheme, weighting_label,
+    weighting_scheme_names, write_weighting_scheme,
+)
 from ui.dialogs.spectral_deconv_fields import (
     INVALID_MZ_TITLE, build_setting_boxes, invalid_mz_message,
 )
@@ -289,7 +293,16 @@ class MSOptionsDialog(QDialog):
         
         # Weighting scheme
         self.weighting_combo = QComboBox()
-        self.weighting_combo.addItems(["None", "NIST", "NIST_GC"])
+        for scheme in weighting_scheme_names():
+            self.weighting_combo.addItem(weighting_label(scheme), scheme)
+        self.weighting_combo.setToolTip(
+            "How m/z and intensity are weighted before a spectrum is compared with the library.\n"
+            "NIST11 is the default. On the NIST replicate benchmark it puts the right compound "
+            "first 81.7 % of the time, against 75.3 % for NIST_GC, and it also scored better on "
+            "real FPO samples.\n"
+            "Raising Clusters to Consider to 50 can add a little accuracy, at about 4 times the "
+            "search time."
+        )
         vector_layout.addRow("Weighting Scheme:", self.weighting_combo)
         
         # Unmatched method
@@ -438,6 +451,13 @@ class MSOptionsDialog(QDialog):
         else:
             return 'vector'  # Default fallback
     
+    def _select_weighting(self, scheme):
+        """Show `scheme` (an ms-toolkit weighting-scheme name) in the dropdown."""
+        index = self.weighting_combo.findData(scheme)
+        if index < 0:
+            index = self.weighting_combo.findData(DEFAULT_WEIGHTING)
+        self.weighting_combo.setCurrentIndex(index)
+
     def _load_settings(self):
         """Load settings from QSettings."""
         # General tab
@@ -472,7 +492,7 @@ class MSOptionsDialog(QDialog):
         
         # Algorithm tab
         self.similarity_combo.setCurrentIndex(self.settings.value("ms_search/similarity", 1, int))
-        self.weighting_combo.setCurrentIndex(self.settings.value("ms_search/weighting", 2, int))
+        self._select_weighting(read_weighting_scheme(self.settings))
         self.unmatched_combo.setCurrentIndex(self.settings.value("ms_search/unmatched", 0, int))
         self.intensity_power_spin.setValue(self.settings.value("ms_search/intensity_power", 0.6, float))
         self.top_n_spin.setValue(self.settings.value("ms_search/top_n", 5, int))
@@ -535,7 +555,7 @@ class MSOptionsDialog(QDialog):
         
         # Algorithm tab
         self.settings.setValue("ms_search/similarity", self.similarity_combo.currentIndex())
-        self.settings.setValue("ms_search/weighting", self.weighting_combo.currentIndex())
+        write_weighting_scheme(self.settings, self.weighting_combo.currentData())
         self.settings.setValue("ms_search/unmatched", self.unmatched_combo.currentIndex())
         self.settings.setValue("ms_search/intensity_power", self.intensity_power_spin.value())
         self.settings.setValue("ms_search/top_n", self.top_n_spin.value())
@@ -607,7 +627,7 @@ class MSOptionsDialog(QDialog):
         
         # Algorithm tab
         self.similarity_combo.setCurrentIndex(1)  # Composite
-        self.weighting_combo.setCurrentIndex(2)   # NIST_GC
+        self._select_weighting(DEFAULT_WEIGHTING)
         self.unmatched_combo.setCurrentIndex(0)   # Keep All
         self.intensity_power_spin.setValue(0.6)
         self.top_n_spin.setValue(5)
@@ -673,7 +693,7 @@ class MSOptionsDialog(QDialog):
             
             # Algorithm options
             'similarity': 'composite' if self.similarity_combo.currentIndex() == 1 else 'cosine',
-            'weighting': ['None', 'NIST', 'NIST_GC'][self.weighting_combo.currentIndex()],
+            'weighting': self.weighting_combo.currentData(),
             'unmatched': ['keep_all', 'remove_all', 'keep_library', 'keep_experimental'][self.unmatched_combo.currentIndex()],
             'preselector_type': 'kmeans' if self.preselector_combo.currentIndex() == 0 else 'gmm',
             'top_k_clusters': self.top_k_clusters_spin.value(),
