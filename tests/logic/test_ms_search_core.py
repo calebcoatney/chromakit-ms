@@ -392,3 +392,63 @@ def test_lookup_casno_alias_still_works():
     """The legacy _lookup_casno name remains available for one release cycle."""
     from logic.ms_search_core import _lookup_casno, lookup_casno
     assert _lookup_casno is lookup_casno
+
+
+# --- default method and weighting: Vector Search with NIST11 -----------------
+
+def test_default_options_search_vector_with_nist11():
+    """No options at all: Vector Search, weighted with NIST11."""
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    do_single_search(ms_toolkit, [(50.0, 1000.0), (73.0, 500.0)], {})
+
+    ms_toolkit.search_vector.assert_called_once()
+    ms_toolkit.search_w2v.assert_not_called()
+    ms_toolkit.search_hybrid.assert_not_called()
+    assert ms_toolkit.search_vector.call_args.kwargs["weighting_scheme"] == "NIST11"
+
+
+def test_batch_search_passes_nist11_to_search_vector_by_default():
+    """The batch loop hands search_vector weighting_scheme='NIST11' when the options don't say."""
+    ms_toolkit = _make_toolkit()
+    peak = _make_peak(with_deconvolved=True)
+
+    run_batch_search(
+        ms_toolkit=ms_toolkit,
+        peaks=[peak],
+        data_directory='/fake/path.D',
+        options={'top_n': 5},
+    )
+
+    assert ms_toolkit.search_vector.call_args.kwargs["weighting_scheme"] == "NIST11"
+
+
+def test_hybrid_search_also_defaults_to_nist11():
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    do_single_search(ms_toolkit, [(50.0, 1000.0)], {'search_method': 'hybrid'})
+    assert ms_toolkit.search_hybrid.call_args.kwargs["weighting_scheme"] == "NIST11"
+
+
+@pytest.mark.parametrize("scheme", ["NIST_GC", "NIST11", "MassBank", "SQRT", "None"])
+def test_an_explicit_weighting_is_passed_through_unchanged(scheme):
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    do_single_search(ms_toolkit, [(50.0, 1000.0)], {'weighting': scheme})
+    assert ms_toolkit.search_vector.call_args.kwargs["weighting_scheme"] == scheme
+
+
+def test_the_other_search_defaults_are_unchanged():
+    """Only the weighting default moved: composite, keep_all and 10 clusters stay."""
+    from logic.ms_search_core import do_single_search
+
+    ms_toolkit = _make_toolkit()
+    do_single_search(ms_toolkit, [(50.0, 1000.0)], {})
+    kwargs = ms_toolkit.search_vector.call_args.kwargs
+    assert kwargs["composite"] is True
+    assert kwargs["unmatched_method"] == "keep_all"
+    assert kwargs["top_k_clusters"] == 10
+    assert kwargs["top_n"] == 5

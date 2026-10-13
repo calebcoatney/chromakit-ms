@@ -21,6 +21,7 @@ from ui.dialogs.scaling_factors_dialog import ScalingFactorsDialog
 from logic.automation_worker import AutomationWorker
 from logic.processor import ChromatogramProcessor
 from logic.batch_search import BatchSearchWorker
+from logic.ms_weighting import DEFAULT_WEIGHTING
 import numpy as np
 import pandas as pd
 import rainbow as rb
@@ -2004,7 +2005,7 @@ class ChromaKitApp(QMainWindow):
                         method=options.get('hybrid_method', 'auto'),
                         top_n=top_n,
                         intensity_power=options.get('intensity_power', 0.6),
-                        weighting_scheme=options.get('weighting', 'NIST_GC'),
+                        weighting_scheme=options.get('weighting', DEFAULT_WEIGHTING),
                         composite=(options.get('similarity') == 'composite'),
                         unmatched_method=options.get('unmatched', 'keep_all'),
                         top_k_clusters=options.get('top_k_clusters', 10),
@@ -2014,7 +2015,7 @@ class ChromaKitApp(QMainWindow):
                         spectrum,
                         top_n=top_n,
                         composite=(options.get('similarity') == 'composite'),
-                        weighting_scheme=options.get('weighting', 'NIST_GC'),
+                        weighting_scheme=options.get('weighting', DEFAULT_WEIGHTING),
                         unmatched_method=options.get('unmatched', 'keep_all'),
                         top_k_clusters=options.get('top_k_clusters', 10),
                     )
@@ -2704,7 +2705,7 @@ class ChromaKitApp(QMainWindow):
                 'subtraction_method': 'min_tic',
                 'subtract_weight': 0.1,
                 'similarity': 'composite',
-                'weighting': 'NIST_GC',
+                'weighting': DEFAULT_WEIGHTING,
                 'unmatched': 'keep_all',
                 'intensity_power': 0.6,
                 'top_n': 5
@@ -3108,7 +3109,7 @@ class ChromaKitApp(QMainWindow):
                 'subtraction_method': 'min_tic',
                 'subtract_weight': 0.1,
                 'similarity': 'composite',
-                'weighting': 'NIST_GC',
+                'weighting': DEFAULT_WEIGHTING,
                 'unmatched': 'keep_all',
                 'intensity_power': 0.6,
                 'top_n': 5
@@ -3735,7 +3736,7 @@ class ChromaKitApp(QMainWindow):
                     method=options.get('hybrid_method', 'auto'),
                     top_n=options.get('top_n', 5),
                     intensity_power=options.get('intensity_power', 0.6),
-                    weighting_scheme=options.get('weighting', 'NIST_GC'),
+                    weighting_scheme=options.get('weighting', DEFAULT_WEIGHTING),
                     composite=(options.get('similarity') == 'composite'),
                     unmatched_method=options.get('unmatched', 'keep_all'),
                     top_k_clusters=options.get('top_k_clusters', 10),
@@ -3745,7 +3746,7 @@ class ChromaKitApp(QMainWindow):
                     query,
                     top_n=options.get('top_n', 5),
                     composite=(options.get('similarity') == 'composite'),
-                    weighting_scheme=options.get('weighting', 'NIST_GC'),
+                    weighting_scheme=options.get('weighting', DEFAULT_WEIGHTING),
                     unmatched_method=options.get('unmatched', 'keep_all'),
                     top_k_clusters=options.get('top_k_clusters', 10),
                 )

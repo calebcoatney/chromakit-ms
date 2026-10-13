@@ -52,7 +52,8 @@ MAJOR FEATURES (12 Workflows)
    ├─ Search Methods: Vector, Composite, Hybrid
    ├─ Extraction: Apex or Apex+Flank
    ├─ Spectrum Subtraction: Min TIC, weighted subtraction
-   ├─ Similarity Metrics: NIST_GC, Composite
+   ├─ Weighting: NIST11 (default), NIST_GC, MassBank, SQRT, None
+   ├─ Similarity Metrics: Composite (default), Cosine
    ├─ Results: Top N matches (default 5) with scores
    ├─ Skips Manually Assigned Peaks: Preserves user assignments
    ├─ Real-time Progress: BatchProgressDialog updates per peak
