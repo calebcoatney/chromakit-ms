@@ -13,8 +13,25 @@ import os
 try:
     from ms_toolkit.api import MSToolkit
     HAS_MSTOOLKIT = True
-except ImportError:
+    MSTOOLKIT_IMPORT_ERROR = None
+except ImportError as _e:
     HAS_MSTOOLKIT = False
+    MSTOOLKIT_IMPORT_ERROR = _e
+
+
+def toolkit_unavailable_text(err: ImportError, executable: str) -> tuple[str, str]:
+    """(headline, hint) for the MS tab when ms_toolkit failed to import.
+
+    A missing ms_toolkit package and a broken dependency of an installed one both raise
+    ImportError; only the first is "not installed". The interpreter is named because the
+    usual cause of the first is a pip install into a different Python.
+    """
+    if isinstance(err, ModuleNotFoundError) and (err.name or "").split(".")[0] == "ms_toolkit":
+        return (f"MSToolkit is not installed in this Python ({executable}).",
+                f'"{executable}" -m pip install ms-toolkit-nrel')
+    hint = (f'"{executable}" -m pip install {err.name}' if isinstance(err, ModuleNotFoundError) and err.name
+            else "Reinstall ms-toolkit-nrel into this Python, or check the error above.")
+    return f"MSToolkit is installed but could not be loaded: {err}", hint
 
 # Add this import at the top
 from ui.dialogs.ms_options_dialog import MSOptionsDialog
@@ -793,11 +810,19 @@ class MSFrame(QWidget):
     
     def _show_toolkit_missing_message(self):
         """Display a message when the MSToolkit is not available."""
-        missing_label = QLabel("MSToolkit is not installed.")
+        import sys
+        err = MSTOOLKIT_IMPORT_ERROR or ModuleNotFoundError("No module named 'ms_toolkit'", name="ms_toolkit")
+        headline, hint = toolkit_unavailable_text(err, sys.executable)
+        print(f"MSToolkit unavailable: {err!r}")
+        missing_label = QLabel(headline)
         missing_label.setStyleSheet("color: #990000; font-weight: bold;")
-        
-        install_label = QLabel("Install with: pip install ms-toolkit-nrel")
+        missing_label.setWordWrap(True)
+        missing_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        install_label = QLabel(hint)
         install_label.setStyleSheet("font-family: monospace;")
+        install_label.setWordWrap(True)
+        install_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         
         self.layout.addWidget(missing_label)
         self.layout.addWidget(install_label)
