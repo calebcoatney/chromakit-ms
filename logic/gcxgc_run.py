@@ -110,7 +110,9 @@ class GCxGCRun:
     @classmethod
     def from_c_folder(cls, c_path, *, modulation_period_s=None, phase_shift_s=None) -> "GCxGCRun":
         data_dir = os.path.join(str(c_path), "data")
-        names = os.listdir(data_dir)
+        # Hidden files out: macOS writes a ._<name> AppleDouble sidecar beside every file on
+        # exFAT/FAT drives, and "._" sorts ahead of the real file.
+        names = [n for n in os.listdir(data_dir) if not n.startswith(".")]
         hdr = _pick(names, lambda n: n.endswith(".hdr"), ".HDR", data_dir)
         rsd = _pick(names, lambda n: n.endswith(".rsd"), ".rsd", data_dir)
         raw = _pick(names, lambda n: n.endswith(".lsc") and not n.endswith(".dbc.lsc"), ".lsc", data_dir)

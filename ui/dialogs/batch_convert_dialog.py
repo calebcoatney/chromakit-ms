@@ -52,7 +52,8 @@ def _find_sepsolve_stems(directory: str) -> dict[str, list[str]]:
     "Sample 1" never captures "Sample 10" or "Sample 1_B". .DAT/.DAX are never included.
     Returns {stem: [HDR, rsd, lsc?, dbc.lsc...]} as absolute paths, HDR first.
     """
-    files = sorted(f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f)))
+    files = sorted(f for f in os.listdir(directory)
+                   if not f.startswith(".") and os.path.isfile(os.path.join(directory, f)))   # ._ sidecars
     by_lower = {f.lower(): f for f in files}
     rsd = {f[:-4]: f for f in files if f.lower().endswith(".rsd")}
     dbc_owner: dict[str, list[str]] = {}
