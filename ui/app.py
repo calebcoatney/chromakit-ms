@@ -1564,8 +1564,8 @@ class ChromaKitApp(QMainWindow):
         import time
         import json
         
-        overrides_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'overrides')
-        os.makedirs(overrides_dir, exist_ok=True)
+        from util.app_paths import writable_dir
+        overrides_dir = writable_dir("overrides")
         
         # Create or load the overrides database
         overrides_file = os.path.join(overrides_dir, 'manual_assignments.json')

@@ -8,6 +8,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 import numpy as np
 import os
+from util.app_paths import writable_dir
 
 # Add the MSToolkit import
 try:
@@ -838,8 +839,7 @@ class MSFrame(QWidget):
         """Set up the MS library and embeddings."""
         try:
             # Set default library folder path
-            default_library_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'library')
-            os.makedirs(default_library_path, exist_ok=True)
+            default_library_path = writable_dir("library")
             
             # Create file dialog with improved filters for both .txt and .json
             library_path, _ = QFileDialog.getOpenFileName(
@@ -912,8 +912,7 @@ class MSFrame(QWidget):
             self.progress_label.setText(f"Using Word2Vec model: {os.path.basename(w2v_path)}")
             
             # Create cache directory if it doesn't exist
-            cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'cache')
-            os.makedirs(cache_dir, exist_ok=True)
+            cache_dir = writable_dir("cache")
             
             # Create a thread to load the library
             self.load_thread = LibraryLoadThread(
@@ -973,8 +972,7 @@ class MSFrame(QWidget):
             self.progress_bar.setValue(0)
             
             # Create cache directory if it doesn't exist
-            cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'cache')
-            os.makedirs(cache_dir, exist_ok=True)
+            cache_dir = writable_dir("cache")
             
             # Create a thread to load the library
             self.load_thread = LibraryLoadThread(

@@ -3,6 +3,11 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 def main():
     """Main entry point for the application."""
+    # Frozen (windowed) build: pin matplotlib's cache and send stdout/stderr to a log file.
+    from util.app_paths import configure_frozen_runtime, is_frozen
+    if is_frozen():
+        configure_frozen_runtime()
+
     # Create the application
     app = QApplication(sys.argv)
     
