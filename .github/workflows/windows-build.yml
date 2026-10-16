@@ -1,0 +1,83 @@
+name: Windows app
+
+# Tags v* build, test and publish a GitHub Release. Pushes to packaging/** build and test only
+# (artifact). workflow_dispatch works once this file is on main.
+on:
+  push:
+    tags: ['v*']
+    branches: ['packaging/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Version and tag agree
+        id: ver
+        shell: pwsh
+        run: |
+          $v = python -c "import chromakit_version as c; print(c.__version__)"
+          "version=$v" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$v") {
+            Write-Error "tag $env:GITHUB_REF_NAME does not match chromakit_version $v"; exit 1 }
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[ms] pyinstaller
+
+      - name: Bake build info
+        shell: pwsh
+        run: "'COMMIT = \"' + $env:GITHUB_SHA + '\"' | Out-File -Encoding utf8 _build_info.py"
+
+      - name: Freeze
+        run: pyinstaller packaging/windows/chromakit.spec --noconfirm --distpath packaging/windows/dist --workpath packaging/windows/build
+
+      - name: Self-test the frozen app (from a folder with a space)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'self test'
+          $p = Start-Process -FilePath packaging/windows/dist/ChromaKit/ChromaKit.exe `
+                 -ArgumentList '--self-test', "`"$dir`"" -PassThru -Wait
+          Get-Content (Join-Path $dir 'self-test.txt')
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - name: The .bat updater works from a folder with a space
+        shell: pwsh
+        run: |
+          $dst = Join-Path $env:RUNNER_TEMP 'chroma kit repo'
+          git worktree add $dst HEAD
+          $py = (Get-Command python).Source
+          cmd /c "`"$dst\tools\windows\update_chromakit.bat`" --no-pull --unattended --python `"$py`""
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          $zip = "ChromaKit-${{ steps.ver.outputs.version }}-windows-x64.zip"
+          Compress-Archive -Path packaging/windows/dist/ChromaKit -DestinationPath $zip
+          $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          $inst = [math]::Round(((Get-ChildItem packaging/windows/dist/ChromaKit -Recurse | Measure-Object Length -Sum).Sum) / 1MB, 1)
+          Write-Host "zip $mb MB; installed $inst MB"
+          "ZIP=$zip" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ChromaKit-windows-x64
+          path: ${{ env.ZIP }}
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP }}
+          body_path: packaging/windows/RELEASE_NOTES.md
