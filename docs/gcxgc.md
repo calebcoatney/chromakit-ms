@@ -65,7 +65,7 @@ Layout and detection settings take effect when you click Integrate.
 
 ## Export
 
-Export (or "Export…" in View Peak Results) writes four files to `<run>.C/results/`:
+Export (or "Export…" in View Peak Results) writes five files to `<run>.C/results/`:
 
 - `<run> - GCxGC peaks.csv`: ChromSpace's Area-percent layout (2tR in minutes). Use it to compare
   ChromaKit's peaks side by side with a ChromSpace export (see below), or to paste peak rows into a
@@ -80,16 +80,40 @@ Export (or "Export…" in View Peak Results) writes four files to `<run>.C/resul
   import has not been tested in any of them, so check your tool's MSP options. Peaks with no spectrum are
   left out.
 - `<run> - GCxGC spectra.mgf`: the same spectra in MGF, one `BEGIN IONS … END IONS` block per peak,
-  for spectral-networking tools such as GNPS. It carries no retention time; `FEATURE_ID` (= the peak
-  number) links each spectrum to its 1tR/2tR in the CSV and JSON. `PEPMASS=0` and `MSLEVEL=1` mark EI
-  spectra with no precursor. The exact fields a given networking workflow expects have not been checked
-  against a reference file yet.
+  for spectral-networking tools such as GNPS. `RTINSECONDS` is the first-dimension retention time, and
+  `FEATURE_ID` (= the peak number) links each spectrum to its 1tR/2tR in the CSV and JSON. `PEPMASS` is
+  the base peak m/z and `MSLEVEL=2` is set, because EI has no precursor ion. The exact fields a given
+  networking workflow expects have not been checked against a reference file yet.
+- `<run> - GNPS quant.csv`: one row per peak for GNPS quantification, with `row ID`, `row m/z`,
+  `row retention time` (minutes) and `<run> Peak area` columns. See the next section.
 
 By default Integrate and MS Search All also write these files; Settings → Export Settings controls
 that. Run Integrate before Export; the files describe the peaks and settings of the last Integrate.
 A run with no peaks still gets a header-only CSV, an empty MSP and MGF, and a JSON with an empty peak list.
 
 Volume (the CSV's Area) is in detector counts × samples and is not calibrated. Compare peaks with Area %.
+
+## MS-only runs and GNPS export
+
+Some samples show only on the TOF: nothing reaches the FID, which then shows flat baseline.
+
+1. Set **Detection Signal** to **DBC TIC** (or TIC). The view shows the TIC heatmap alone; tick
+   **Show FID** to see the FID too. The FID→TOF offset settings are greyed out: spectra come straight
+   from the TIC apex.
+2. Integrate. Click near a peak on the heatmap to see its spectrum. No library is needed.
+3. **Export Min S/N** (default 5) trims each exported spectrum to ions above its own noise floor. A
+   TOF spectrum otherwise carries a few hundred noise-level ions. 0 keeps every ion. The spectrum shown
+   in ChromaKit and library search are not trimmed.
+4. Export writes, beside the CSV/JSON/MSP:
+   - `<sample> - GCxGC spectra.mgf`, in the fields of MZmine's GC (GNPS) export: `FEATURE_ID`,
+     `PEPMASS` (the base peak m/z; EI has no precursor ion), `RTINSECONDS` (first dimension),
+     `SCANS`, `MSLEVEL=2`, `CHARGE=1+`, `Num peaks`.
+   - `<sample> - GNPS quant.csv`: `row ID`, `row m/z`, `row retention time` (min), `<sample> Peak area`.
+   The second-dimension time stays in the CSV and JSON, joined by `FEATURE_ID` / `Peak #`.
+5. Save the settings as a method (`.chromethod`) to reuse them.
+
+GNPS's GC workflow joins many samples on aligned features; ChromaKit writes one sample at a time and
+does not align across samples.
 
 ## Check against ChromSpace
 
