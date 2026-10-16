@@ -1,12 +1,11 @@
 # PyInstaller spec for the ChromaKit Windows app (folder mode). Run from the repo root:
 #   pyinstaller packaging/windows/chromakit.spec --noconfirm --distpath packaging/windows/dist --workpath packaging/windows/build
-import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).resolve().parent.parent
-ICON = "resources/file.ico"   # relative to the repo root; also bundled so the window icon can load it
+ICON = "resources/file.ico"   # relative to the repo root; bundled at resources/ (= _internal/resources/) where ui/app.py ICON_PATH finds it
 
 datas = [(str(ROOT / "LICENSE"), "."), (str(ROOT / "NOTICE"), "."),
          (str(ROOT / "licenses"), "licenses"), (str(ROOT / "data"), "data"),

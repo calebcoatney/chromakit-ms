@@ -36,6 +36,11 @@ import matplotlib
 # Import the data handler directly as a required dependency
 from logic.data_handler import DataHandler
 
+# Resolved from this file, not the working directory: in a frozen onedir build ui/app.py sits in
+# _internal/ui/, so this is _internal/resources/file.ico (bundled by packaging/windows/chromakit.spec).
+ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resources", "file.ico")
+
+
 class _UpdateCheckThread(QThread):
     """Asks GitHub for the latest release once; emits only when there is a usable answer."""
     found = Signal(str, str)
@@ -54,7 +59,7 @@ class ChromaKitApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("ChromaKit")
         self.resize(1600, 800)
-        self.setWindowIcon(QIcon(r'resources\file.ico'))
+        self.setWindowIcon(QIcon(ICON_PATH))
         
         # Initialize processor
         self.processor = ChromatogramProcessor()

@@ -27,3 +27,10 @@ def test_bat_files_use_crlf_and_quote_paths():
 
 def test_version_is_valid_for_a_tag():
     assert chromakit_version.__version__.count(".") == 2
+
+
+def test_window_icon_path_resolves_from_the_code_not_the_cwd(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)   # a different working directory must not matter
+    from ui.app import ICON_PATH
+    assert Path(ICON_PATH).is_file()
+    assert Path(ICON_PATH) == ROOT / "resources" / "file.ico"

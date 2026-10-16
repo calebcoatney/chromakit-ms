@@ -14,6 +14,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -47,9 +48,19 @@ jobs:
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'self test'
           $p = Start-Process -FilePath packaging/windows/dist/ChromaKit/ChromaKit.exe `
-                 -ArgumentList '--self-test', "`"$dir`"" -PassThru -Wait
-          Get-Content (Join-Path $dir 'self-test.txt')
-          if ($p.ExitCode -ne 0) { exit 1 }
+                 -ArgumentList '--self-test', "`"$dir`"" -PassThru
+          $null = $p.Handle   # keeps the exit code readable after the process ends
+          $ok = $false
+          if ($p.WaitForExit(600000)) { $ok = ($p.ExitCode -eq 0) }
+          else { Write-Host 'The self-test did not exit within 600 s; stopping it.'; $p.Kill() }
+          $report = Join-Path $dir 'self-test.txt'
+          if (Test-Path $report) { Get-Content $report }
+          else { Write-Host "self-test.txt was not written to $dir"; $ok = $false }
+          if (-not $ok) {
+            $log = Join-Path $env:LOCALAPPDATA 'ChromaKit\logs\chromakit.log'
+            if (Test-Path $log) { Write-Host '--- chromakit.log (last 80 lines) ---'; Get-Content $log -Tail 80 }
+            exit 1
+          }
 
       - name: The .bat updater works from a folder with a space
         shell: pwsh

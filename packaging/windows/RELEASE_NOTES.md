@@ -8,7 +8,8 @@
    not code-signed yet; you'll see this once per new version.
 
 **Updating:** when a new version exists, ChromaKit shows an **Update available** button in its status
-bar. Download the new zip and extract it over the old folder (or beside it). Your settings are kept.
+bar. Download the new zip, extract it to a new folder, then delete the old folder. Your settings are
+kept (they are stored outside the app folder).
 
 **Problems:** the log is at `%LOCALAPPDATA%\ChromaKit\logs\chromakit.log`. Running
 `ChromaKit.exe --self-test "%TEMP%\ck"` writes a check to `%TEMP%\ck\self-test.txt`.

@@ -4,6 +4,9 @@ rem Update ChromaKit in this clone and its Python environment, then offer to sta
 rem   update_chromakit.bat [--no-pull] [--unattended] [--python "C:\path\to\python.exe"]
 rem --unattended: no questions, no pause, no launch (for CI).
 
+rem Remembered before any shift: after a git pull this file may have changed on disk, and cmd reads a
+rem running batch file by byte offset, so the script starts a fresh copy of itself instead of going on.
+set "SELF=%~f0"
 set "REPO=%~dp0..\.."
 for %%I in ("%REPO%") do set "REPO=%%~fI"
 set "SAVED=%~dp0chromakit-python.txt"
@@ -33,6 +36,8 @@ if "%PULL%"=="1" (
     echo Nothing was changed. Send Caleb a photo of this window.
     goto fail
   )
+  rem Re-run the script, which may now be a newer version, without pulling again. The star variable still holds all original options.
+  call "%SELF%" --no-pull %* & exit /b !errorlevel!
 )
 
 rem ---- 2. Find the Python that runs ChromaKit ---------------------------------------------
@@ -71,12 +76,15 @@ exit /b 0
 
 :find_python
 set "HITS=0"
-for %%R in ("D:\miniforge3" "D:\Miniforge3" "C:\miniforge3" "C:\ProgramData\miniforge3" "%USERPROFILE%\miniforge3" "%LOCALAPPDATA%\miniforge3") do (
+set "FOUND="
+for %%R in ("D:\miniforge3" "C:\miniforge3" "C:\ProgramData\miniforge3" "%USERPROFILE%\miniforge3" "%LOCALAPPDATA%\miniforge3") do (
   if exist "%%~R\envs" for /d %%E in ("%%~R\envs\*") do (
     if exist "%%~E\python.exe" (
       "%%~E\python.exe" -m pip show chromakit-ms >nul 2>&1 && (
-        set /a HITS+=1
-        set "FOUND=%%~E\python.exe"
+        if /i not "!FOUND!"=="%%~E\python.exe" (
+          set /a HITS+=1
+          set "FOUND=%%~E\python.exe"
+        )
       )
     )
   )
