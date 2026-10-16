@@ -62,16 +62,25 @@ def _json_default(o):
 
 def _chromakit_version() -> str:
     try:
-        from importlib.metadata import version
-        return version("chromakit-ms")
+        from chromakit_version import __version__
+        return __version__
     except Exception:
         return ""
 
 
 def _chromakit_commit() -> str:
-    """The commit this ChromaKit came from: the distribution's PEP 610 vcs_info, else
-    ``git rev-parse HEAD`` in the package's own folder, else "". Never raises."""
-    return _direct_url_commit() or _git_commit()
+    """The commit this ChromaKit came from: the frozen build's _build_info, else the distribution's
+    PEP 610 vcs_info, else ``git rev-parse HEAD`` in the package's own folder, else "". Never raises."""
+    return _build_info_commit() or _direct_url_commit() or _git_commit()
+
+
+def _build_info_commit() -> str:
+    try:
+        import _build_info
+        commit = getattr(_build_info, "COMMIT", "")
+        return commit if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{7,40}", commit) else ""
+    except Exception:
+        return ""
 
 
 def _direct_url_commit() -> str:

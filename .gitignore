@@ -460,3 +460,6 @@ deconvolution/adap-gc-source-reference/
 
 # Large example data (too big for GitHub)
 example GCxGC data/
+
+# Frozen-build commit stamp, written by the release workflow (never committed)
+_build_info.py
