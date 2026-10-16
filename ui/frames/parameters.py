@@ -1771,7 +1771,7 @@ class ParametersFrame(QWidget):
         self.gcxgc_export_snr_spin.setToolTip(
             "Exported MGF/MSP spectra keep only ions above this signal-to-noise, estimated from each "
             "spectrum's own noise floor. 0 = keep every ion. Does not change the spectrum shown here "
-            "or library search.")
+            "or library search. Read when you press Export, so it can be changed after Integrate.")
         pk.addRow("Export Min S/N:", self.gcxgc_export_snr_spin)
         peaks_group.setVisible(False)
         self.section_groups['gcxgc_peaks'] = peaks_group

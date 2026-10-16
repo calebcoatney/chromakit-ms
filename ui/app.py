@@ -1932,14 +1932,18 @@ class ChromaKitApp(QMainWindow):
             return
         results_dir = os.path.join(self._gcxgc_run.c_path, "results")     # the run's own folder
         search = self._gcxgc_search_info
+        # The S/N gate is pure post-processing of the spectra, so it follows the spin box as it
+        # stands now, not the value at Integrate; the JSON records the value actually used.
+        min_snr = float(self.parameters_frame.gcxgc_export_snr_spin.value())
+        settings = dict(self._gcxgc_export_settings, export_min_snr=min_snr)
         try:
             paths = export_gcxgc_results(
                 self._gcxgc_peaks, self._gcxgc_run, results_dir,
-                settings=self._gcxgc_export_settings,
+                settings=settings,
                 get_spectrum=self._gcxgc_proc.extract_spectrum,
                 library=search.get('library'), search_method=search.get('search_method'),
                 search_complete=search.get('complete'),
-                min_snr=float(self._gcxgc_export_settings.get('export_min_snr', 0.0)))
+                min_snr=min_snr)
         except Exception as e:
             import traceback; traceback.print_exc()
             self.status_bar.showMessage(f"GCxGC export failed: {e}")

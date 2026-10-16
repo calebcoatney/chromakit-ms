@@ -978,3 +978,23 @@ def test_tic_detection_never_fits_the_offset(gcxgc_app, monkeypatch):
     assert app._gcxgc_peaks
     assert "offset fit failed" not in app.status_bar.currentMessage()
     assert "GCxGC results written" in app.status_bar.currentMessage()
+
+
+def test_export_min_snr_changed_after_integrate_applies_to_the_export(gcxgc_app, monkeypatch):
+    app, c = gcxgc_app
+    pf = app.parameters_frame
+    app.button_frame.integrate_button.click()            # integrated at the default 5.0
+    pf.gcxgc_export_snr_spin.setValue(1.5)                # the gate is post-processing: no re-integrate
+    seen = {}
+    import logic.gcxgc_export as ge
+    real = ge.export_gcxgc_results
+
+    def spy(*a, **k):
+        seen["min_snr"] = k.get("min_snr")
+        return real(*a, **k)
+
+    monkeypatch.setattr(ge, "export_gcxgc_results", spy)
+    _clear_results(c)
+    app.button_frame.export_button.click()
+    assert seen["min_snr"] == 1.5
+    assert _record(c)["settings"]["export_min_snr"] == 1.5

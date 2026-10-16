@@ -46,7 +46,8 @@ Layout and detection settings take effect when you click Integrate.
 - Detection Signal: FID (the default; volumes are FID-based, and FID response is roughly carbon
   proportional for hydrocarbons), DBC TIC (for trace compounds the FID cannot see) or TIC.
 - Integrate (button under the plot): applies the layout, runs the 2D baseline, then finds peaks slice by slice and groups them
-  across modulations. Each peak gets a red + marker on both heatmaps, and the status bar reports the
+  across modulations. Each peak gets a red + marker on every heatmap shown (both with FID detection;
+  with TIC detection only the TIC heatmap, unless Show FID is ticked), and the status bar reports the
   count. If it reports none, lower Min Prominence. If it reports "FID→TOF offset fit failed", set the
   offset to Fixed under 2D Peak Detection.
 - "View Peak Results" (status bar, lower right) lists every peak with its retention times, volume,
@@ -58,8 +59,9 @@ Layout and detection settings take effect when you click Integrate.
   lists its top hits.
   With FID detection, the spectrum comes from the TOF scan at the peak's own apex: the FID apex is mapped
   to TOF time through the FID→TOF offset, and the TOF TIC is searched within the Spectrum Window for its
-  maximum. Up to three adjacent scans are averaged, leaving out saturated ones. With TIC detection, the
-  spectrum comes straight from the peak's apex on the TIC, so the offset and Spectrum Window do not apply.
+  maximum. With TIC detection, the spectrum comes straight from the peak's apex on the TIC, so the offset
+  and Spectrum Window do not apply. Either way the spectrum averages up to three adjacent scans around the
+  apex, leaving out saturated ones.
 - Search Library (Mass Spectrometry tab) shows the top hits for the spectrum on display. MS Search All
   (under the plot) searches every peak, writes the best hit into the Compound and Match Score columns
   and records the top hits in the JSON. Each MS Search All starts by clearing the previous IDs; if you
@@ -92,7 +94,7 @@ Export (or "Export…" in View Peak Results) writes five files to `<run>.C/resul
   `row retention time` (minutes) and `<run> Peak area` columns. See the next section.
 
 By default Integrate and MS Search All also write these files; Settings → Export Settings controls
-that. Run Integrate before Export; the files describe the peaks and settings of the last Integrate.
+that. Run Integrate before Export; the files describe the peaks and settings of the last Integrate (Export Min S/N is the exception: it is read at Export).
 A run with no peaks still gets a header-only CSV, an empty MSP and MGF, and a JSON with an empty peak list.
 
 Volume (the CSV's Area) is in detector counts × samples and is not calibrated. Compare peaks with Area %.
@@ -105,9 +107,10 @@ Some samples show only on the TOF: nothing reaches the FID, which then shows fla
    **Show FID** to see the FID too. The FID→TOF offset settings are greyed out: spectra come straight
    from the TIC apex.
 2. Integrate. Click near a peak on the heatmap to see its spectrum. No library is needed.
-3. **Export Min S/N** (default 5) trims each exported spectrum to ions above its own noise floor. A
-   TOF spectrum otherwise carries a few hundred noise-level ions. 0 keeps every ion. The spectrum shown
-   in ChromaKit and library search are not trimmed.
+3. After Integrate (and before Export), set **Export Min S/N** (default 5). Export reads it as it stands
+   then, so you can change it without re-integrating. It trims each exported spectrum to ions above its
+   own noise floor. A TOF spectrum otherwise carries a few hundred noise-level ions. 0 keeps every ion.
+   The spectrum shown in ChromaKit and library search are not trimmed.
 4. Export writes, beside the CSV/JSON/MSP:
    - `<sample> - GCxGC spectra.mgf`, in the fields of MZmine's GC (GNPS) export: `FEATURE_ID`,
      `PEPMASS` (the base peak m/z; EI has no precursor ion), `RTINSECONDS` (first dimension),
