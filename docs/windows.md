@@ -6,7 +6,8 @@
    `ChromaKit-<version>-windows-x64.zip` from the latest release.
 2. Right-click the zip → **Extract All…**, into a folder you can write to (for example
    `Documents\ChromaKit` or `D:\ChromaKit`). Not Program Files.
-3. Double-click **ChromaKit.exe** in the extracted `ChromaKit` folder.
+3. Windows makes a folder named after the zip, and inside it a `ChromaKit` folder. Open that inner
+   `ChromaKit` folder and double-click **ChromaKit.exe**.
 4. If Windows says "Windows protected your PC": **More info** → **Run anyway**. The app is not
    code-signed yet, so this appears once per new version.
 
@@ -30,3 +31,7 @@ If ChromaKit was installed from a git clone into a conda/mamba environment, doub
 environment and offers to start ChromaKit. The first time, it looks for the environment in the usual
 Miniforge folders and, if it can't tell which one, asks you to drag its `python.exe` into the window; it
 remembers the answer. `tools\windows\ChromaKit.bat` starts ChromaKit afterwards.
+
+A clone made before this release does not have `tools\windows\update_chromakit.bat` yet. Run `git pull`
+once in the clone (in Git Bash or a Command Prompt opened in that folder), or ask Caleb to, before the
+first use.

@@ -55,6 +55,9 @@ if not defined PY (
 if not exist "%PY%" ( echo "%PY%" does not exist. & goto fail )
 > "%SAVED%" echo %PY%
 echo Python: "%PY%"
+rem The env is not activated; some packages load DLLs from its Library\bin, so put its folders first on PATH.
+for %%I in ("%PY%") do set "ENVDIR=%%~dpI"
+set "PATH=%ENVDIR%;%ENVDIR%Library\bin;%ENVDIR%Scripts;%PATH%"
 
 rem ---- 3. Install what ChromaKit needs ----------------------------------------------------
 pushd "%REPO%"
