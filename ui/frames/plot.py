@@ -1207,7 +1207,8 @@ class PlotFrame(QWidget):
     def render_gcxgc(self, fid_frame, tic_frame, *, show_fid: bool = True) -> None:
         """GCxGC heatmaps from Frame2D objects: the TIC on top and, when show_fid, the FID below.
 
-        Linear colour scale clipped at the 99th percentile. X: 1tR (min) from each frame's
+        Linear colour scale from the 1st to the 99th percentile of each frame (a floor of zero would
+        paint an uncorrected FID, baseline tens of thousands of counts, as one flat colour). X: 1tR (min) from each frame's
         row times; Y: 2tR (s), origin bottom-left.
         """
         import numpy as np
@@ -1222,19 +1223,28 @@ class PlotFrame(QWidget):
                 return [0.0, 1.0, 0.0, f.N / f.hz]
             return [f.t1_min[0], f.t1_min[-1] + f.N / f.hz / 60.0, 0.0, f.N / f.hz]
 
-        def vmax(data):
-            return float(np.percentile(data, 99)) if data.size else 1.0
+        def clim(data):
+            if not data.size:
+                return 0.0, 1.0
+            lo, hi = (float(v) for v in np.percentile(data, (1, 99)))
+            if hi <= lo:                                  # flat or nearly so: fall back to the full range
+                lo, hi = float(data.min()), float(data.max())
+            if hi <= lo:
+                hi = lo + 1.0
+            return lo, hi
 
+        lo, hi = clim(tic_frame.data)
         im = ax_tic.imshow(tic_frame.data.T, aspect='auto', origin='lower', cmap='viridis',
-                           vmin=0, vmax=vmax(tic_frame.data), extent=extent(tic_frame))
+                           vmin=lo, vmax=hi, extent=extent(tic_frame))
         ax_tic.set_ylabel("2D RT (s)")
         ax_tic.set_title("DBC TIC" if tic_frame.signal == "dbc_tic" else "TIC")
         axes = [ax_tic]
         if show_fid:
             ax_tic.tick_params(labelbottom=False)
             ax_fid = self.figure.add_subplot(2, 1, 2, sharex=ax_tic, sharey=ax_tic)
+            lo, hi = clim(fid_frame.data)
             im = ax_fid.imshow(fid_frame.data.T, aspect='auto', origin='lower', cmap='viridis',
-                               vmin=0, vmax=vmax(fid_frame.data), extent=extent(fid_frame))
+                               vmin=lo, vmax=hi, extent=extent(fid_frame))
             ax_fid.set_xlabel("1st Dimension RT (min)")
             ax_fid.set_ylabel("2D RT (s)")
             ax_fid.set_title("FID")

@@ -998,3 +998,27 @@ def test_export_min_snr_changed_after_integrate_applies_to_the_export(gcxgc_app,
     app.button_frame.export_button.click()
     assert seen["min_snr"] == 1.5
     assert _record(c)["settings"]["export_min_snr"] == 1.5
+
+
+def test_heatmaps_use_a_data_driven_floor_so_an_uncorrected_fid_is_not_flat(qtbot):
+    import numpy as np
+    from logic.gcxgc_run import Frame2D
+    from ui.frames.plot import PlotFrame
+
+    def frame(base, signal):
+        rng = np.random.default_rng(0)
+        data = base + rng.random((40, 100)) * 500.0           # baseline 30000 + a little structure
+        data[20, 50] += 5000.0
+        return Frame2D(data=data, t1_min=np.arange(40) / 10.0, t2_s=np.arange(100) / 50.0,
+                       hz=50.0, cut=0, N=100, signal=signal)
+
+    pf = PlotFrame()
+    qtbot.addWidget(pf)
+    pf.render_gcxgc(frame(30000.0, "fid"), frame(2000.0, "tic"), show_fid=True)
+    images = [ax.images[0] for ax in pf._gcxgc_axes]
+    for im in images:
+        lo, hi = im.norm.vmin, im.norm.vmax
+        assert 0 < lo < hi
+    assert images[1].norm.vmin > 29000.0                       # the FID, not clipped from zero
+    pf.render_gcxgc(frame(0.0, "fid"), frame(0.0, "tic"), show_fid=False)    # degenerate stays valid
+    assert pf._gcxgc_axes[0].images[0].norm.vmin <= pf._gcxgc_axes[0].images[0].norm.vmax
