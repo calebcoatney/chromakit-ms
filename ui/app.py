@@ -5,8 +5,8 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QLabel, QComboBox, QDialogButtonBox,
     QTabWidget  # Add QTabWidget to imports
 )
-from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer, QSettings
-from PySide6.QtGui import QIcon, QBrush, QColor
+from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer, QSettings, QThread, Signal, QUrl
+from PySide6.QtGui import QIcon, QBrush, QColor, QDesktopServices
 from ui.frames.tree import FileTreeFrame
 from ui.frames.plot import PlotFrame
 from ui.frames.parameters import ParametersFrame
@@ -35,6 +35,17 @@ import matplotlib
 
 # Import the data handler directly as a required dependency
 from logic.data_handler import DataHandler
+
+class _UpdateCheckThread(QThread):
+    """Asks GitHub for the latest release once; emits only when there is a usable answer."""
+    found = Signal(str, str)
+
+    def run(self):
+        from logic.update_check import latest_release
+        result = latest_release()
+        if result:
+            self.found.emit(*result)
+
 
 class ChromaKitApp(QMainWindow):
     """Main application window for ChromaKit."""
@@ -270,9 +281,42 @@ class ChromaKitApp(QMainWindow):
         self.theme_action = settings_menu.addAction("Toggle Dark/Light Mode")
         self.theme_action.triggered.connect(self.toggle_theme)
 
+        self.update_check_action = settings_menu.addAction("Check for Updates at Startup")
+        self.update_check_action.setCheckable(True)
+        self.update_check_action.setChecked(self._update_check_enabled_setting())
+        self.update_check_action.toggled.connect(
+            lambda on: QSettings("CalebCoatney", "ChromaKit").setValue("updates/check_at_startup", on))
+
         # Push the (Untitled) document into every frame and set the title.
         self._apply_method_to_frames()
         self._update_window_title()
+
+        # Update notice: one background check at startup; failures are silent.
+        self.update_button = None
+        self._update_thread = None
+        if self._update_check_enabled_setting() and not os.environ.get("CHROMAKIT_NO_UPDATE_CHECK"):
+            self._update_thread = _UpdateCheckThread(self)
+            self._update_thread.found.connect(self._on_update_found)
+            self._update_thread.start()
+
+    def _update_check_enabled_setting(self) -> bool:
+        value = QSettings("CalebCoatney", "ChromaKit").value("updates/check_at_startup", True)
+        return value in (True, "true", "True", 1, "1")
+
+    def _on_update_found(self, version: str, url: str) -> None:
+        from chromakit_version import __version__
+        from logic.update_check import is_newer
+        if not is_newer(version, __version__):
+            return
+        self._update_url = url
+        if self.update_button is None:
+            self.update_button = QPushButton()
+            self.update_button.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl(self._update_url)))
+            self.statusBar().addPermanentWidget(self.update_button)
+        self.update_button.setText(f"Update available: v{version}")
+        self.update_button.setToolTip(f"Open the ChromaKit {version} release page")
+        self.update_button.setVisible(True)
 
     def _apply_method_to_frames(self):
         """Push current_method into each frame, guarded so frame change
@@ -382,6 +426,10 @@ class ChromaKitApp(QMainWindow):
         if not self._maybe_prompt_save():
             event.ignore()
             return
+        # The request times out at 5 s; never let Qt destroy a running thread.
+        thread = getattr(self, "_update_thread", None)
+        if thread is not None:
+            thread.wait(6000)
         super().closeEvent(event)
 
     def _on_params_writeback(self, params):
