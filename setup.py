@@ -23,11 +23,11 @@ setup(
     install_requires=[
         "PySide6==6.9.0",
         "numpy",
+        "pandas",
         "scipy",
         "matplotlib",
         "pybaselines",
         "rainbow-api",
-        "customtkinter",
         "uvicorn",
         "fastapi",
         "pydantic",
@@ -35,7 +35,7 @@ setup(
         "olefile",
     ],
     extras_require={
-        "ms": ["ms-toolkit-nrel"],
+        "ms": ["ms-toolkit-nrel>=0.1.3"],
         "deconv": ["torch"],
     },
     classifiers=[
