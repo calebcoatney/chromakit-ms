@@ -35,5 +35,6 @@ def real_gcxgc_run() -> pathlib.Path:
 
 @pytest.fixture(autouse=True)
 def _no_update_check(monkeypatch):
-    """Tests never call GitHub."""
+    """Tests never call GitHub or auto-load the user's saved MS library."""
     monkeypatch.setenv("CHROMAKIT_NO_UPDATE_CHECK", "1")
+    monkeypatch.setenv("CHROMAKIT_NO_MS_AUTOLOAD", "1")

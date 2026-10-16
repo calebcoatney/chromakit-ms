@@ -7,6 +7,7 @@ def main():
         import os
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         os.environ.setdefault("CHROMAKIT_NO_UPDATE_CHECK", "1")
+        os.environ.setdefault("CHROMAKIT_NO_MS_AUTOLOAD", "1")
         from util.self_test import run_self_test
         sys.exit(run_self_test(sys.argv[2]))
 

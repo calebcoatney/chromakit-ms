@@ -944,6 +944,8 @@ class MSFrame(QWidget):
     
     def _try_autoload_library(self):
         """Try to automatically load library using saved paths."""
+        if os.environ.get("CHROMAKIT_NO_MS_AUTOLOAD"):
+            return  # tests and --self-test never load the user's saved library
         try:
             # Get saved paths from settings
             library_path = self.settings.value("ms/library_path", None)

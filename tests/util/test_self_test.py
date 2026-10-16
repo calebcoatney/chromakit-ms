@@ -18,3 +18,10 @@ def test_self_test_reports_a_failure(qtbot, tmp_path, monkeypatch):
     assert run_self_test(tmp_path) == 1
     text = (tmp_path / "self-test.txt").read_text(encoding="utf-8")
     assert text.startswith("FAIL") and "boom" in text
+
+
+def test_self_test_fails_when_no_first_party_modules_are_found(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr("util.self_test.pkgutil.walk_packages", lambda *a, **k: iter(()))
+    assert run_self_test(tmp_path) == 1
+    text = (tmp_path / "self-test.txt").read_text(encoding="utf-8")
+    assert text.splitlines()[0] == "FAIL" and "first-party" in text

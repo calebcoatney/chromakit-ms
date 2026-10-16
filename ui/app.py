@@ -430,6 +430,10 @@ class ChromaKitApp(QMainWindow):
         thread = getattr(self, "_update_thread", None)
         if thread is not None:
             thread.wait(6000)
+        # Never let Qt destroy a running MS-library load thread either.
+        load_thread = getattr(getattr(self, "ms_frame", None), "load_thread", None)
+        if load_thread is not None and load_thread.isRunning():
+            load_thread.wait()
         super().closeEvent(event)
 
     def _on_params_writeback(self, params):

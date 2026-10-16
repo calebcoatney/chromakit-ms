@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import os
 import shutil
-import time
 import traceback
 from pathlib import Path
 
 PACKAGES = ("logic", "ui", "util")
+MIN_FIRST_PARTY_MODULES = 50      # a walk that finds fewer means the frozen build lost modules
 SKIP = {"logic.deconvolution"}       # torch is not bundled; its import is guarded but slow to probe
 
 
@@ -26,6 +27,9 @@ def _import_everything(log):
                 continue
             importlib.import_module(info.name)
             count += 1
+    if count < MIN_FIRST_PARTY_MODULES:
+        raise RuntimeError(f"only {count} first-party modules found (expected at least "
+                           f"{MIN_FIRST_PARTY_MODULES}); the build is missing modules")
     importlib.import_module("ms_toolkit.api")
     log.append(f"imports: {count} modules + ms_toolkit.api")
 
@@ -36,16 +40,7 @@ def _open_main_window(log):
     app = QApplication.instance() or QApplication([])
     win = ChromaKitApp()
     win.show()
-    # The MS tab auto-loads a saved library from a 100 ms timer; let it start, then let any
-    # load thread finish so Qt never destroys a running QThread.
-    deadline = time.monotonic() + 0.4
-    while time.monotonic() < deadline:
-        app.processEvents()
-        time.sleep(0.02)
-    thread = getattr(win.ms_frame, "load_thread", None)
-    if thread is not None:
-        thread.wait(120_000)
-        app.processEvents()
+    app.processEvents()
     win.close()
     log.append("main window: ok")
 
@@ -77,6 +72,8 @@ def _check_export(out_dir: Path, log):
 
 
 def run_self_test(out_dir) -> int:
+    os.environ.setdefault("CHROMAKIT_NO_UPDATE_CHECK", "1")
+    os.environ.setdefault("CHROMAKIT_NO_MS_AUTOLOAD", "1")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     log: list[str] = []
