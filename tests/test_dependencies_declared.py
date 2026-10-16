@@ -8,7 +8,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SHIPPED = ["logic", "ui", "util", "resources", "main.py"]
 FIRST_PARTY = {"logic", "ui", "util", "resources", "main", "web", "api", "tests", "tools",
                "chromakit_version", "_build_info"}
-# Imported only inside try/except with a fallback, or only by the web API (declared separately).
+# Not declared in setup.py's install_requires, on purpose: torch, tabulate and ms_toolkit are imported
+# only inside guarded try/except blocks with a fallback (ms_toolkit comes from the optional [ms] extra);
+# fastapi and uvicorn belong to the web API; requests appears only in tools/ and api/ example scripts,
+# which are not shipped. None of these is declared anywhere else in setup.py.
 OPTIONAL = {"torch", "tabulate", "ms_toolkit", "fastapi", "uvicorn", "requests"}
 # import name -> distribution name where they differ
 DIST = {"PySide6": "PySide6", "rainbow": "rainbow-api", "sklearn": "scikit-learn"}

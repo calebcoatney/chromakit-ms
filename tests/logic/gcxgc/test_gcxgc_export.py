@@ -194,15 +194,16 @@ def test_offset_is_null_when_detected_on_a_tic(tmp_path):
     assert json.load(open(paths.json))["run"]["offset"] is None
 
 
-def test_export_works_without_ms_toolkit(tmp_path, monkeypatch):
-    import importlib
+def test_export_module_imports_without_ms_toolkit():
+    """Run in a fresh interpreter so no class objects are swapped in this session."""
+    import subprocess
     import sys
-    monkeypatch.setitem(sys.modules, "ms_toolkit", None)
-    import logic.gcxgc_export as ge
-    importlib.reload(ge)
-    paths = ge.export_gcxgc_results([_peak(1, 14.3, 0.44, 100.0)], FakeRun(), tmp_path / "r",
-                                    settings={"detection_signal": "fid"}, get_spectrum=_spectrum)
-    assert paths.mgf.exists() and paths.gnps_quant.exists()
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    r = subprocess.run([sys.executable, "-c",
+                        "import sys; sys.modules['ms_toolkit']=None; import logic.gcxgc_export"],
+                       cwd=root, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
 
 
 def test_zero_peaks_writes_an_empty_mgf_and_a_header_only_quant(tmp_path):

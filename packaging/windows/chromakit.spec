@@ -18,6 +18,17 @@ datas += collect_data_files("ms_toolkit")
 datas += collect_data_files("rainbow")
 datas += copy_metadata("ms-toolkit-nrel")
 
+# The frozen app redistributes these packages, so their dist-info (which carries the licence texts)
+# travels with it. A name that is not installed is reported, not fatal, so a differing build env
+# still freezes; check the build log for "no metadata for".
+for _dist in ("PySide6", "PySide6_Essentials", "PySide6_Addons", "shiboken6", "numpy", "scipy", "pandas",
+              "matplotlib", "pybaselines", "rainbow-api", "scikit-learn", "gensim", "joblib", "orjson",
+              "openpyxl", "olefile", "pydantic", "tqdm", "requests"):
+    try:
+        datas += copy_metadata(_dist)
+    except Exception as _e:
+        print(f"chromakit.spec: no metadata for {_dist} ({_e}); its licence text is not bundled")
+
 hiddenimports = (collect_submodules("logic") + collect_submodules("ui") + collect_submodules("util")
                  + collect_submodules("ms_toolkit") + collect_submodules("rainbow")
                  + ["chromakit_version"])
