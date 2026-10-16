@@ -116,6 +116,8 @@ ChromaKit-MS is released under the [Apache License 2.0](LICENSE). Third-party co
 * `ms-toolkit-nrel` – Apache License 2.0
 * `rainbow-api` – GNU Lesser General Public License v3.0
 * `pybaselines` – BSD 3-Clause License
+* `PySide6` / Qt (bundled in the Windows app) – GNU Lesser General Public License v3.0, see
+  [licenses/LGPL-3.0.txt](licenses/LGPL-3.0.txt) and [licenses/GPL-3.0.txt](licenses/GPL-3.0.txt)
 
 See the [NOTICE](NOTICE) file for full attribution details.
 

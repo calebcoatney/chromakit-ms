@@ -52,7 +52,8 @@ Layout and detection settings take effect when you click Integrate.
   offset to Fixed under 2D Peak Detection.
 - "View Peak Results" (status bar, lower right) lists every peak with its retention times, volume,
   number of modulations, compound and match score.
-- Click near a peak's marker on either heatmap (with TIC detection only the TIC heatmap is shown).
+- Click near a peak's marker on either heatmap (with TIC detection only the TIC heatmap is shown,
+  unless Show FID is ticked).
   ChromaKit selects the nearest peak, shows its
   spectrum in the Mass Spectrometry tab and prints its retention times and volume in the status bar;
   after MS Search All the status bar also names its best hit and score, and the tab's results table

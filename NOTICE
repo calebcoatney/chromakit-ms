@@ -16,6 +16,14 @@ This project depends on (does not vendor):
 - rainbow-api (evanyeyeye/rainbow), GNU Lesser General Public License v3.0.
 - pybaselines, BSD 3-Clause License.
 
+The Windows app (packaging/windows) redistributes these and its other runtime
+dependencies, unmodified, each with its package metadata. PySide6, shiboken6
+and the Qt libraries they contain (The Qt Company) are used under the GNU
+Lesser General Public License v3.0; their wheels ship no copy of it, so the
+app includes licenses/LGPL-3.0.txt and licenses/GPL-3.0.txt. The Qt
+libraries sit as separate DLLs in the app folder and can be replaced; Qt and
+PySide6 source is available from https://download.qt.io.
+
 History: ChromaKit-MS versions up to commit 433d642 contained
 logic/spectral_deconvolution.py, a translation of ADAP-GC 3.2 (Du-Lab Team,
 GNU GPL version 2 or later; Smirnov et al., J. Proteome Res. 2018, 17,
