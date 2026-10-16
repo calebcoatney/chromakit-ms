@@ -1,5 +1,3 @@
-import pytest
-
 from logic.spectrum_noise import snr_gate
 
 
@@ -18,7 +16,13 @@ def test_noise_ions_are_dropped_and_real_ions_kept():
 
 
 def test_base_peak_is_always_kept():
-    assert snr_gate([(57, 2.0), (58, 2.0), (59, 2.0)], 5.0) == [(57, 2.0)]
+    spec = [(mz, 2.0) for mz in range(50, 75)]  # 25 nonzero ions, all at the floor
+    assert snr_gate(spec, 5.0) == [(50, 2.0)]
+
+
+def test_sparse_spectrum_passes_through_unchanged():
+    spec = [(10, 100.0), (20, 90.0), (30, 80.0), (40, 1.0), (50, 1.0)]
+    assert snr_gate(spec, 5.0) == spec
 
 
 def test_only_base_peak_survives_for_a_weak_feature():
@@ -33,8 +37,8 @@ def test_zero_or_negative_min_snr_is_identity():
 
 
 def test_flat_spectrum_keeps_ions_strictly_above_the_median():
-    spec = [(50, 1.0), (51, 1.0), (52, 1.0), (53, 9.0)]
-    assert snr_gate(spec, 5.0) == [(53, 9.0)]
+    spec = [(mz, 1.0) for mz in range(50, 74)] + [(74, 9.0)]  # 24 at the floor, one real ion
+    assert snr_gate(spec, 5.0) == [(74, 9.0)]
 
 
 def test_order_is_preserved_and_none_is_empty():
