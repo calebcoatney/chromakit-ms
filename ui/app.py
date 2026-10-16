@@ -1732,13 +1732,22 @@ class ChromaKitApp(QMainWindow):
             pm = run.modulation_period_s          # entered at load; the files have none
         run.set_layout(modulation_period_s=pm, phase_shift_s=params['phase_shift'])
 
-    def _render_gcxgc_frames(self, fid_data=None) -> None:
+    def _gcxgc_signal_for_display(self) -> str:
+        """The signal the shown peaks were detected on, else the one Integrate would use now."""
+        if self._gcxgc_proc is not None and self._gcxgc_peaks:
+            return self._gcxgc_proc.frame.signal
+        signal = self.parameters_frame.get_gcxgc_params().get('detection_signal', 'fid')
+        return signal if signal in self._gcxgc_run.available_signals else 'fid'
+
+    def _render_gcxgc_frames(self, fid_data=None, signal=None) -> None:
         from dataclasses import replace
         run = self._gcxgc_run
+        signal = signal or self._gcxgc_signal_for_display()
+        show_fid = signal == 'fid' or self.parameters_frame.gcxgc_show_fid.isChecked()
         fid = run.frame('fid')
         if fid_data is not None and fid_data.shape == fid.data.shape:
             fid = replace(fid, data=fid_data)
-        self.plot_frame.render_gcxgc(fid, run.frame(self._gcxgc_tic_signal()))
+        self.plot_frame.render_gcxgc(fid, run.frame(self._gcxgc_tic_signal()), show_fid=show_fid)
 
     def _run_gcxgc_processing(self) -> None:
         """Apply the layout, optional 2D baseline and peak detection on the run's frames."""
@@ -1752,18 +1761,18 @@ class ChromaKitApp(QMainWindow):
             QMessageBox.warning(self, "GCxGC layout", str(e))
             return
         run.set_offset(params['offset_mode'], params['offset_scans'])
-        self.parameters_frame.set_gcxgc_run_info(run)
-        self._render_gcxgc_frames()
-        if not params['baseline_enabled'] and not params['peaks_enabled']:
-            self._clear_gcxgc_results()       # the layout just changed under the old peaks
-            self.status_bar.showMessage("GCxGC: heatmap updated (baseline and peak detection disabled)")
-            return
         signal = params.get('detection_signal', 'fid')
         signal_note = ""
         if signal not in run.available_signals:      # the method's choice, but this run lacks it
             label = {"dbc_tic": "DBC TIC", "tic": "TIC"}.get(signal, signal)
             signal_note = f" — {label} not available for this run; detected on FID"
             signal = 'fid'
+        self.parameters_frame.set_gcxgc_run_info(run)
+        self._render_gcxgc_frames(signal=signal)
+        if not params['baseline_enabled'] and not params['peaks_enabled']:
+            self._clear_gcxgc_results()       # the layout just changed under the old peaks
+            self.status_bar.showMessage("GCxGC: heatmap updated (baseline and peak detection disabled)")
+            return
         apex_window = params.get('apex_window', 10)
         try:
             proc = GCxGCProcessor(run.frame(signal), run, use_dbc=params.get('use_dbc', True),
@@ -1772,7 +1781,7 @@ class ChromaKitApp(QMainWindow):
                 self.status_bar.showMessage("GCxGC: applying 2D baseline correction…")
                 proc.apply_baseline(lam=params['lam'], diff_order=params['diff_order'])
                 if signal == 'fid':
-                    self._render_gcxgc_frames(fid_data=proc.corrected)
+                    self._render_gcxgc_frames(fid_data=proc.corrected, signal=signal)
             peaks = []
             if params['peaks_enabled']:
                 self.status_bar.showMessage("GCxGC: detecting peaks…")
@@ -1805,7 +1814,7 @@ class ChromaKitApp(QMainWindow):
             self._export_gcxgc(interactive=False)
         if signal_note:
             self.status_bar.showMessage(self.status_bar.currentMessage() + signal_note)
-        if peaks and not run.offset().ok:
+        if peaks and signal == 'fid' and not run.offset().ok:
             self.status_bar.showMessage(self.status_bar.currentMessage()
                                         + " — FID→TOF offset fit failed; assuming 0 (set it under 2D Peak Detection)")
 

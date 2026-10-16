@@ -908,3 +908,73 @@ def test_export_min_snr_reaches_the_method_and_the_export(gcxgc_app, monkeypatch
     app._export_gcxgc(interactive=True)
     assert seen["min_snr"] == 2.5
     assert "GNPS quant.csv" in app.status_bar.currentMessage()
+
+
+def _select_signal(pf, key):
+    pf.gcxgc_signal_combo.setCurrentIndex(pf.gcxgc_signal_combo.findData(key))
+
+
+def test_tic_detection_shows_the_tic_alone_and_show_fid_brings_it_back(gcxgc_app):
+    app, _ = gcxgc_app
+    pf, plot = app.parameters_frame, app.plot_frame
+    _select_signal(pf, "dbc_tic")
+    app.button_frame.integrate_button.click()
+    assert hasattr(plot, "_gcxgc_ax_tic") and not hasattr(plot, "_gcxgc_ax_fid")
+    assert len(plot._gcxgc_axes) == 1
+    assert pf.gcxgc_show_fid.isEnabled() and not pf.gcxgc_show_fid.isChecked()
+    pf.gcxgc_show_fid.setChecked(True)
+    assert hasattr(plot, "_gcxgc_ax_fid") and len(plot._gcxgc_axes) == 2
+    assert "show_fid" not in app.current_method.gcxgc.model_dump()          # view only, not saved
+    assert "show_fid" not in app.parameters_frame.get_gcxgc_params()
+
+
+def test_fid_detection_always_shows_the_fid(gcxgc_app):
+    app, _ = gcxgc_app
+    pf = app.parameters_frame
+    _select_signal(pf, "fid")
+    assert not pf.gcxgc_show_fid.isEnabled()
+    app.button_frame.integrate_button.click()
+    assert hasattr(app.plot_frame, "_gcxgc_ax_fid")
+
+
+def test_fallback_to_fid_shows_the_fid(qtbot, tmp_path):
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    c = synth.build_run(tmp_path, _scene(), dbc=False)       # no DBC TIC in this run
+    app.on_file_selected(str(c))
+    pf = app.parameters_frame
+    pf.gcxgc_peaks_enabled.setChecked(True)
+    pf.gcxgc_prominence_entry.setText("50")
+    _select_signal(pf, "dbc_tic")
+    app.button_frame.integrate_button.click()
+    assert app._gcxgc_proc.frame.signal == "fid"
+    assert hasattr(app.plot_frame, "_gcxgc_ax_fid")
+
+
+def test_clicking_the_tic_heatmap_selects_the_nearest_peak(gcxgc_app):
+    from types import SimpleNamespace
+    app, _ = gcxgc_app
+    _select_signal(app.parameters_frame, "dbc_tic")
+    app.button_frame.integrate_button.click()
+    target = max(app._gcxgc_peaks, key=lambda q: q.volume)
+    got = []
+    app.plot_frame.peak_selected.connect(got.append)
+    ax = app.plot_frame._gcxgc_ax_tic
+    app.plot_frame._on_gcxgc_click(SimpleNamespace(inaxes=ax, xdata=target.rt1, ydata=target.rt2, button=1))
+    assert got and got[-1] is target
+
+
+def test_tic_detection_never_fits_the_offset(gcxgc_app, monkeypatch):
+    app, _ = gcxgc_app
+    pf = app.parameters_frame
+    _select_signal(pf, "dbc_tic")
+    assert not pf.gcxgc_offset_mode_combo.isEnabled() and not pf.gcxgc_offset_spin.isEnabled()
+    assert not pf.gcxgc_apex_window_spin.isEnabled()
+    from logic.gcxgc_run import GCxGCRun
+    monkeypatch.setattr(GCxGCRun, "offset",
+                        lambda self: (_ for _ in ()).throw(AssertionError("offset fitted")))
+    app.button_frame.integrate_button.click()
+    app._export_gcxgc(interactive=True)
+    assert app._gcxgc_peaks
+    assert "offset fit failed" not in app.status_bar.currentMessage()
+    assert "GCxGC results written" in app.status_bar.currentMessage()

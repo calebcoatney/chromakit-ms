@@ -1740,8 +1740,6 @@ class ParametersFrame(QWidget):
         self.gcxgc_offset_spin.setDecimals(2)
         self.gcxgc_offset_spin.setValue(g.offset_scans)
         self.gcxgc_offset_spin.setEnabled(g.offset_mode == "fixed")
-        self.gcxgc_offset_mode_combo.currentIndexChanged.connect(
-            lambda _i: self.gcxgc_offset_spin.setEnabled(self.gcxgc_offset_mode_combo.currentData() == "fixed"))
         pk.addRow("FID→TOF Offset:", self.gcxgc_offset_mode_combo)
         pk.addRow("Offset (TOF scans):", self.gcxgc_offset_spin)
         self.gcxgc_tic_source_group = QButtonGroup(self)
@@ -1760,6 +1758,11 @@ class ParametersFrame(QWidget):
         tic_row.addWidget(self.gcxgc_tic_raw)
         tic_row.addWidget(self.gcxgc_tic_dbc)
         pk.addRow("TIC Display:", tic_box)
+        self.gcxgc_show_fid = QCheckBox("Show FID")
+        self.gcxgc_show_fid.setToolTip("Also show the FID heatmap while detecting on a TIC. View only; "
+                                       "not saved in the method.")
+        self.gcxgc_show_fid.toggled.connect(lambda _c: self.gcxgc_display_changed.emit())
+        pk.addRow(self.gcxgc_show_fid)
         self.gcxgc_export_snr_spin = QDoubleSpinBox()
         self.gcxgc_export_snr_spin.setRange(0.0, 100.0)
         self.gcxgc_export_snr_spin.setDecimals(1)
@@ -1785,6 +1788,18 @@ class ParametersFrame(QWidget):
             w.valueChanged.connect(self._on_gcxgc_widget_changed)
         for w in (self.gcxgc_signal_combo, self.gcxgc_offset_mode_combo):
             w.currentIndexChanged.connect(self._on_gcxgc_widget_changed)
+        self.gcxgc_signal_combo.currentIndexChanged.connect(self._update_gcxgc_signal_widgets)
+        self.gcxgc_offset_mode_combo.currentIndexChanged.connect(self._update_gcxgc_signal_widgets)
+        self._update_gcxgc_signal_widgets()
+
+    def _update_gcxgc_signal_widgets(self, *_):
+        """Detecting on a TIC: the FID-only controls do nothing, so disable them; Show FID applies."""
+        on_tic = self.gcxgc_signal_combo.currentData() in ("tic", "dbc_tic")
+        self.gcxgc_show_fid.setEnabled(on_tic)
+        self.gcxgc_offset_mode_combo.setEnabled(not on_tic)
+        self.gcxgc_offset_spin.setEnabled(
+            not on_tic and self.gcxgc_offset_mode_combo.currentData() == "fixed")
+        self.gcxgc_apex_window_spin.setEnabled(not on_tic)
 
     def _on_gcxgc_widget_changed(self, *_):
         values = self._read_gcxgc_widgets()
