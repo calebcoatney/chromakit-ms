@@ -887,3 +887,24 @@ def test_a_load_that_fails_after_reading_closes_the_new_run(gcxgc_app, monkeypat
     assert "boom" in app.status_bar.currentMessage()
     _assert_run_dropped(app, run_a)
     assert len(made) == 1 and _run_files_closed(made[0])
+
+
+def test_export_min_snr_reaches_the_method_and_the_export(gcxgc_app, monkeypatch):
+    app, _ = gcxgc_app
+    pf = app.parameters_frame
+    assert pf.gcxgc_export_snr_spin.value() == 5.0
+    pf.gcxgc_export_snr_spin.setValue(2.5)
+    assert app.current_method.gcxgc.export_min_snr == 2.5
+    app.button_frame.integrate_button.click()
+    seen = {}
+    import logic.gcxgc_export as ge
+    real = ge.export_gcxgc_results
+
+    def spy(*a, **k):
+        seen["min_snr"] = k.get("min_snr")
+        return real(*a, **k)
+
+    monkeypatch.setattr(ge, "export_gcxgc_results", spy)
+    app._export_gcxgc(interactive=True)
+    assert seen["min_snr"] == 2.5
+    assert "GNPS quant.csv" in app.status_bar.currentMessage()

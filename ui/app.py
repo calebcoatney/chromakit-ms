@@ -1872,7 +1872,8 @@ class ChromaKitApp(QMainWindow):
                 settings=self._gcxgc_export_settings,
                 get_spectrum=self._gcxgc_proc.extract_spectrum,
                 library=search.get('library'), search_method=search.get('search_method'),
-                search_complete=search.get('complete'))
+                search_complete=search.get('complete'),
+                min_snr=float(self._gcxgc_export_settings.get('export_min_snr', 0.0)))
         except Exception as e:
             import traceback; traceback.print_exc()
             self.status_bar.showMessage(f"GCxGC export failed: {e}")
@@ -1881,7 +1882,7 @@ class ChromaKitApp(QMainWindow):
             return
         self.status_bar.showMessage(
             f"GCxGC results written to {results_dir}: {paths.csv.name}, {paths.json.name}, "
-            f"{paths.msp.name}, {paths.mgf.name}")
+            f"{paths.msp.name}, {paths.mgf.name}, {paths.gnps_quant.name}")
 
     def _show_gcxgc_results_button(self, peaks: list) -> None:
         """Show/update the 'View Results' button in the status bar for GCxGC peaks."""

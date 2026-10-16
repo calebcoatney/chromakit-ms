@@ -1760,6 +1760,16 @@ class ParametersFrame(QWidget):
         tic_row.addWidget(self.gcxgc_tic_raw)
         tic_row.addWidget(self.gcxgc_tic_dbc)
         pk.addRow("TIC Display:", tic_box)
+        self.gcxgc_export_snr_spin = QDoubleSpinBox()
+        self.gcxgc_export_snr_spin.setRange(0.0, 100.0)
+        self.gcxgc_export_snr_spin.setDecimals(1)
+        self.gcxgc_export_snr_spin.setSingleStep(0.5)
+        self.gcxgc_export_snr_spin.setValue(g.export_min_snr)
+        self.gcxgc_export_snr_spin.setToolTip(
+            "Exported MGF/MSP spectra keep only ions above this signal-to-noise, estimated from each "
+            "spectrum's own noise floor. 0 = keep every ion. Does not change the spectrum shown here "
+            "or library search.")
+        pk.addRow("Export Min S/N:", self.gcxgc_export_snr_spin)
         peaks_group.setVisible(False)
         self.section_groups['gcxgc_peaks'] = peaks_group
         self.params_layout.addWidget(peaks_group)
@@ -1770,7 +1780,8 @@ class ParametersFrame(QWidget):
         for w in (self.gcxgc_baseline_enabled, self.gcxgc_peaks_enabled, self.gcxgc_use_dbc):
             w.toggled.connect(self._on_gcxgc_widget_changed)
         for w in (self.gcxgc_lam_slider, self.gcxgc_diff_order_spin, self.gcxgc_rt2_tolerance_spin,
-                  self.gcxgc_min_sub_peaks_spin, self.gcxgc_apex_window_spin, self.gcxgc_offset_spin):
+                  self.gcxgc_min_sub_peaks_spin, self.gcxgc_apex_window_spin, self.gcxgc_offset_spin,
+                  self.gcxgc_export_snr_spin):
             w.valueChanged.connect(self._on_gcxgc_widget_changed)
         for w in (self.gcxgc_signal_combo, self.gcxgc_offset_mode_combo):
             w.currentIndexChanged.connect(self._on_gcxgc_widget_changed)
@@ -1804,6 +1815,7 @@ class ParametersFrame(QWidget):
             apex_window_scans=self.gcxgc_apex_window_spin.value(),
             offset_mode=self.gcxgc_offset_mode_combo.currentData(),
             offset_scans=self.gcxgc_offset_spin.value(),
+            export_min_snr=self.gcxgc_export_snr_spin.value(),
         ).model_dump()
 
     # ── Method file I/O ────────────────────────────────────────────────────
@@ -1888,6 +1900,7 @@ class ParametersFrame(QWidget):
             'apex_window': g['apex_window_scans'],
             'offset_mode': g['offset_mode'],
             'offset_scans': g['offset_scans'],
+            'export_min_snr': g['export_min_snr'],
             'tic_source': 'dbc' if self.gcxgc_tic_dbc.isChecked() else 'lsc',
         }
 
