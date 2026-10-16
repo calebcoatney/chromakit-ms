@@ -13,7 +13,7 @@ cd chromakit-ms
 pip install ".[ms]"
 ```
 
-The `[ms]` extra installs `ms-toolkit-nrel`, which is on PyPI (release 0.1.2). The two helper scripts
+The `[ms]` extra installs `ms-toolkit-nrel` 0.1.3 from its GitHub tag (PyPI still has 0.1.2). The two helper scripts
 used below live in the repository's `tools/` folder, which pip does not install, so run them from the
 clone. If you only want the application, this installs it without a clone:
 
@@ -43,25 +43,13 @@ ms-toolkit wants one `m/z intensity` pair per line and a `CASNO:` field. The scr
 record that way, keeps the name, formula, molecular weight, CAS number and peak list, and prints how
 many spectra it wrote. Compare that count with the size of your library.
 
-## Known issue: newer ms-toolkit code from GitHub
+## ms-toolkit 0.1.2 and the GitHub code
 
-The `ms-toolkit-nrel` 0.1.2 release on PyPI, which the install commands above give you, builds
-libraries as shown in step 3. The ms-toolkit code on GitHub is newer. It imports `orjson`, which its
-requirements do not list (install it with `pip install orjson`), and with numpy 2 and orjson 3.10 or
-newer its text-library parser fails with `Type is not JSON serializable: numpy.float64`. The fix is
-one line in ms-toolkit, in `ms_toolkit/preprocessing.py`, function `tic_scaling`: return
-`float(intensity / total_ion_current)`.
-
-```python
-def tic_scaling(spectrum):
-    intensities = np.array([intensity for _, intensity in spectrum])
-    total_ion_current = np.sum(intensities)
-    return [(mz, float(intensity / total_ion_current)) for mz, intensity in spectrum]
-```
-
-Until ms-toolkit ships it, apply that change in your ms-toolkit install if you use the GitHub code.
-`python -c "import ms_toolkit; print(ms_toolkit.__file__)"` shows where your copy lives. Only library
-building is affected; searching is not.
+ms-toolkit 0.1.2 (PyPI) and the GitHub code before 0.1.3 fail here: they import `orjson` without
+listing it, and with numpy 2 and orjson 3.10 or newer the text-library parser stops with
+`Type is not JSON serializable: numpy.float64`. 0.1.3 fixes both, and the `[ms]` extra installs it.
+If you installed ms-toolkit some other way, upgrade it with
+`pip install git+https://github.com/calebcoatney/ms-toolkit@v0.1.3`.
 
 ## 3. Build the library files with ms-toolkit
 

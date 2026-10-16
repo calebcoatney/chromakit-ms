@@ -41,7 +41,9 @@ setup(
         "olefile",
     ],
     extras_require={
-        "ms": ["ms-toolkit-nrel>=0.1.3"],
+        # From the GitHub tag: 0.1.3 is not on PyPI yet (account recovery pending). Back to
+        # "ms-toolkit-nrel>=0.1.3" once it is.
+        "ms": ["ms-toolkit-nrel @ git+https://github.com/calebcoatney/ms-toolkit@v0.1.3"],
         "deconv": ["torch"],
     },
     classifiers=[

@@ -82,7 +82,7 @@ def load_library(
     if not _HAVE_MS_TOOLKIT:
         raise RuntimeError(
             "ms-toolkit-nrel is not installed. "
-            "pip install ms-toolkit-nrel to enable MS endpoints."
+            "pip install git+https://github.com/calebcoatney/ms-toolkit@v0.1.3 to enable MS endpoints."
         )
 
     start_ts = time.time()

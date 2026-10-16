@@ -20,6 +20,10 @@ except ImportError as _e:
     MSTOOLKIT_IMPORT_ERROR = _e
 
 
+# What pip installs for the [ms] extra; 0.1.3 is on GitHub, not yet on PyPI.
+MSTOOLKIT_PIP = "git+https://github.com/calebcoatney/ms-toolkit@v0.1.3"
+
+
 def toolkit_unavailable_text(err: ImportError, executable: str) -> tuple[str, str]:
     """(headline, hint) for the MS tab when ms_toolkit failed to import.
 
@@ -29,7 +33,7 @@ def toolkit_unavailable_text(err: ImportError, executable: str) -> tuple[str, st
     """
     if isinstance(err, ModuleNotFoundError) and (err.name or "").split(".")[0] == "ms_toolkit":
         return (f"MSToolkit is not installed in this Python ({executable}).",
-                f'"{executable}" -m pip install ms-toolkit-nrel')
+                f'"{executable}" -m pip install {MSTOOLKIT_PIP}')
     hint = (f'"{executable}" -m pip install {err.name}' if isinstance(err, ModuleNotFoundError) and err.name
             else "Reinstall ms-toolkit-nrel into this Python, or check the error above.")
     return f"MSToolkit is installed but could not be loaded: {err}", hint

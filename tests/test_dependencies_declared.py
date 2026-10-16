@@ -51,4 +51,4 @@ def test_no_declared_dependency_is_unused():
 
 def test_ms_extra_requires_the_fixed_ms_toolkit():
     text = (ROOT / "setup.py").read_text(encoding="utf-8")
-    assert '"ms": ["ms-toolkit-nrel>=0.1.3"]' in text
+    assert '"ms": ["ms-toolkit-nrel @ git+https://github.com/calebcoatney/ms-toolkit@v0.1.3"]' in text

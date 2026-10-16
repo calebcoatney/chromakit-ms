@@ -14,7 +14,7 @@ def test_missing_package_names_the_interpreter():
     err = ModuleNotFoundError("No module named 'ms_toolkit'", name="ms_toolkit")
     headline, hint = toolkit_unavailable_text(err, "/envs/ck/bin/python")
     assert "not installed" in headline and "/envs/ck/bin/python" in headline
-    assert hint == '"/envs/ck/bin/python" -m pip install ms-toolkit-nrel'
+    assert hint == '"/envs/ck/bin/python" -m pip install git+https://github.com/calebcoatney/ms-toolkit@v0.1.3'
 
 
 def test_broken_dependency_is_not_reported_as_missing():
