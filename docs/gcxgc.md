@@ -19,7 +19,8 @@ Open Folder (top of the left panel) → choose the folder that contains the `.C`
 the `.C` folder. The top heatmap is the TIC, the bottom the FID. The x axis is first-dimension
 retention time in minutes, the y axis second-dimension retention time in seconds. The "TIC Display"
 choice under 2D Peak Detection switches the top heatmap between the raw TIC and the background-corrected
-(`.dbc.lsc`) TIC when the run has one.
+(`.dbc.lsc`) TIC when the run has one. With Detection Signal set to DBC TIC or TIC, the view shows the TIC
+heatmap alone; tick **Show FID** to bring the FID back.
 
 The Parameters tab has the GCxGC controls:
 
@@ -35,27 +36,30 @@ The Parameters tab has the GCxGC controls:
   2D RT Tolerance and Min Modulations control how slices from neighbouring modulations are joined into
   one peak. Spectrum Window (scans, at least 1) sets how far around a peak's expected position ChromaKit
   looks for its mass-spectral apex. FID→TOF Offset is "Auto (fit)" by default; choose "Fixed" to enter
-  the offset in TOF scans yourself.
+  the offset in TOF scans yourself. Both are greyed out when detecting on a TIC, where spectra come
+  straight from the TIC apex (see [MS-only runs and GNPS export](#ms-only-runs-and-gnps-export)).
 
 Layout and detection settings take effect when you click Integrate.
 
 ## Find and identify peaks
 
 - Detection Signal: FID (the default; volumes are FID-based, and FID response is roughly carbon
-  proportional for hydrocarbons) or DBC TIC (for trace compounds the FID cannot see).
+  proportional for hydrocarbons), DBC TIC (for trace compounds the FID cannot see) or TIC.
 - Integrate (button under the plot): applies the layout, runs the 2D baseline, then finds peaks slice by slice and groups them
   across modulations. Each peak gets a red + marker on both heatmaps, and the status bar reports the
   count. If it reports none, lower Min Prominence. If it reports "FID→TOF offset fit failed", set the
   offset to Fixed under 2D Peak Detection.
 - "View Peak Results" (status bar, lower right) lists every peak with its retention times, volume,
   number of modulations, compound and match score.
-- Click near a peak's marker on the bottom (FID) heatmap. ChromaKit selects the nearest peak, shows its
+- Click near a peak's marker on either heatmap (with TIC detection only the TIC heatmap is shown).
+  ChromaKit selects the nearest peak, shows its
   spectrum in the Mass Spectrometry tab and prints its retention times and volume in the status bar;
   after MS Search All the status bar also names its best hit and score, and the tab's results table
   lists its top hits.
-  The spectrum comes from the TOF scan at the peak's own apex: the FID apex is mapped to TOF time through
-  the FID→TOF offset, and the TOF TIC is searched within the Spectrum Window for its maximum. Up to three
-  adjacent scans are averaged, leaving out saturated ones.
+  With FID detection, the spectrum comes from the TOF scan at the peak's own apex: the FID apex is mapped
+  to TOF time through the FID→TOF offset, and the TOF TIC is searched within the Spectrum Window for its
+  maximum. Up to three adjacent scans are averaged, leaving out saturated ones. With TIC detection, the
+  spectrum comes straight from the peak's apex on the TIC, so the offset and Spectrum Window do not apply.
 - Search Library (Mass Spectrometry tab) shows the top hits for the spectrum on display. MS Search All
   (under the plot) searches every peak, writes the best hit into the Compound and Match Score columns
   and records the top hits in the JSON. Each MS Search All starts by clearing the previous IDs; if you
