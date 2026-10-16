@@ -1,8 +1,10 @@
+import os
+
 import numpy as np
 import pytest
 
 from logic.gcxgc_run import GCxGCRun, MissingModulationPeriod, OffsetModel
-from tests.logic.gcxgc import synth
+from util import sepsolve_synth as synth
 
 
 def _run(tmp_path, scene, **kw):
@@ -297,3 +299,14 @@ def test_real_8260_run_layout_and_offset(real_gcxgc_run):
     model = run.estimate_offset()
     assert model.ok
     assert -7.5 <= model.at(5) <= -5.0 and -3.0 <= model.at(75) <= -0.5
+
+
+def test_appledouble_sidecars_are_ignored(tmp_path):
+    """A run copied to an exFAT/FAT drive on a Mac gets a 4 KB ._<name> sidecar beside every
+    file; ._ sorts first, so the loader once read ._<name>.rsd as the FID trace."""
+    c = synth.build_run(tmp_path, synth.Scene(duration_min=2.0))
+    for f in list((c / "data").iterdir()):
+        (f.parent / f"._{f.name}").write_bytes(b"\x00\x05\x16\x07" + b"\x00" * 4092)
+    run = GCxGCRun.from_c_folder(c)
+    assert all(not os.path.basename(p).startswith("._") for p in run.paths.values() if p)
+    assert run.sample_id == "Synth"

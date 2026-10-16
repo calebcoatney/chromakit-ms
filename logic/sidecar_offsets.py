@@ -1,6 +1,7 @@
 """Per-file MS time offset sidecar.
 
-Stores user-applied MS time offsets in `overrides/ms_time_offsets.json` keyed
+Stores user-applied MS time offsets in `ms_time_offsets.json` in the writable
+`overrides` folder (see util.app_paths) keyed
 by absolute `.D` directory path. Format::
 
     {
@@ -20,7 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-DEFAULT_SIDECAR_PATH = Path("overrides") / "ms_time_offsets.json"
+from util.app_paths import writable_dir
+
+DEFAULT_SIDECAR_PATH = Path(writable_dir("overrides")) / "ms_time_offsets.json"
 VALID_SOURCES = ("manual", "auto")
 Source = Literal["manual", "auto"]
 

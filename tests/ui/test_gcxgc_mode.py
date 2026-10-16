@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("pytestqt")
 
 from logic.ms_search_core import format_casno
-from tests.logic.gcxgc import synth
+from util import sepsolve_synth as synth
 from ui.app import ChromaKitApp
 
 
@@ -110,7 +110,7 @@ def test_export_button_writes_all_result_files(gcxgc_app):
     app.button_frame.export_button.click()
     assert sorted(f.name for f in (c / "results").iterdir()) == [
         "Synth - GCxGC peaks.csv", "Synth - GCxGC peaks.json",
-        "Synth - GCxGC spectra.mgf", "Synth - GCxGC spectra.msp"]
+        "Synth - GCxGC spectra.mgf", "Synth - GCxGC spectra.msp", "Synth - GNPS quant.csv"]
 
 
 def test_numeric_item_sorts_by_value(qtbot):
@@ -651,7 +651,7 @@ def test_export_writes_into_the_runs_own_folder(gcxgc_app):
     app.current_directory_path = str(other)
     app.button_frame.export_button.click()
     assert list((other / "results").iterdir()) == []
-    assert len(list((c / "results").iterdir())) == 4
+    assert len(list((c / "results").iterdir())) == 5
 
 
 def test_failed_load_drops_the_previous_run(qtbot, tmp_path, monkeypatch):
@@ -887,3 +887,138 @@ def test_a_load_that_fails_after_reading_closes_the_new_run(gcxgc_app, monkeypat
     assert "boom" in app.status_bar.currentMessage()
     _assert_run_dropped(app, run_a)
     assert len(made) == 1 and _run_files_closed(made[0])
+
+
+def test_export_min_snr_reaches_the_method_and_the_export(gcxgc_app, monkeypatch):
+    app, _ = gcxgc_app
+    pf = app.parameters_frame
+    assert pf.gcxgc_export_snr_spin.value() == 5.0
+    pf.gcxgc_export_snr_spin.setValue(2.5)
+    assert app.current_method.gcxgc.export_min_snr == 2.5
+    app.button_frame.integrate_button.click()
+    seen = {}
+    import logic.gcxgc_export as ge
+    real = ge.export_gcxgc_results
+
+    def spy(*a, **k):
+        seen["min_snr"] = k.get("min_snr")
+        return real(*a, **k)
+
+    monkeypatch.setattr(ge, "export_gcxgc_results", spy)
+    app._export_gcxgc(interactive=True)
+    assert seen["min_snr"] == 2.5
+    assert "GNPS quant.csv" in app.status_bar.currentMessage()
+
+
+def _select_signal(pf, key):
+    pf.gcxgc_signal_combo.setCurrentIndex(pf.gcxgc_signal_combo.findData(key))
+
+
+def test_tic_detection_shows_the_tic_alone_and_show_fid_brings_it_back(gcxgc_app):
+    app, _ = gcxgc_app
+    pf, plot = app.parameters_frame, app.plot_frame
+    _select_signal(pf, "dbc_tic")
+    app.button_frame.integrate_button.click()
+    assert hasattr(plot, "_gcxgc_ax_tic") and not hasattr(plot, "_gcxgc_ax_fid")
+    assert len(plot._gcxgc_axes) == 1
+    assert pf.gcxgc_show_fid.isEnabled() and not pf.gcxgc_show_fid.isChecked()
+    pf.gcxgc_show_fid.setChecked(True)
+    assert hasattr(plot, "_gcxgc_ax_fid") and len(plot._gcxgc_axes) == 2
+    assert "show_fid" not in app.current_method.gcxgc.model_dump()          # view only, not saved
+    assert "show_fid" not in app.parameters_frame.get_gcxgc_params()
+
+
+def test_fid_detection_always_shows_the_fid(gcxgc_app):
+    app, _ = gcxgc_app
+    pf = app.parameters_frame
+    _select_signal(pf, "fid")
+    assert not pf.gcxgc_show_fid.isEnabled()
+    app.button_frame.integrate_button.click()
+    assert hasattr(app.plot_frame, "_gcxgc_ax_fid")
+
+
+def test_fallback_to_fid_shows_the_fid(qtbot, tmp_path):
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    c = synth.build_run(tmp_path, _scene(), dbc=False)       # no DBC TIC in this run
+    app.on_file_selected(str(c))
+    pf = app.parameters_frame
+    pf.gcxgc_peaks_enabled.setChecked(True)
+    pf.gcxgc_prominence_entry.setText("50")
+    _select_signal(pf, "dbc_tic")
+    app.button_frame.integrate_button.click()
+    assert app._gcxgc_proc.frame.signal == "fid"
+    assert hasattr(app.plot_frame, "_gcxgc_ax_fid")
+
+
+def test_clicking_the_tic_heatmap_selects_the_nearest_peak(gcxgc_app):
+    from types import SimpleNamespace
+    app, _ = gcxgc_app
+    _select_signal(app.parameters_frame, "dbc_tic")
+    app.button_frame.integrate_button.click()
+    target = max(app._gcxgc_peaks, key=lambda q: q.volume)
+    got = []
+    app.plot_frame.peak_selected.connect(got.append)
+    ax = app.plot_frame._gcxgc_ax_tic
+    app.plot_frame._on_gcxgc_click(SimpleNamespace(inaxes=ax, xdata=target.rt1, ydata=target.rt2, button=1))
+    assert got and got[-1] is target
+
+
+def test_tic_detection_never_fits_the_offset(gcxgc_app, monkeypatch):
+    app, _ = gcxgc_app
+    pf = app.parameters_frame
+    _select_signal(pf, "dbc_tic")
+    assert not pf.gcxgc_offset_mode_combo.isEnabled() and not pf.gcxgc_offset_spin.isEnabled()
+    assert not pf.gcxgc_apex_window_spin.isEnabled()
+    from logic.gcxgc_run import GCxGCRun
+    monkeypatch.setattr(GCxGCRun, "offset",
+                        lambda self: (_ for _ in ()).throw(AssertionError("offset fitted")))
+    app.button_frame.integrate_button.click()
+    app._export_gcxgc(interactive=True)
+    assert app._gcxgc_peaks
+    assert "offset fit failed" not in app.status_bar.currentMessage()
+    assert "GCxGC results written" in app.status_bar.currentMessage()
+
+
+def test_export_min_snr_changed_after_integrate_applies_to_the_export(gcxgc_app, monkeypatch):
+    app, c = gcxgc_app
+    pf = app.parameters_frame
+    app.button_frame.integrate_button.click()            # integrated at the default 5.0
+    pf.gcxgc_export_snr_spin.setValue(1.5)                # the gate is post-processing: no re-integrate
+    seen = {}
+    import logic.gcxgc_export as ge
+    real = ge.export_gcxgc_results
+
+    def spy(*a, **k):
+        seen["min_snr"] = k.get("min_snr")
+        return real(*a, **k)
+
+    monkeypatch.setattr(ge, "export_gcxgc_results", spy)
+    _clear_results(c)
+    app.button_frame.export_button.click()
+    assert seen["min_snr"] == 1.5
+    assert _record(c)["settings"]["export_min_snr"] == 1.5
+
+
+def test_heatmaps_use_a_data_driven_floor_so_an_uncorrected_fid_is_not_flat(qtbot):
+    import numpy as np
+    from logic.gcxgc_run import Frame2D
+    from ui.frames.plot import PlotFrame
+
+    def frame(base, signal):
+        rng = np.random.default_rng(0)
+        data = base + rng.random((40, 100)) * 500.0           # baseline 30000 + a little structure
+        data[20, 50] += 5000.0
+        return Frame2D(data=data, t1_min=np.arange(40) / 10.0, t2_s=np.arange(100) / 50.0,
+                       hz=50.0, cut=0, N=100, signal=signal)
+
+    pf = PlotFrame()
+    qtbot.addWidget(pf)
+    pf.render_gcxgc(frame(30000.0, "fid"), frame(2000.0, "tic"), show_fid=True)
+    images = [ax.images[0] for ax in pf._gcxgc_axes]
+    for im in images:
+        lo, hi = im.norm.vmin, im.norm.vmax
+        assert 0 < lo < hi
+    assert images[1].norm.vmin > 29000.0                       # the FID, not clipped from zero
+    pf.render_gcxgc(frame(0.0, "fid"), frame(0.0, "tic"), show_fid=False)    # degenerate stays valid
+    assert pf._gcxgc_axes[0].images[0].norm.vmin <= pf._gcxgc_axes[0].images[0].norm.vmax

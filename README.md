@@ -27,6 +27,9 @@ ChromaKit-MS is a Python application for inspecting and processing GC-MS (Gas Ch
 
 ## Installation
 
+**Windows, no Python needed:** download the app from the
+[Releases page](https://github.com/calebcoatney/chromakit-ms/releases); see [docs/windows.md](docs/windows.md).
+
 Clone the repository and install in editable mode:
 
 ```bash

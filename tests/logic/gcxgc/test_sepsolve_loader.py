@@ -1,7 +1,7 @@
 from logic.c_folder import CFolder
 from logic.gcxgc_run import GCxGCRun
 from logic.loaders.sepsolve_loader import SepSolveLoader
-from tests.logic.gcxgc import synth
+from util import sepsolve_synth as synth
 
 
 def test_loader_returns_run_and_correct_layout(tmp_path):

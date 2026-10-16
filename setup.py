@@ -1,15 +1,21 @@
+import re
+from pathlib import Path
+
 from setuptools import setup, find_packages
+
+VERSION = re.search(r'__version__ = "([^"]+)"',
+                    (Path(__file__).parent / "chromakit_version.py").read_text(encoding="utf-8")).group(1)
 
 setup(
     name="chromakit-ms",
-    version="0.1.0",
+    version=VERSION,
     description="A python application for GC-MS data analysis and visualization",
     author="Caleb Coatney",
     author_email="caleb.coatney@nrel.gov",
     url="https://github.com/calebcoatney/chromakit-ms",
     license="Apache-2.0",
     packages=find_packages(),
-    py_modules=["main", "web"],
+    py_modules=["main", "web", "chromakit_version"],
     include_package_data=True,
     package_data={
         "": ["*.qss", "*.png", "*.ico"],
@@ -23,11 +29,11 @@ setup(
     install_requires=[
         "PySide6==6.9.0",
         "numpy",
+        "pandas",
         "scipy",
         "matplotlib",
         "pybaselines",
         "rainbow-api",
-        "customtkinter",
         "uvicorn",
         "fastapi",
         "pydantic",
@@ -35,7 +41,7 @@ setup(
         "olefile",
     ],
     extras_require={
-        "ms": ["ms-toolkit-nrel"],
+        "ms": ["ms-toolkit-nrel>=0.1.3"],
         "deconv": ["torch"],
     },
     classifiers=[

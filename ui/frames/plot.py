@@ -584,7 +584,7 @@ class PlotFrame(QWidget):
     def _on_plot_click(self, event):
         """Handle mouse button press on the plot."""
         # GCxGC mode: delegate to gcxgc click handler
-        if hasattr(self, '_gcxgc_ax_fid'):
+        if hasattr(self, '_gcxgc_axes'):
             self._on_gcxgc_click(event)
             return
         
@@ -1204,45 +1204,64 @@ class PlotFrame(QWidget):
         # Emit signal to request adding peak to RT table
         self.add_to_rt_table_requested.emit(peak_index)
     
-    def render_gcxgc(self, fid_frame, tic_frame) -> None:
-        """Two stacked GCxGC heatmaps (TIC on top, FID below) from Frame2D objects.
+    def render_gcxgc(self, fid_frame, tic_frame, *, show_fid: bool = True) -> None:
+        """GCxGC heatmaps from Frame2D objects: the TIC on top and, when show_fid, the FID below.
 
-        Linear colour scale clipped at the 99th percentile. X: 1tR (min) from each frame's
+        Linear colour scale from the 1st to the 99th percentile of each frame (a floor of zero would
+        paint an uncorrected FID, baseline tens of thousands of counts, as one flat colour). X: 1tR (min) from each frame's
         row times; Y: 2tR (s), origin bottom-left.
         """
         import numpy as np
 
         self.figure.clear()
         self.figure.set_constrained_layout(True)
-        ax_tic = self.figure.add_subplot(2, 1, 1)
-        ax_fid = self.figure.add_subplot(2, 1, 2, sharex=ax_tic, sharey=ax_tic)
+        rows = 2 if show_fid else 1
+        ax_tic = self.figure.add_subplot(rows, 1, 1)
 
         def extent(f):
             if len(f.t1_min) == 0:
                 return [0.0, 1.0, 0.0, f.N / f.hz]
             return [f.t1_min[0], f.t1_min[-1] + f.N / f.hz / 60.0, 0.0, f.N / f.hz]
 
-        def vmax(data):
-            return float(np.percentile(data, 99)) if data.size else 1.0
+        def clim(data):
+            if not data.size:
+                return 0.0, 1.0
+            lo, hi = (float(v) for v in np.percentile(data, (1, 99)))
+            if hi <= lo:                                  # flat or nearly so: fall back to the full range
+                lo, hi = float(data.min()), float(data.max())
+            if hi <= lo:
+                hi = lo + 1.0
+            return lo, hi
 
-        ax_tic.imshow(tic_frame.data.T, aspect='auto', origin='lower', cmap='viridis',
-                      vmin=0, vmax=vmax(tic_frame.data), extent=extent(tic_frame))
+        lo, hi = clim(tic_frame.data)
+        im = ax_tic.imshow(tic_frame.data.T, aspect='auto', origin='lower', cmap='viridis',
+                           vmin=lo, vmax=hi, extent=extent(tic_frame))
         ax_tic.set_ylabel("2D RT (s)")
         ax_tic.set_title("DBC TIC" if tic_frame.signal == "dbc_tic" else "TIC")
-        ax_tic.tick_params(labelbottom=False)
-        im = ax_fid.imshow(fid_frame.data.T, aspect='auto', origin='lower', cmap='viridis',
-                           vmin=0, vmax=vmax(fid_frame.data), extent=extent(fid_frame))
-        ax_fid.set_xlabel("1st Dimension RT (min)")
-        ax_fid.set_ylabel("2D RT (s)")
-        ax_fid.set_title("FID")
-        self.figure.colorbar(im, ax=[ax_tic, ax_fid], label="Intensity")
-        self.canvas.draw()
+        axes = [ax_tic]
+        if show_fid:
+            ax_tic.tick_params(labelbottom=False)
+            ax_fid = self.figure.add_subplot(2, 1, 2, sharex=ax_tic, sharey=ax_tic)
+            lo, hi = clim(fid_frame.data)
+            im = ax_fid.imshow(fid_frame.data.T, aspect='auto', origin='lower', cmap='viridis',
+                               vmin=lo, vmax=hi, extent=extent(fid_frame))
+            ax_fid.set_xlabel("1st Dimension RT (min)")
+            ax_fid.set_ylabel("2D RT (s)")
+            ax_fid.set_title("FID")
+            axes.append(ax_fid)
+            self._gcxgc_ax_fid = ax_fid
+        else:
+            ax_tic.set_xlabel("1st Dimension RT (min)")
+            if hasattr(self, '_gcxgc_ax_fid'):
+                delattr(self, '_gcxgc_ax_fid')
+        self.figure.colorbar(im, ax=axes, label="Intensity")
         self._gcxgc_ax_tic = ax_tic
-        self._gcxgc_ax_fid = ax_fid
+        self._gcxgc_axes = axes
+        self.canvas.draw()
 
     def clear_gcxgc(self) -> None:
         """Take the GCxGC heatmaps and their peaks off the canvas and show the empty 1D axes."""
-        for name in ('_gcxgc_ax_tic', '_gcxgc_ax_fid'):
+        for name in ('_gcxgc_ax_tic', '_gcxgc_ax_fid', '_gcxgc_axes'):
             if hasattr(self, name):
                 delattr(self, name)
         self._gcxgc_peaks = []
@@ -1253,13 +1272,13 @@ class PlotFrame(QWidget):
         self._setup_empty_plots()
 
     def overlay_gcxgc_peaks(self, peaks: list) -> None:
-        """Overlay detected peaks as red + markers on both heatmap axes."""
-        if not hasattr(self, '_gcxgc_ax_tic'):
+        """Overlay detected peaks as red + markers on every heatmap shown."""
+        if not hasattr(self, '_gcxgc_axes'):
             return
         self._gcxgc_peaks = peaks
         rt1_vals = [p.rt1 for p in peaks]
         rt2_vals = [p.rt2 for p in peaks]
-        for ax in (self._gcxgc_ax_tic, self._gcxgc_ax_fid):
+        for ax in self._gcxgc_axes:
             for artist in getattr(ax, '_gcxgc_peak_scatter', []):
                 try:
                     artist.remove()
@@ -1269,10 +1288,11 @@ class PlotFrame(QWidget):
                             linewidths=0.8, zorder=5)
             ax._gcxgc_peak_scatter = [sc]
         self.canvas.draw()
-    
+
     def _on_gcxgc_click(self, event) -> None:
-        """Map a click on the FID heatmap to the nearest GCxGC2DPeak."""
-        if event.inaxes is not getattr(self, '_gcxgc_ax_fid', None):
+        """Map a click on either heatmap to the nearest GCxGC2DPeak."""
+        ax = event.inaxes
+        if ax is None or ax not in getattr(self, '_gcxgc_axes', []):
             return
         if not self._gcxgc_peaks:
             return
@@ -1280,8 +1300,8 @@ class PlotFrame(QWidget):
         clicked_rt2 = event.ydata
         if clicked_rt1 is None or clicked_rt2 is None:
             return
-        rt1_range = self._gcxgc_ax_fid.get_xlim()
-        rt2_range = self._gcxgc_ax_fid.get_ylim()
+        rt1_range = ax.get_xlim()
+        rt2_range = ax.get_ylim()
         rt1_scale = (rt1_range[1] - rt1_range[0]) or 1
         rt2_scale = (rt2_range[1] - rt2_range[0]) or 1
         best = min(

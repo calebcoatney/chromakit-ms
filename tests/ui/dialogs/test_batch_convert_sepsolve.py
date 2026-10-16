@@ -36,3 +36,12 @@ def test_dbc_goes_to_the_longest_matching_stem(tmp_path):
 def test_group_needs_hdr_and_a_spectrum_file(tmp_path):
     _touch(tmp_path, "X.rsd", "X.lsc", "Y.HDR", "Y.rsd", "Z.HDR", "Z.rsd", "Z.lsc")
     assert sorted(_find_sepsolve_stems(str(tmp_path))) == ["Z"]
+
+
+def test_appledouble_sidecars_are_not_runs(tmp_path):
+    """macOS writes ._<name> sidecars on exFAT/FAT drives; they are not SepSolve files."""
+    _touch(tmp_path, "PAE.HDR", "PAE.rsd", "PAE.lsc", "PAE_0.5_secs.dbc.lsc",
+           "._PAE.HDR", "._PAE.rsd", "._PAE.lsc", "._PAE_0.5_secs.dbc.lsc")
+    g = _find_sepsolve_stems(str(tmp_path))
+    assert sorted(g) == ["PAE"]
+    assert _names(g["PAE"]) == ["PAE.HDR", "PAE.lsc", "PAE.rsd", "PAE_0.5_secs.dbc.lsc"]

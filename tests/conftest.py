@@ -31,3 +31,10 @@ def real_gcxgc_run() -> pathlib.Path:
     if not path or not os.path.isdir(path):
         pytest.skip("CHROMAKIT_GCXGC_RUN is not set to a .C folder")
     return pathlib.Path(path)
+
+
+@pytest.fixture(autouse=True)
+def _no_update_check(monkeypatch):
+    """Tests never call GitHub or auto-load the user's saved MS library."""
+    monkeypatch.setenv("CHROMAKIT_NO_UPDATE_CHECK", "1")
+    monkeypatch.setenv("CHROMAKIT_NO_MS_AUTOLOAD", "1")

@@ -19,7 +19,8 @@ Open Folder (top of the left panel) → choose the folder that contains the `.C`
 the `.C` folder. The top heatmap is the TIC, the bottom the FID. The x axis is first-dimension
 retention time in minutes, the y axis second-dimension retention time in seconds. The "TIC Display"
 choice under 2D Peak Detection switches the top heatmap between the raw TIC and the background-corrected
-(`.dbc.lsc`) TIC when the run has one.
+(`.dbc.lsc`) TIC when the run has one. With Detection Signal set to DBC TIC or TIC, the view shows the TIC
+heatmap alone; tick **Show FID** to bring the FID back.
 
 The Parameters tab has the GCxGC controls:
 
@@ -35,27 +36,32 @@ The Parameters tab has the GCxGC controls:
   2D RT Tolerance and Min Modulations control how slices from neighbouring modulations are joined into
   one peak. Spectrum Window (scans, at least 1) sets how far around a peak's expected position ChromaKit
   looks for its mass-spectral apex. FID→TOF Offset is "Auto (fit)" by default; choose "Fixed" to enter
-  the offset in TOF scans yourself.
+  the offset in TOF scans yourself. Both are greyed out when detecting on a TIC, where spectra come
+  straight from the TIC apex (see [MS-only runs and GNPS export](#ms-only-runs-and-gnps-export)).
 
 Layout and detection settings take effect when you click Integrate.
 
 ## Find and identify peaks
 
 - Detection Signal: FID (the default; volumes are FID-based, and FID response is roughly carbon
-  proportional for hydrocarbons) or DBC TIC (for trace compounds the FID cannot see).
+  proportional for hydrocarbons), DBC TIC (for trace compounds the FID cannot see) or TIC.
 - Integrate (button under the plot): applies the layout, runs the 2D baseline, then finds peaks slice by slice and groups them
-  across modulations. Each peak gets a red + marker on both heatmaps, and the status bar reports the
+  across modulations. Each peak gets a red + marker on every heatmap shown (both with FID detection;
+  with TIC detection only the TIC heatmap, unless Show FID is ticked), and the status bar reports the
   count. If it reports none, lower Min Prominence. If it reports "FID→TOF offset fit failed", set the
   offset to Fixed under 2D Peak Detection.
 - "View Peak Results" (status bar, lower right) lists every peak with its retention times, volume,
   number of modulations, compound and match score.
-- Click near a peak's marker on the bottom (FID) heatmap. ChromaKit selects the nearest peak, shows its
+- Click near a peak's marker on either heatmap (with TIC detection only the TIC heatmap is shown).
+  ChromaKit selects the nearest peak, shows its
   spectrum in the Mass Spectrometry tab and prints its retention times and volume in the status bar;
   after MS Search All the status bar also names its best hit and score, and the tab's results table
   lists its top hits.
-  The spectrum comes from the TOF scan at the peak's own apex: the FID apex is mapped to TOF time through
-  the FID→TOF offset, and the TOF TIC is searched within the Spectrum Window for its maximum. Up to three
-  adjacent scans are averaged, leaving out saturated ones.
+  With FID detection, the spectrum comes from the TOF scan at the peak's own apex: the FID apex is mapped
+  to TOF time through the FID→TOF offset, and the TOF TIC is searched within the Spectrum Window for its
+  maximum. With TIC detection, the spectrum comes straight from the peak's apex on the TIC, so the offset
+  and Spectrum Window do not apply. Either way the spectrum averages up to three adjacent scans around the
+  apex, leaving out saturated ones.
 - Search Library (Mass Spectrometry tab) shows the top hits for the spectrum on display. MS Search All
   (under the plot) searches every peak, writes the best hit into the Compound and Match Score columns
   and records the top hits in the JSON. Each MS Search All starts by clearing the previous IDs; if you
@@ -65,7 +71,7 @@ Layout and detection settings take effect when you click Integrate.
 
 ## Export
 
-Export (or "Export…" in View Peak Results) writes four files to `<run>.C/results/`:
+Export (or "Export…" in View Peak Results) writes five files to `<run>.C/results/`:
 
 - `<run> - GCxGC peaks.csv`: ChromSpace's Area-percent layout (2tR in minutes). Use it to compare
   ChromaKit's peaks side by side with a ChromSpace export (see below), or to paste peak rows into a
@@ -80,16 +86,41 @@ Export (or "Export…" in View Peak Results) writes four files to `<run>.C/resul
   import has not been tested in any of them, so check your tool's MSP options. Peaks with no spectrum are
   left out.
 - `<run> - GCxGC spectra.mgf`: the same spectra in MGF, one `BEGIN IONS … END IONS` block per peak,
-  for spectral-networking tools such as GNPS. It carries no retention time; `FEATURE_ID` (= the peak
-  number) links each spectrum to its 1tR/2tR in the CSV and JSON. `PEPMASS=0` and `MSLEVEL=1` mark EI
-  spectra with no precursor. The exact fields a given networking workflow expects have not been checked
-  against a reference file yet.
+  for spectral-networking tools such as GNPS. `RTINSECONDS` is the first-dimension retention time, and
+  `FEATURE_ID` (= the peak number) links each spectrum to its 1tR/2tR in the CSV and JSON. `PEPMASS` is
+  the base peak m/z and `MSLEVEL=2` is set, because EI has no precursor ion. The exact fields a given
+  networking workflow expects have not been checked against a reference file yet.
+- `<run> - GNPS quant.csv`: one row per peak for GNPS quantification, with `row ID`, `row m/z`,
+  `row retention time` (minutes) and `<run> Peak area` columns. See the next section.
 
 By default Integrate and MS Search All also write these files; Settings → Export Settings controls
-that. Run Integrate before Export; the files describe the peaks and settings of the last Integrate.
+that. Run Integrate before Export; the files describe the peaks and settings of the last Integrate (Export Min S/N is the exception: it is read at Export).
 A run with no peaks still gets a header-only CSV, an empty MSP and MGF, and a JSON with an empty peak list.
 
 Volume (the CSV's Area) is in detector counts × samples and is not calibrated. Compare peaks with Area %.
+
+## MS-only runs and GNPS export
+
+Some samples show only on the TOF: nothing reaches the FID, which then shows flat baseline.
+
+1. Set **Detection Signal** to **DBC TIC** (or TIC). The view shows the TIC heatmap alone; tick
+   **Show FID** to see the FID too. The FID→TOF offset settings are greyed out: spectra come straight
+   from the TIC apex.
+2. Integrate. Click near a peak on the heatmap to see its spectrum. No library is needed.
+3. After Integrate (and before Export), set **Export Min S/N** (default 5). Export reads it as it stands
+   then, so you can change it without re-integrating. It trims each exported spectrum to ions above its
+   own noise floor. A TOF spectrum otherwise carries a few hundred noise-level ions. 0 keeps every ion.
+   The spectrum shown in ChromaKit and library search are not trimmed.
+4. Export writes, beside the CSV/JSON/MSP:
+   - `<sample> - GCxGC spectra.mgf`, in the fields of MZmine's GC (GNPS) export: `FEATURE_ID`,
+     `PEPMASS` (the base peak m/z; EI has no precursor ion), `RTINSECONDS` (first dimension),
+     `SCANS`, `MSLEVEL=2`, `CHARGE=1+`, `Num peaks`.
+   - `<sample> - GNPS quant.csv`: `row ID`, `row m/z`, `row retention time` (min), `<sample> Peak area`.
+   The second-dimension time stays in the CSV and JSON, joined by `FEATURE_ID` / `Peak #`.
+5. Save the settings as a method (`.chromethod`) to reuse them.
+
+GNPS's GC workflow joins many samples on aligned features; ChromaKit writes one sample at a time and
+does not align across samples.
 
 ## Check against ChromSpace
 

@@ -1024,7 +1024,8 @@ class AutomationWorker(QRunnable):
                 return
         
         # Load the override database
-        overrides_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'overrides', 'manual_assignments.json')
+        from util.app_paths import writable_dir
+        overrides_file = os.path.join(writable_dir("overrides"), 'manual_assignments.json')
         
         if not os.path.exists(overrides_file):
             self.signals.log_message.emit("No manual overrides database found")

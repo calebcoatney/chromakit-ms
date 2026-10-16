@@ -2,7 +2,7 @@ import pytest
 
 from logic.gcxgc_processor import GCxGCProcessor
 from logic.gcxgc_run import GCxGCRun
-from tests.logic.gcxgc import synth
+from util import sepsolve_synth as synth
 
 
 def _scene():

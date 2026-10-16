@@ -5,8 +5,8 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QLabel, QComboBox, QDialogButtonBox,
     QTabWidget  # Add QTabWidget to imports
 )
-from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer, QSettings
-from PySide6.QtGui import QIcon, QBrush, QColor
+from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer, QSettings, QThread, Signal, QUrl
+from PySide6.QtGui import QIcon, QBrush, QColor, QDesktopServices
 from ui.frames.tree import FileTreeFrame
 from ui.frames.plot import PlotFrame
 from ui.frames.parameters import ParametersFrame
@@ -36,6 +36,22 @@ import matplotlib
 # Import the data handler directly as a required dependency
 from logic.data_handler import DataHandler
 
+# Resolved from this file, not the working directory: in a frozen onedir build ui/app.py sits in
+# _internal/ui/, so this is _internal/resources/file.ico (bundled by packaging/windows/chromakit.spec).
+ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resources", "file.ico")
+
+
+class _UpdateCheckThread(QThread):
+    """Asks GitHub for the latest release once; emits only when there is a usable answer."""
+    found = Signal(str, str)
+
+    def run(self):
+        from logic.update_check import latest_release
+        result = latest_release()
+        if result:
+            self.found.emit(*result)
+
+
 class ChromaKitApp(QMainWindow):
     """Main application window for ChromaKit."""
     
@@ -43,7 +59,7 @@ class ChromaKitApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("ChromaKit")
         self.resize(1600, 800)
-        self.setWindowIcon(QIcon(r'resources\file.ico'))
+        self.setWindowIcon(QIcon(ICON_PATH))
         
         # Initialize processor
         self.processor = ChromatogramProcessor()
@@ -270,9 +286,42 @@ class ChromaKitApp(QMainWindow):
         self.theme_action = settings_menu.addAction("Toggle Dark/Light Mode")
         self.theme_action.triggered.connect(self.toggle_theme)
 
+        self.update_check_action = settings_menu.addAction("Check for Updates at Startup")
+        self.update_check_action.setCheckable(True)
+        self.update_check_action.setChecked(self._update_check_enabled_setting())
+        self.update_check_action.toggled.connect(
+            lambda on: QSettings("CalebCoatney", "ChromaKit").setValue("updates/check_at_startup", on))
+
         # Push the (Untitled) document into every frame and set the title.
         self._apply_method_to_frames()
         self._update_window_title()
+
+        # Update notice: one background check at startup; failures are silent.
+        self.update_button = None
+        self._update_thread = None
+        if self._update_check_enabled_setting() and not os.environ.get("CHROMAKIT_NO_UPDATE_CHECK"):
+            self._update_thread = _UpdateCheckThread(self)
+            self._update_thread.found.connect(self._on_update_found)
+            self._update_thread.start()
+
+    def _update_check_enabled_setting(self) -> bool:
+        value = QSettings("CalebCoatney", "ChromaKit").value("updates/check_at_startup", True)
+        return value in (True, "true", "True", 1, "1")
+
+    def _on_update_found(self, version: str, url: str) -> None:
+        from chromakit_version import __version__
+        from logic.update_check import is_newer
+        if not is_newer(version, __version__):
+            return
+        self._update_url = url
+        if self.update_button is None:
+            self.update_button = QPushButton()
+            self.update_button.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl(self._update_url)))
+            self.statusBar().addPermanentWidget(self.update_button)
+        self.update_button.setText(f"Update available: v{version}")
+        self.update_button.setToolTip(f"Open the ChromaKit {version} release page")
+        self.update_button.setVisible(True)
 
     def _apply_method_to_frames(self):
         """Push current_method into each frame, guarded so frame change
@@ -382,6 +431,14 @@ class ChromaKitApp(QMainWindow):
         if not self._maybe_prompt_save():
             event.ignore()
             return
+        # The request times out at 5 s; never let Qt destroy a running thread.
+        thread = getattr(self, "_update_thread", None)
+        if thread is not None:
+            thread.wait(6000)
+        # Never let Qt destroy a running MS-library load thread either.
+        load_thread = getattr(getattr(self, "ms_frame", None), "load_thread", None)
+        if load_thread is not None and load_thread.isRunning():
+            load_thread.wait()
         super().closeEvent(event)
 
     def _on_params_writeback(self, params):
@@ -1564,8 +1621,8 @@ class ChromaKitApp(QMainWindow):
         import time
         import json
         
-        overrides_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'overrides')
-        os.makedirs(overrides_dir, exist_ok=True)
+        from util.app_paths import writable_dir
+        overrides_dir = writable_dir("overrides")
         
         # Create or load the overrides database
         overrides_file = os.path.join(overrides_dir, 'manual_assignments.json')
@@ -1732,13 +1789,22 @@ class ChromaKitApp(QMainWindow):
             pm = run.modulation_period_s          # entered at load; the files have none
         run.set_layout(modulation_period_s=pm, phase_shift_s=params['phase_shift'])
 
-    def _render_gcxgc_frames(self, fid_data=None) -> None:
+    def _gcxgc_signal_for_display(self) -> str:
+        """The signal the shown peaks were detected on, else the one Integrate would use now."""
+        if self._gcxgc_proc is not None and self._gcxgc_peaks:
+            return self._gcxgc_proc.frame.signal
+        signal = self.parameters_frame.get_gcxgc_params().get('detection_signal', 'fid')
+        return signal if signal in self._gcxgc_run.available_signals else 'fid'
+
+    def _render_gcxgc_frames(self, fid_data=None, signal=None) -> None:
         from dataclasses import replace
         run = self._gcxgc_run
+        signal = signal or self._gcxgc_signal_for_display()
+        show_fid = signal == 'fid' or self.parameters_frame.gcxgc_show_fid.isChecked()
         fid = run.frame('fid')
         if fid_data is not None and fid_data.shape == fid.data.shape:
             fid = replace(fid, data=fid_data)
-        self.plot_frame.render_gcxgc(fid, run.frame(self._gcxgc_tic_signal()))
+        self.plot_frame.render_gcxgc(fid, run.frame(self._gcxgc_tic_signal()), show_fid=show_fid)
 
     def _run_gcxgc_processing(self) -> None:
         """Apply the layout, optional 2D baseline and peak detection on the run's frames."""
@@ -1752,18 +1818,18 @@ class ChromaKitApp(QMainWindow):
             QMessageBox.warning(self, "GCxGC layout", str(e))
             return
         run.set_offset(params['offset_mode'], params['offset_scans'])
-        self.parameters_frame.set_gcxgc_run_info(run)
-        self._render_gcxgc_frames()
-        if not params['baseline_enabled'] and not params['peaks_enabled']:
-            self._clear_gcxgc_results()       # the layout just changed under the old peaks
-            self.status_bar.showMessage("GCxGC: heatmap updated (baseline and peak detection disabled)")
-            return
         signal = params.get('detection_signal', 'fid')
         signal_note = ""
         if signal not in run.available_signals:      # the method's choice, but this run lacks it
             label = {"dbc_tic": "DBC TIC", "tic": "TIC"}.get(signal, signal)
             signal_note = f" — {label} not available for this run; detected on FID"
             signal = 'fid'
+        self.parameters_frame.set_gcxgc_run_info(run)
+        self._render_gcxgc_frames(signal=signal)
+        if not params['baseline_enabled'] and not params['peaks_enabled']:
+            self._clear_gcxgc_results()       # the layout just changed under the old peaks
+            self.status_bar.showMessage("GCxGC: heatmap updated (baseline and peak detection disabled)")
+            return
         apex_window = params.get('apex_window', 10)
         try:
             proc = GCxGCProcessor(run.frame(signal), run, use_dbc=params.get('use_dbc', True),
@@ -1772,7 +1838,7 @@ class ChromaKitApp(QMainWindow):
                 self.status_bar.showMessage("GCxGC: applying 2D baseline correction…")
                 proc.apply_baseline(lam=params['lam'], diff_order=params['diff_order'])
                 if signal == 'fid':
-                    self._render_gcxgc_frames(fid_data=proc.corrected)
+                    self._render_gcxgc_frames(fid_data=proc.corrected, signal=signal)
             peaks = []
             if params['peaks_enabled']:
                 self.status_bar.showMessage("GCxGC: detecting peaks…")
@@ -1805,7 +1871,7 @@ class ChromaKitApp(QMainWindow):
             self._export_gcxgc(interactive=False)
         if signal_note:
             self.status_bar.showMessage(self.status_bar.currentMessage() + signal_note)
-        if peaks and not run.offset().ok:
+        if peaks and signal == 'fid' and not run.offset().ok:
             self.status_bar.showMessage(self.status_bar.currentMessage()
                                         + " — FID→TOF offset fit failed; assuming 0 (set it under 2D Peak Detection)")
 
@@ -1866,13 +1932,18 @@ class ChromaKitApp(QMainWindow):
             return
         results_dir = os.path.join(self._gcxgc_run.c_path, "results")     # the run's own folder
         search = self._gcxgc_search_info
+        # The S/N gate is pure post-processing of the spectra, so it follows the spin box as it
+        # stands now, not the value at Integrate; the JSON records the value actually used.
+        min_snr = float(self.parameters_frame.gcxgc_export_snr_spin.value())
+        settings = dict(self._gcxgc_export_settings, export_min_snr=min_snr)
         try:
             paths = export_gcxgc_results(
                 self._gcxgc_peaks, self._gcxgc_run, results_dir,
-                settings=self._gcxgc_export_settings,
+                settings=settings,
                 get_spectrum=self._gcxgc_proc.extract_spectrum,
                 library=search.get('library'), search_method=search.get('search_method'),
-                search_complete=search.get('complete'))
+                search_complete=search.get('complete'),
+                min_snr=min_snr)
         except Exception as e:
             import traceback; traceback.print_exc()
             self.status_bar.showMessage(f"GCxGC export failed: {e}")
@@ -1881,7 +1952,7 @@ class ChromaKitApp(QMainWindow):
             return
         self.status_bar.showMessage(
             f"GCxGC results written to {results_dir}: {paths.csv.name}, {paths.json.name}, "
-            f"{paths.msp.name}, {paths.mgf.name}")
+            f"{paths.msp.name}, {paths.mgf.name}, {paths.gnps_quant.name}")
 
     def _show_gcxgc_results_button(self, peaks: list) -> None:
         """Show/update the 'View Results' button in the status bar for GCxGC peaks."""

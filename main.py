@@ -3,6 +3,19 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 def main():
     """Main entry point for the application."""
+    if len(sys.argv) >= 3 and sys.argv[1] == "--self-test":
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        os.environ.setdefault("CHROMAKIT_NO_UPDATE_CHECK", "1")
+        os.environ.setdefault("CHROMAKIT_NO_MS_AUTOLOAD", "1")
+        from util.self_test import run_self_test
+        sys.exit(run_self_test(sys.argv[2]))
+
+    # Frozen (windowed) build: pin matplotlib's cache and send stdout/stderr to a log file.
+    from util.app_paths import configure_frozen_runtime, is_frozen
+    if is_frozen():
+        configure_frozen_runtime()
+
     # Create the application
     app = QApplication(sys.argv)
     
