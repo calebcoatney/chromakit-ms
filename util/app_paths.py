@@ -34,16 +34,20 @@ def writable_dir(name: str) -> str:
     return str(path)
 
 
-def configure_frozen_runtime() -> Path:
+def configure_frozen_runtime() -> Path | None:
     """For the windowed build: pin matplotlib's cache (else it rebuilds fonts every launch) and send
-    stdout/stderr, where ChromaKit prints its errors, to a log file. Returns the log path."""
+    stdout/stderr, where ChromaKit prints its errors, to a log file. Returns the log path, or None
+    (leaving MPLCONFIGDIR and the streams untouched) if the data folder cannot be written."""
     data = user_data_dir()
-    mpl = data / "mpl"
-    mpl.mkdir(parents=True, exist_ok=True)
+    try:
+        mpl = data / "mpl"
+        mpl.mkdir(parents=True, exist_ok=True)
+        logs = data / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        log = logs / "chromakit.log"
+        stream = open(log, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return None
     os.environ.setdefault("MPLCONFIGDIR", str(mpl))
-    logs = data / "logs"
-    logs.mkdir(parents=True, exist_ok=True)
-    log = logs / "chromakit.log"
-    stream = open(log, "a", encoding="utf-8", buffering=1)
     sys.stdout = sys.stderr = stream
     return log
