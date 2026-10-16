@@ -110,7 +110,7 @@ def test_export_button_writes_all_result_files(gcxgc_app):
     app.button_frame.export_button.click()
     assert sorted(f.name for f in (c / "results").iterdir()) == [
         "Synth - GCxGC peaks.csv", "Synth - GCxGC peaks.json",
-        "Synth - GCxGC spectra.mgf", "Synth - GCxGC spectra.msp"]
+        "Synth - GCxGC spectra.mgf", "Synth - GCxGC spectra.msp", "Synth - GNPS quant.csv"]
 
 
 def test_numeric_item_sorts_by_value(qtbot):
@@ -651,7 +651,7 @@ def test_export_writes_into_the_runs_own_folder(gcxgc_app):
     app.current_directory_path = str(other)
     app.button_frame.export_button.click()
     assert list((other / "results").iterdir()) == []
-    assert len(list((c / "results").iterdir())) == 4
+    assert len(list((c / "results").iterdir())) == 5
 
 
 def test_failed_load_drops_the_previous_run(qtbot, tmp_path, monkeypatch):

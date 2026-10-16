@@ -113,24 +113,103 @@ def _read_mgf(path):
     return entries
 
 
-def test_mgf_has_one_entry_per_spectrum_and_no_retention_time(tmp_path):
+def test_mgf_follows_mzmine_gnps_gc_export(tmp_path):
     paths = _export(tmp_path, [_peak(1, 14.3, 0.44, 100.0, name="Heptane"),
                                _peak(2, 17.2, 1.12, 300.0), _peak(3, 20.0, 2.0, 50.0)])
     assert paths.mgf.name == "8260-110 SAF - GCxGC spectra.mgf"
     entries = _read_mgf(paths.mgf)
     assert [h["FEATURE_ID"] for h, _ in entries] == ["1", "2"]          # peak 3 had no spectrum
     h1, p1 = entries[0]
+    assert list(h1) == ["TITLE", "FEATURE_ID", "PEPMASS", "RTINSECONDS", "SCANS", "MSLEVEL",
+                        "CHARGE", "Num peaks"]
     assert h1["TITLE"] == "Peak 1 - Heptane" and h1["SCANS"] == "1"
-    assert h1["PEPMASS"] == "0" and h1["MSLEVEL"] == "1"
+    assert h1["PEPMASS"] == "57"                                       # base peak m/z
+    assert h1["RTINSECONDS"] == "858.00"                                # 14.3 min
+    assert h1["MSLEVEL"] == "2" and h1["CHARGE"] == "1+" and h1["Num peaks"] == "2"
     assert p1 == [(57.0, 100.0), (71.0, 40.0)]
-    text = paths.mgf.read_text()
-    assert "RTINSECONDS" not in text and "RTINMINUTES" not in text
-    assert text.count("BEGIN IONS") == text.count("END IONS") == 2
 
 
-def test_zero_peaks_writes_an_empty_mgf(tmp_path):
+def test_min_snr_gates_mgf_and_msp_and_pepmass_follows_the_gate(tmp_path):
+    noise = [(m, 1.0 + (m % 3)) for m in range(30, 130)]
+    spectra = {1: sorted(dict(noise + [(149, 1000.0), (223, 60.0)]).items())}
+
+    def spectrum(p):
+        p.spectrum_scan, p.spectrum_source = 1001, "dbc"
+        return spectra.get(p.peak_number)
+
+    paths = export_gcxgc_results([_peak(1, 14.3, 0.44, 100.0)], FakeRun(), tmp_path / "r",
+                                 settings={"detection_signal": "fid"}, get_spectrum=spectrum,
+                                 min_snr=5.0)
+    (h, ions), = _read_mgf(paths.mgf)
+    assert [mz for mz, _ in ions] == [149.0, 223.0]
+    assert h["PEPMASS"] == "149" and h["Num peaks"] == "2"
+    assert "Num Peaks: 2" in paths.msp.read_text()
+
+
+def test_a_feature_left_with_only_its_base_peak_is_still_exported(tmp_path):
+    spectra = {1: [(91, 4.5)] + [(m, 4.0) for m in range(30, 60)]}
+
+    def spectrum(p):
+        p.spectrum_scan, p.spectrum_source = 1001, "dbc"
+        return spectra.get(p.peak_number)
+
+    paths = export_gcxgc_results([_peak(1, 14.3, 0.44, 100.0)], FakeRun(), tmp_path / "r",
+                                 settings={"detection_signal": "dbc_tic"}, get_spectrum=spectrum,
+                                 min_snr=50.0)
+    (h, ions), = _read_mgf(paths.mgf)
+    assert ions == [(91.0, 4.5)] and h["PEPMASS"] == "91" and h["Num peaks"] == "1"
+    rows = list(csv.reader(open(paths.gnps_quant, encoding="utf-8")))
+    assert rows[1][:2] == ["1", "91"]
+
+
+def test_gnps_quant_csv(tmp_path):
+    paths = _export(tmp_path, [_peak(1, 14.3, 0.44, 100.0), _peak(2, 17.2, 1.12, 300.0),
+                               _peak(3, 20.0, 2.0, 50.0)])
+    assert paths.gnps_quant.name == "8260-110 SAF - GNPS quant.csv"
+    rows = list(csv.reader(open(paths.gnps_quant, encoding="utf-8")))
+    assert rows[0] == ["row ID", "row m/z", "row retention time", "8260-110 SAF Peak area"]
+    assert [r[0] for r in rows[1:]] == ["1", "2"]                       # only peaks in the MGF
+    assert rows[1][1] == "57" and float(rows[1][2]) == pytest.approx(14.3)
+    assert float(rows[2][3]) == pytest.approx(300.0)
+
+
+def test_gnps_quant_header_survives_commas_and_quotes(tmp_path):
+    class Run(FakeRun):
+        sample_id = 'G2, rep "b"'
+
+    paths = export_gcxgc_results([_peak(1, 14.3, 0.44, 100.0)], Run(), tmp_path / "r",
+                                 settings={"detection_signal": "fid"}, get_spectrum=_spectrum)
+    header = next(csv.reader(open(paths.gnps_quant, encoding="utf-8")))
+    assert header[3] == 'G2, rep "b" Peak area' and len(header) == 4
+
+
+def test_offset_is_null_when_detected_on_a_tic(tmp_path):
+    class NoFitRun(FakeRun):
+        def offset(self):
+            raise AssertionError("the FID->TOF offset must not be fitted for TIC detection")
+
+    paths = export_gcxgc_results([_peak(1, 14.3, 0.44, 100.0, signal="dbc_tic")], NoFitRun(),
+                                 tmp_path / "r", settings={"detection_signal": "dbc_tic"},
+                                 get_spectrum=_spectrum)
+    assert json.load(open(paths.json))["run"]["offset"] is None
+
+
+def test_export_works_without_ms_toolkit(tmp_path, monkeypatch):
+    import importlib
+    import sys
+    monkeypatch.setitem(sys.modules, "ms_toolkit", None)
+    import logic.gcxgc_export as ge
+    importlib.reload(ge)
+    paths = ge.export_gcxgc_results([_peak(1, 14.3, 0.44, 100.0)], FakeRun(), tmp_path / "r",
+                                    settings={"detection_signal": "fid"}, get_spectrum=_spectrum)
+    assert paths.mgf.exists() and paths.gnps_quant.exists()
+
+
+def test_zero_peaks_writes_an_empty_mgf_and_a_header_only_quant(tmp_path):
     paths = _export(tmp_path, [])
     assert paths.mgf.read_text() == ""
+    assert list(csv.reader(open(paths.gnps_quant, encoding="utf-8"))) == [
+        ["row ID", "row m/z", "row retention time", "8260-110 SAF Peak area"]]
 
 
 # ── Final review, Important 3: the JSON names the ChromaKit commit ──────────

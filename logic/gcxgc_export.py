@@ -1,4 +1,4 @@
-"""Write GCxGC results to <run>.C/results/: ChromSpace-layout CSV, full JSON record, MSP and MGF spectra."""
+"""Write GCxGC results to <run>.C/results/: ChromSpace-layout CSV, full JSON record, MSP and MGF spectra, GNPS quant CSV."""
 from __future__ import annotations
 
 import csv
@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from logic.spectrum_noise import snr_gate
 
 CHROMSPACE_COLUMNS = ["Peak #", "Source", "Compound", "Synonyms", "Library RI",
                       "1tR (min)", "2tR (min)", "Area", "Area %"]
@@ -26,6 +28,7 @@ class GCxGCExportPaths:
     json: Path
     msp: Path
     mgf: Path
+    gnps_quant: Path
 
 
 def safe_name(name: str) -> str:
@@ -120,8 +123,14 @@ def _write_msp(f, peaks, spectra) -> None:
         f.write("\n")
 
 
+def _base_peak_mz(spec) -> int:
+    return int(max(spec, key=lambda t: t[1])[0])
+
+
 def _write_mgf(f, peaks, spectra) -> None:
-    """One MGF entry per peak with a spectrum; no retention time (FEATURE_ID links to the CSV/JSON)."""
+    """One entry per peak with a spectrum, in the field order of MZmine's GC (GNPS) export
+    (AdapMgfExportTask): GC-GNPS needs MSLEVEL=2 even for EI. PEPMASS is the base peak, a stand-in
+    (EI has no precursor). RTINSECONDS is the first dimension; 2tR stays in the CSV/JSON."""
     for p in peaks:
         spec = spectra.get(p.peak_number)
         if not spec:
@@ -130,16 +139,33 @@ def _write_mgf(f, peaks, spectra) -> None:
         f.write("BEGIN IONS\n")
         f.write(f"TITLE={title}\n")
         f.write(f"FEATURE_ID={p.peak_number}\n")
+        f.write(f"PEPMASS={_base_peak_mz(spec)}\n")
+        f.write(f"RTINSECONDS={p.rt1 * 60.0:.2f}\n")
         f.write(f"SCANS={p.peak_number}\n")
-        f.write("PEPMASS=0\n")          # EI spectra have no precursor ion
-        f.write("MSLEVEL=1\n")
+        f.write("MSLEVEL=2\n")
+        f.write("CHARGE=1+\n")
+        f.write(f"Num peaks={len(spec)}\n")
         for mz, inten in spec:
             f.write(f"{int(mz)} {_intensity(inten)}\n")
         f.write("END IONS\n\n")
 
 
+def _write_gnps_quant(f, peaks, spectra, sample_id) -> None:
+    """GNPS feature table for one sample: the MGF's features, rt in minutes, detection-signal volume."""
+    w = csv.writer(f)
+    w.writerow(["row ID", "row m/z", "row retention time", f"{sample_id} Peak area"])
+    for p in peaks:
+        spec = spectra.get(p.peak_number)
+        if spec:
+            w.writerow([p.peak_number, _base_peak_mz(spec), f"{p.rt1:.6f}", f"{p.volume:.6f}"])
+
+
 def _record(peaks, percents, run, settings, library, search_method, search_complete) -> dict:
-    off = run.offset()
+    offset = None
+    if settings.get("detection_signal", "fid") == "fid":       # TIC detection never maps FID->TOF
+        off = run.offset()
+        offset = {"a_scans": off.a, "b_scans_per_min": off.b, "ok": off.ok,
+                  "n_windows": off.n_windows, "mode": off.mode}
     return {
         "schema": SCHEMA,
         "sample_id": run.sample_id,
@@ -152,8 +178,7 @@ def _record(peaks, percents, run, settings, library, search_method, search_compl
             "provenance": run.provenance,
             "fid_rate_hz": run.fid_hz,
             "tof_rate_hz": run.tof_hz,
-            "offset": {"a_scans": off.a, "b_scans_per_min": off.b, "ok": off.ok,
-                       "n_windows": off.n_windows, "mode": off.mode},
+            "offset": offset,
             "files": {k: os.path.basename(v) for k, v in run.paths.items() if v},
         },
         "settings": settings,
@@ -166,11 +191,13 @@ def _record(peaks, percents, run, settings, library, search_method, search_compl
 
 
 def export_gcxgc_results(peaks, run, results_dir, *, settings: dict, get_spectrum,
-                         library=None, search_method=None, search_complete=None) -> GCxGCExportPaths:
-    """Write the four result files; get_spectrum(peak) -> [(mz, intensity)] | None.
+                         library=None, search_method=None, search_complete=None,
+                         min_snr: float = 0.0) -> GCxGCExportPaths:
+    """Write the result files; get_spectrum(peak) -> [(mz, intensity)] | None.
 
-    search_complete: True after a full MS Search All, False when it was cancelled part-way
-    (peaks it never reached have no ID), None when no search produced the IDs.
+    min_snr > 0 gates the MSP/MGF spectra (logic.spectrum_noise.snr_gate); the CSV and JSON are
+    unaffected. search_complete: True after a full MS Search All, False when it was cancelled
+    part-way (peaks it never reached have no ID), None when no search produced the IDs.
     """
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -178,13 +205,20 @@ def export_gcxgc_results(peaks, run, results_dir, *, settings: dict, get_spectru
     paths = GCxGCExportPaths(results_dir / f"{stem} - GCxGC peaks.csv",
                              results_dir / f"{stem} - GCxGC peaks.json",
                              results_dir / f"{stem} - GCxGC spectra.msp",
-                             results_dir / f"{stem} - GCxGC spectra.mgf")
+                             results_dir / f"{stem} - GCxGC spectra.mgf",
+                             results_dir / f"{stem} - GNPS quant.csv")
     peaks = sorted(peaks, key=lambda p: p.peak_number)
-    spectra = {p.peak_number: s for p in peaks if (s := get_spectrum(p))}
+    spectra = {}
+    for p in peaks:
+        s = snr_gate(get_spectrum(p), min_snr)
+        if s:
+            spectra[p.peak_number] = s
     percents = area_percents(peaks)
     _atomic_write(paths.csv, lambda f: _write_csv(f, peaks, percents))
     _atomic_write(paths.msp, lambda f: _write_msp(f, peaks, spectra))
     _atomic_write(paths.mgf, lambda f: _write_mgf(f, peaks, spectra))
+    _atomic_write(paths.gnps_quant,
+                  lambda f: _write_gnps_quant(f, peaks, spectra, run.sample_id or stem))
     record = _record(peaks, percents, run, settings, library, search_method, search_complete)
     _atomic_write(paths.json, lambda f: json.dump(record, f, indent=1, default=_json_default))
     return paths
