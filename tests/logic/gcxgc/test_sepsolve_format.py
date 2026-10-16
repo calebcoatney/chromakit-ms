@@ -6,7 +6,7 @@ import pytest
 from logic.loaders.sepsolve_format import (
     LscFile, SepSolveFormatError, nominal_bin, parse_hdr_text, read_hdr, read_rsd,
 )
-from tests.logic.gcxgc import synth
+from util import sepsolve_synth as synth
 
 
 def test_hdr_reads_insight_period_not_calibrant_pulse(tmp_path):

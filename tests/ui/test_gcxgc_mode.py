@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("pytestqt")
 
 from logic.ms_search_core import format_casno
-from tests.logic.gcxgc import synth
+from util import sepsolve_synth as synth
 from ui.app import ChromaKitApp
 
 

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from logic.gcxgc_run import GCxGCRun, MissingModulationPeriod, OffsetModel
-from tests.logic.gcxgc import synth
+from util import sepsolve_synth as synth
 
 
 def _run(tmp_path, scene, **kw):
