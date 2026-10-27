@@ -7,9 +7,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtCore import QRegularExpression
+import html
 import numpy as np
 
 from logic.method import GCxGCParams
+from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
+
+INFO_ICON = "\u24d8"
+INFO_COLOR = "#1a73e8"
 
 class ParametersFrame(QWidget):
     """Frame containing integration parameters for chromatogram processing."""
@@ -137,6 +142,8 @@ class ParametersFrame(QWidget):
 
         # Add GCxGC controls
         self._init_gcxgc_controls()
+
+        self._apply_help_icons()
         
         # Add stretch at the end to push everything to the top
         self.params_layout.addStretch()
@@ -158,6 +165,54 @@ class ParametersFrame(QWidget):
         # Add scroll area to main layout
         self.layout.addWidget(self.params_scroll)
     
+    def _apply_help_icons(self):
+        """Append an info icon with hover help to every documented label/checkbox.
+
+        Help text lives in ui/frames/parameter_help.py, keyed by section and by
+        the visible label text, so it survives _reinitialize_controls().
+        """
+        icon_html = f"<span style='color:{INFO_COLOR}; font-weight:bold;'>{INFO_ICON}</span>"
+        for key, group in self.section_groups.items():
+            if not isinstance(group, QGroupBox):
+                continue
+            help_map = PARAMETER_HELP.get(key)
+            if not help_map:
+                continue
+
+            for label in group.findChildren(QLabel):
+                text = label.text().strip()
+                tip = help_map.get(text)
+                if tip is None or label.property("_has_help"):
+                    continue
+                label.setTextFormat(Qt.RichText)
+                label.setText(f"{html.escape(text)} {icon_html}")
+                label.setToolTip(tip)
+                label.setProperty("_has_help", True)
+
+            for checkbox in group.findChildren(QCheckBox):
+                text = checkbox.text().strip()
+                tip = help_map.get(text)
+                if tip is None or checkbox.property("_has_help"):
+                    continue
+                checkbox.setText(f"{text}  {INFO_ICON}")
+                checkbox.setToolTip(tip)
+                checkbox.setProperty("_has_help", True)
+
+            section_tip = help_map.get(SECTION_KEY)
+            if section_tip:
+                about = QLabel(
+                    f"{icon_html} <span style='color:#666666;'>About this section</span>"
+                )
+                about.setTextFormat(Qt.RichText)
+                about.setStyleSheet("font-size: 10px;")
+                about.setToolTip(section_tip)
+                about.setCursor(Qt.WhatsThisCursor)
+                layout = group.layout()
+                if isinstance(layout, QFormLayout):
+                    layout.insertRow(0, about)
+                elif layout is not None:
+                    layout.insertWidget(0, about)
+
     def _init_smoothing_controls(self):
         """Initialize smoothing controls"""
         smoothing_group = QGroupBox("Signal Smoothing")
@@ -1353,7 +1408,6 @@ class ParametersFrame(QWidget):
             # Keep prominence at its classical default — it now controls
             # classical peak detection in hybrid mode (outside peak splitting windows).
             # The peak splitting pipeline internally uses min_prominence=0.
-            self.prominence_label.setText("Min Prominence:")
             self.prominence_entry.setToolTip(
                 'Prominence threshold for classical peak detection.\n'
                 'In hybrid mode (with peak splitting windows), this controls\n'
@@ -1363,7 +1417,6 @@ class ParametersFrame(QWidget):
         else:
             self.current_params['peaks']['min_prominence'] = 1e5
             self.prominence_entry.setText('100000.0')
-            self.prominence_label.setText("Min Prominence:")
             self.prominence_entry.setToolTip(
                 'Absolute prominence threshold for scipy find_peaks.'
             )
@@ -1877,6 +1930,7 @@ class ParametersFrame(QWidget):
         self._init_range_filter_controls()
         self._init_peak_grouping_controls()
         self._init_gcxgc_controls()
+        self._apply_help_icons()
         self.params_layout.addStretch()
         if getattr(self, '_ui_mode', None):
             self.set_mode(self._ui_mode)

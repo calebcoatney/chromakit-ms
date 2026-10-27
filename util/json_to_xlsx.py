@@ -570,7 +570,11 @@ class JsonToExcelConverter(QDialog):
         super().__init__(parent)
         self.setWindowTitle("ChromaKit-MS: JSON ↔ Excel Converter")
         self.setModal(True)
-        self.resize(750, 700)
+        height = 600
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            height = min(height, int(screen.availableGeometry().height() * 0.85))
+        self.resize(750, height)
 
         # QSettings for format persistence
         self.settings = QSettings("CalebCoatney", "ChromaKit")
@@ -647,7 +651,7 @@ class JsonToExcelConverter(QDialog):
         log_layout = QVBoxLayout(log_group)
 
         self.log_text = QTextEdit()
-        self.log_text.setMaximumHeight(150)
+        self.log_text.setMaximumHeight(120)
         self.log_text.setReadOnly(True)
         log_layout.addWidget(self.log_text)
 
@@ -959,7 +963,7 @@ class JsonToExcelConverter(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(220)
+        scroll.setMinimumHeight(150)
         col_container = QWidget()
         col_layout = QFormLayout(col_container)
         col_layout.setLabelAlignment(Qt.AlignLeft)
@@ -999,7 +1003,14 @@ class JsonToExcelConverter(QDialog):
         outer_layout.addWidget(preset_group)
 
         self._refresh_preset_combo()
-        return tab
+
+        # Wrap in a scroll area so this tab's content doesn't force the
+        # dialog taller than the screen.
+        tab_scroll = QScrollArea()
+        tab_scroll.setWidgetResizable(True)
+        tab_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        tab_scroll.setWidget(tab)
+        return tab_scroll
 
     # ------------------------------------------------------------------
     # Drag-drop header list helpers
