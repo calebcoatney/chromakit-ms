@@ -531,7 +531,7 @@ class AutomationWorker(QRunnable):
 
             # ── Common completion path ────────────────────────────────────────
             if not integration_results:
-                self.signals.log_message.emit("Integration failed")
+                self.signals.log_message.emit(f"Integration failed. {self.app._no_peaks_reason(params)}")
                 return False
 
             if not self.app.integrated_peaks:

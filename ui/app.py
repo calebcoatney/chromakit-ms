@@ -2166,7 +2166,7 @@ class ChromaKitApp(QMainWindow):
         
         # Check if integration was successful
         if not integration_results:
-            self.status_bar.showMessage("No peaks found for integration")
+            self.status_bar.showMessage(self._no_peaks_reason(self.parameters_frame.get_parameters()))
             return
         
         # Shade the areas under the curve
@@ -2209,6 +2209,17 @@ class ChromaKitApp(QMainWindow):
         
         # Notify peaks integrated
         self.on_peaks_integrated(integration_results['peaks'])
+
+    def _no_peaks_reason(self, params) -> str:
+        """Why the last integration found nothing, for the status bar and the batch log."""
+        from logic.no_peaks_message import no_peaks_message
+        y = (self.current_processed or {}).get('corrected_y')
+        signal_range = float(np.nanmax(y) - np.nanmin(y)) if y is not None and len(y) else 0.0
+        return no_peaks_message(
+            min_prominence=float(params['peaks'].get('min_prominence', 0.05)),
+            signal_range=signal_range,
+            method_loaded=self.current_method_path is not None,
+        )
 
     def integrate_peaks_no_ui(self, ms_data=None, quality_options=None, params=None):
         """Thread-safe version of integration without UI updates.
