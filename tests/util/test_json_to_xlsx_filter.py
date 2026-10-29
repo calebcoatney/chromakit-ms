@@ -78,6 +78,31 @@ from util.json_to_xlsx import ProcessingThread, DEFAULT_FORMAT_CONFIG
 import copy
 
 
+def _config_with_compound_and_detector():
+    """Default format with the Compound ID column and Detector header switched on."""
+    cfg = copy.deepcopy(DEFAULT_FORMAT_CONFIG)
+    for col in cfg['columns']:
+        if col['key'] == 'Compound ID':
+            col['enabled'] = True
+    for hf in cfg['header_fields']:
+        if hf['key'] == 'detector':
+            hf['enabled'] = True
+    return cfg
+
+
+class TestDefaultFormatConfig:
+    def test_default_header_is_signal_sample_timestamp_without_labels(self):
+        fields = DEFAULT_FORMAT_CONFIG['header_fields']
+        enabled = [hf['key'] for hf in fields if hf['enabled']]
+        assert enabled == ['signal', 'sample_id', 'timestamp']
+        assert [hf['key'] for hf in fields[:3]] == enabled
+        assert not any(hf['show_label'] for hf in fields)
+
+    def test_default_columns(self):
+        enabled = [c['display'] for c in DEFAULT_FORMAT_CONFIG['columns'] if c['enabled']]
+        assert enabled == ['Peak #', 'Ret Time', 'Integrator', 'Width', 'Area',
+                           'Start Time', 'End Time']
+
 def _make_json_file(path: str, peaks: list, sample_id: str = "TEST-001"):
     """Write a minimal valid ChromaKit JSON file for the converter."""
     data = {
@@ -113,7 +138,7 @@ class TestProcessingThreadFilter:
         thread = ProcessingThread(
             directory=str(json_dir),
             output_file=str(output),
-            format_config=copy.deepcopy(DEFAULT_FORMAT_CONFIG),
+            format_config=_config_with_compound_and_detector(),
             skip_unidentified=True,
         )
         # Call the worker directly (not via run()) to avoid threading
@@ -166,7 +191,7 @@ class TestDetectorsSideBySide:
             (results / f"S1 - {det}.json").write_text(json.dumps(data))
         output = tmp_path / "out.xlsx"
 
-        cfg = copy.deepcopy(DEFAULT_FORMAT_CONFIG)
+        cfg = _config_with_compound_and_detector()
         thread = ProcessingThread(directory=str(tmp_path), output_file=str(output),
                                   format_config=cfg)
         assert thread.process_json_to_excel(str(tmp_path), str(output)) is True
@@ -256,7 +281,7 @@ class TestProcessingThreadSkipsStaleCData:
         thread = ProcessingThread(
             directory=str(tmp_path),
             output_file=str(output),
-            format_config=copy.deepcopy(DEFAULT_FORMAT_CONFIG),
+            format_config=_config_with_compound_and_detector(),
             skip_unidentified=False,
         )
         ok = thread.process_json_to_excel(str(tmp_path), str(output))

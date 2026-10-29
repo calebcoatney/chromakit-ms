@@ -38,16 +38,16 @@ from PySide6.QtGui import QFont
 
 DEFAULT_FORMAT_CONFIG = {
     'header_fields': [
-        {'key': 'sample_id',  'label': 'Sample ID:',  'enabled': True,  'custom_label': '', 'show_label': True},
-        {'key': 'timestamp',  'label': 'Timestamp:',  'enabled': True,  'custom_label': '', 'show_label': True},
-        {'key': 'method',     'label': 'Method:',     'enabled': True,  'custom_label': '', 'show_label': True},
-        {'key': 'detector',   'label': 'Detector:',   'enabled': True,  'custom_label': '', 'show_label': True},
-        {'key': 'signal',     'label': 'Signal:',     'enabled': True,  'custom_label': '', 'show_label': True},
-        {'key': 'notebook',   'label': 'Notebook:',   'enabled': True,  'custom_label': '', 'show_label': True},
+        {'key': 'signal',     'label': 'Signal:',     'enabled': True,  'custom_label': '', 'show_label': False},
+        {'key': 'sample_id',  'label': 'Sample ID:',  'enabled': True,  'custom_label': '', 'show_label': False},
+        {'key': 'timestamp',  'label': 'Timestamp:',  'enabled': True,  'custom_label': '', 'show_label': False},
+        {'key': 'method',     'label': 'Method:',     'enabled': False, 'custom_label': '', 'show_label': False},
+        {'key': 'detector',   'label': 'Detector:',   'enabled': False, 'custom_label': '', 'show_label': False},
+        {'key': 'notebook',   'label': 'Notebook:',   'enabled': False, 'custom_label': '', 'show_label': False},
     ],
     'timestamp_format': 'as_stored',
     'columns': [
-        {'key': 'Compound ID',    'display': 'Compound ID',   'enabled': True,  'custom_name': ''},
+        {'key': 'Compound ID',    'display': 'Compound ID',   'enabled': False, 'custom_name': ''},
         {'key': 'peak_number',    'display': 'Peak #',        'enabled': True,  'custom_name': ''},
         {'key': 'retention_time', 'display': 'Ret Time',      'enabled': True,  'custom_name': ''},
         {'key': 'integrator',     'display': 'Integrator',    'enabled': True,  'custom_name': ''},
@@ -55,9 +55,9 @@ DEFAULT_FORMAT_CONFIG = {
         {'key': 'area',           'display': 'Area',          'enabled': True,  'custom_name': ''},
         {'key': 'start_time',     'display': 'Start Time',    'enabled': True,  'custom_name': ''},
         {'key': 'end_time',       'display': 'End Time',      'enabled': True,  'custom_name': ''},
-        {'key': 'Qual',           'display': 'Match Score',   'enabled': True,  'custom_name': ''},
-        {'key': 'casno',          'display': 'CAS No',        'enabled': True,  'custom_name': ''},
-        {'key': 'quality_issues', 'display': 'Quality Issues','enabled': True,  'custom_name': ''},
+        {'key': 'Qual',           'display': 'Match Score',   'enabled': False, 'custom_name': ''},
+        {'key': 'casno',          'display': 'CAS No',        'enabled': False, 'custom_name': ''},
+        {'key': 'quality_issues', 'display': 'Quality Issues','enabled': False, 'custom_name': ''},
         {'key': 'mol_C',          'display': 'mol C',         'enabled': False, 'custom_name': ''},
         {'key': 'mol_C_percent',  'display': 'mol C %',       'enabled': False, 'custom_name': ''},
         {'key': 'num_carbons',    'display': '# Carbons',     'enabled': False, 'custom_name': ''},
@@ -1000,6 +1000,10 @@ class JsonToExcelConverter(QDialog):
         delete_btn = QPushButton("Delete")
         delete_btn.clicked.connect(self._delete_selected_preset)
         preset_layout.addWidget(delete_btn)
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.setToolTip("Restore the default header fields and peak table columns")
+        reset_btn.clicked.connect(self._reset_format_to_defaults)
+        preset_layout.addWidget(reset_btn)
         outer_layout.addWidget(preset_group)
 
         self._refresh_preset_combo()
@@ -1231,6 +1235,10 @@ class JsonToExcelConverter(QDialog):
             self._save_all_presets(presets)
             self._refresh_preset_combo()
             self.log_text.append(f"Preset '{name}' deleted.")
+
+    def _reset_format_to_defaults(self):
+        self._apply_format_config(copy.deepcopy(DEFAULT_FORMAT_CONFIG))
+        self.log_text.append("Format reset to defaults.")
 
     def _save_last_format_config(self):
         self.settings.setValue("xlsx_last_format", json.dumps(self.get_current_format_config()))
