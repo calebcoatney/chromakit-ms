@@ -27,6 +27,59 @@ class AutomationWorkerSignals(QObject):
     error = Signal(str)  # Error message
     overall_progress = Signal(int, int, int)  # Current file index, total files, overall percentage
 
+def build_detector_runs(batch_opts):
+    """Return the runs to perform on every file in a batch.
+
+    ``batch_opts['detector_runs']`` is a list of ``{'detector': str,
+    'method_path': str | None}``. Each entry becomes one run that loads that
+    detector channel and processes it with that method (no method path =>
+    the app's current settings). A blank detector falls back to the method's
+    own ``detector`` field.
+
+    With no entries, a single non-explicit run is returned: it uses the
+    detector currently selected in the app and the current method.
+    """
+    from logic.method import ChromaMethod
+
+    runs = []
+    seen = set()
+    for entry in batch_opts.get('detector_runs') or []:
+        method_path = (entry.get('method_path') or '').strip() or None
+        method = ChromaMethod.from_file(method_path) if method_path else None
+        detector = (entry.get('detector') or '').strip() or (method.detector if method else None)
+        if not detector:
+            raise ValueError(
+                f"No detector given for method {method_path or '(current settings)'}"
+            )
+        if detector in seen:
+            raise ValueError(f"Detector {detector} is listed more than once")
+        seen.add(detector)
+        runs.append({'detector': detector, 'method': method,
+                     'method_path': method_path, 'explicit': True})
+    if not runs:
+        runs.append({'detector': None, 'method': None,
+                     'method_path': None, 'explicit': False})
+    return runs
+
+
+def resolve_detector(requested, available, explicit):
+    """Choose the detector channel to load for one file.
+
+    Returns ``(detector, ok)``. ``detector`` None means "let the loader
+    auto-detect". ``ok`` False means an explicitly requested detector is
+    missing from this file and the run should be skipped. A non-explicit
+    request (the app's current selection) that the file lacks falls back to
+    auto-detect so files with other channels still process.
+    """
+    if not requested:
+        return None, True
+    if not available or requested in available:
+        return requested, True
+    if explicit:
+        return None, False
+    return None, True
+
+
 class AutomationWorker(QRunnable):
     """Worker for batch processing of files."""
     
@@ -74,146 +127,87 @@ class AutomationWorker(QRunnable):
                 self.signals.finished.emit()
                 return
 
+            # One run per configured detector (each with its own method), or a
+            # single run on the detector the user has selected in the app.
+            try:
+                runs = build_detector_runs(batch_opts)
+            except Exception as e:
+                self.signals.log_message.emit(f"Could not set up detector runs: {e}")
+                self.signals.error.emit(str(e))
+                return
+            selected_detector = getattr(getattr(self.app, 'data_handler', None), 'current_detector', None)
+            if selected_detector in (None, '', 'Unknown'):
+                selected_detector = None
+
             # Store these for progress calculations
-            self.total_files = len(c_files)
+            self.total_files = len(c_files) * len(runs)
             self.current_file_index = 0
             
             # Signal the start of processing
-            self.signals.started.emit(len(c_files))
+            self.signals.started.emit(self.total_files)
             self.signals.log_message.emit(f"Found {len(c_files)} .C folders to process")
+            if runs[0]['explicit']:
+                self.signals.log_message.emit(
+                    "Detector runs: " + "; ".join(
+                        f"{r['detector']} with "
+                        f"{os.path.basename(r['method_path']) if r['method_path'] else 'current settings'}"
+                        for r in runs
+                    )
+                )
             
             # Process each file
             for i, file_path in enumerate(c_files):
-                self.current_file_index = i  # Update the current file index
-                
                 if self.cancelled:
                     self.signals.log_message.emit("Processing cancelled by user")
                     break
                 
                 filename = os.path.basename(file_path)
-                self.signals.file_started.emit(filename, i + 1, self.total_files)
-                self.signals.log_message.emit(f"Starting file {i+1}/{self.total_files}: {filename}")
                 
                 # Determine signal type from manifest so we can skip inapplicable steps.
+                available_detectors = []
                 try:
                     _cf = CFolder.open(file_path)
                     signal_type = _cf.get_manifest().get("signal_type", "gcms")
                     profile_stages = set(SignalProfileRegistry.get(signal_type).pipeline_stages)
                 except Exception:
+                    _cf = None
                     signal_type = "gcms"
                     profile_stages = {
                         PipelineStage.SMOOTHING, PipelineStage.BASELINE,
                         PipelineStage.PEAKS, PipelineStage.MS_SEARCH,
                         PipelineStage.QUANTITATION,
                     }
+                if _cf is not None:
+                    try:
+                        available_detectors = list(_cf.get_available_detectors() or [])
+                    except Exception:
+                        available_detectors = []
                 
                 is_chromatography = signal_type in ("gc", "gcms")
-                step_label = "Processing chromatogram" if is_chromatography else "Processing signal"
                 # Store on self so _process_and_integrate can read them
                 self._signal_type = signal_type
                 self._is_chromatography = is_chromatography
                 
-                try:
-                    # Step 1: Load the file - 10% of one file's progress
-                    t0 = time.perf_counter()
-                    self._update_directory_progress(filename, "Loading", 10)
-                    success = self._load_file(file_path)
-                    t_load = time.perf_counter() - t0
+                for r, run in enumerate(runs):
+                    if self.cancelled:
+                        break
+                    self.current_file_index = i * len(runs) + r
+                    label = f"{filename} [{run['detector']}]" if run['explicit'] else filename
+                    position = self.current_file_index + 1
+                    self.signals.file_started.emit(label, position, self.total_files)
+                    self.signals.log_message.emit(f"Starting file {position}/{self.total_files}: {label}")
 
-                    if not success or self.cancelled:
-                        self.signals.file_completed.emit(filename, False, "Failed to load file")
+                    requested = run['detector'] if run['explicit'] else selected_detector
+                    detector, ok = resolve_detector(requested, available_detectors, run['explicit'])
+                    if not ok:
+                        msg = (f"Detector {requested} not found in {filename} "
+                               f"(available: {', '.join(available_detectors) or 'none'}) - skipping")
+                        self.signals.log_message.emit(msg)
+                        self.signals.file_completed.emit(label, False, msg)
                         continue
 
-                    # Step 2: Process and integrate - 40% of one file's progress
-                    t1 = time.perf_counter()
-                    success = self._process_and_integrate()
-                    t_process = time.perf_counter() - t1
-
-                    if not success or self.cancelled:
-                        self.signals.file_completed.emit(filename, False, "Failed to integrate")
-                        continue
-
-                    # Step 2.5: Save integration results to JSON - 50% of one file's progress
-                    t2 = time.perf_counter()
-                    self._update_directory_progress(filename, "Saving integration results", 50)
-                    if hasattr(self.app, 'integrated_peaks') and self.app.integrated_peaks:
-                        current_dir = self.app.data_handler.current_directory_path
-                        integration_results = {'peaks': self.app.integrated_peaks}
-                        json_saved = self._save_integration_json_no_ui(integration_results, current_dir)
-                        if json_saved:
-                            self.signals.log_message.emit(f"Integration results saved to JSON for {filename}")
-                        else:
-                            self.signals.log_message.emit(f"Warning: Failed to save JSON for {filename}")
-                    t_save_integration = time.perf_counter() - t2
-
-                    # Step 3: MS Library Search (if enabled and applicable)
-                    ms_search_enabled = True  # Default if not specified
-                    if hasattr(self.app, 'batch_options') and 'ms_search' in self.app.batch_options:
-                        ms_search_enabled = self.app.batch_options['ms_search']
-
-                    ms_search_applicable = PipelineStage.MS_SEARCH in profile_stages
-                    t_ms = None
-                    t_deconv = None
-
-                    if ms_search_enabled and ms_search_applicable:
-                        # Step 3a: Spectral deconvolution (optional, GC-MS only).
-                        # Must run BEFORE MS search so BatchSearchWorker picks up
-                        # peak.deconvolved_spectrum instead of raw extraction.
-                        deconv_enabled = getattr(self.app, 'batch_options', {}).get('spectral_deconv', True)
-                        deconv_applicable = (signal_type == 'gcms')
-
-                        if deconv_enabled and deconv_applicable:
-                            self._update_directory_progress(filename, "Spectral deconvolution", 55)
-                            t_dc = time.perf_counter()
-                            dc_ok = self._run_spectral_deconvolution()
-                            t_deconv = time.perf_counter() - t_dc
-
-                            if not dc_ok or self.cancelled:
-                                self.signals.file_completed.emit(filename, False, "Cancelled during deconvolution")
-                                continue
-                        elif deconv_enabled:
-                            self.signals.log_message.emit(
-                                f"Skipping spectral deconvolution: not applicable for signal type '{signal_type}'"
-                            )
-                        else:
-                            self.signals.log_message.emit("Spectral deconvolution disabled in options - skipping")
-
-                        self._update_directory_progress(filename, "MS Library Search", 70)
-                        t3 = time.perf_counter()
-                        success = self._run_ms_search()
-                        t_ms = time.perf_counter() - t3
-
-                        if not success or self.cancelled:
-                            self.signals.file_completed.emit(filename, False, "Failed to run MS search")
-                            continue
-                    elif ms_search_enabled:
-                        self.signals.log_message.emit(
-                            f"Skipping MS search: not applicable for signal type '{signal_type}'"
-                        )
-                    else:
-                        # Skip MS search if disabled
-                        self.signals.log_message.emit("MS search disabled in options - skipping")
-
-                    # Record timing for this file
-                    if self._time_steps:
-                        self._timings.append({
-                            'file': filename,
-                            'load': t_load,
-                            'process': t_process,
-                            'save': t_save_integration,
-                            'deconv': t_deconv,
-                            'ms_search': t_ms,
-                        })
-
-                    # File completed successfully
-                    self._update_directory_progress(filename, "Completed", 100)
-                    self.signals.file_completed.emit(filename, True, "Processing completed")
-                    self.signals.log_message.emit(f"Completed processing {filename}")
-                    
-                except Exception as e:
-                    error_msg = f"Error processing {filename}: {str(e)}"
-                    self.signals.log_message.emit(error_msg)
-                    self.signals.file_completed.emit(filename, False, error_msg)
+                    self._process_file(file_path, label, signal_type, profile_stages,
+                                       detector=detector, method=run['method'])
             
             # Emit timing report if enabled
             if self._time_steps and self._timings:
@@ -228,6 +222,111 @@ class AutomationWorker(QRunnable):
             error_msg = f"Error in automation: {str(e)}\n{traceback.format_exc()}"
             self.signals.error.emit(error_msg)
             self.signals.log_message.emit(error_msg)
+
+    def _process_file(self, file_path, filename, signal_type, profile_stages,
+                      detector=None, method=None):
+        """Load, integrate, save and (optionally) MS-search one file for one detector run."""
+        try:
+            # Step 1: Load the file - 10% of one file's progress
+            t0 = time.perf_counter()
+            self._update_directory_progress(filename, "Loading", 10)
+            success = self._load_file(file_path, detector=detector, method=method)
+            t_load = time.perf_counter() - t0
+
+            if not success or self.cancelled:
+                self.signals.file_completed.emit(filename, False, "Failed to load file")
+                return
+
+            # Step 2: Process and integrate - 40% of one file's progress
+            t1 = time.perf_counter()
+            success = self._process_and_integrate()
+            t_process = time.perf_counter() - t1
+
+            if not success or self.cancelled:
+                self.signals.file_completed.emit(filename, False, "Failed to integrate")
+                return
+
+            # Step 2.5: Save integration results to JSON - 50% of one file's progress
+            t2 = time.perf_counter()
+            self._update_directory_progress(filename, "Saving integration results", 50)
+            if hasattr(self.app, 'integrated_peaks') and self.app.integrated_peaks:
+                current_dir = self.app.data_handler.current_directory_path
+                integration_results = {'peaks': self.app.integrated_peaks}
+                json_saved = self._save_integration_json_no_ui(integration_results, current_dir)
+                if json_saved:
+                    self.signals.log_message.emit(f"Integration results saved to JSON for {filename}")
+                else:
+                    self.signals.log_message.emit(f"Warning: Failed to save JSON for {filename}")
+            t_save_integration = time.perf_counter() - t2
+
+            # Step 3: MS Library Search (if enabled and applicable)
+            ms_search_enabled = True  # Default if not specified
+            if hasattr(self.app, 'batch_options') and 'ms_search' in self.app.batch_options:
+                ms_search_enabled = self.app.batch_options['ms_search']
+
+            ms_search_applicable = PipelineStage.MS_SEARCH in profile_stages
+            t_ms = None
+            t_deconv = None
+
+            if ms_search_enabled and ms_search_applicable:
+                # Step 3a: Spectral deconvolution (optional, GC-MS only).
+                # Must run BEFORE MS search so BatchSearchWorker picks up
+                # peak.deconvolved_spectrum instead of raw extraction.
+                deconv_enabled = getattr(self.app, 'batch_options', {}).get('spectral_deconv', True)
+                deconv_applicable = (signal_type == 'gcms')
+
+                if deconv_enabled and deconv_applicable:
+                    self._update_directory_progress(filename, "Spectral deconvolution", 55)
+                    t_dc = time.perf_counter()
+                    dc_ok = self._run_spectral_deconvolution()
+                    t_deconv = time.perf_counter() - t_dc
+
+                    if not dc_ok or self.cancelled:
+                        self.signals.file_completed.emit(filename, False, "Cancelled during deconvolution")
+                        return
+                elif deconv_enabled:
+                    self.signals.log_message.emit(
+                        f"Skipping spectral deconvolution: not applicable for signal type '{signal_type}'"
+                    )
+                else:
+                    self.signals.log_message.emit("Spectral deconvolution disabled in options - skipping")
+
+                self._update_directory_progress(filename, "MS Library Search", 70)
+                t3 = time.perf_counter()
+                success = self._run_ms_search()
+                t_ms = time.perf_counter() - t3
+
+                if not success or self.cancelled:
+                    self.signals.file_completed.emit(filename, False, "Failed to run MS search")
+                    return
+            elif ms_search_enabled:
+                self.signals.log_message.emit(
+                    f"Skipping MS search: not applicable for signal type '{signal_type}'"
+                )
+            else:
+                # Skip MS search if disabled
+                self.signals.log_message.emit("MS search disabled in options - skipping")
+
+            # Record timing for this file
+            if self._time_steps:
+                self._timings.append({
+                    'file': filename,
+                    'load': t_load,
+                    'process': t_process,
+                    'save': t_save_integration,
+                    'deconv': t_deconv,
+                    'ms_search': t_ms,
+                })
+
+            # File completed successfully
+            self._update_directory_progress(filename, "Completed", 100)
+            self.signals.file_completed.emit(filename, True, "Processing completed")
+            self.signals.log_message.emit(f"Completed processing {filename}")
+
+        except Exception as e:
+            error_msg = f"Error processing {filename}: {str(e)}"
+            self.signals.log_message.emit(error_msg)
+            self.signals.file_completed.emit(filename, False, error_msg)
 
     @staticmethod
     def _format_timing_table(timings: list[dict]) -> str:
@@ -322,8 +421,13 @@ class AutomationWorker(QRunnable):
         # Emit the progress signal with calculated percentage
         self.signals.file_progress.emit(filename, step, int(current_progress))
 
-    def _load_file(self, file_path):
-        """Load a data file safely without direct UI access."""
+    def _load_file(self, file_path, detector=None, method=None):
+        """Load a data file safely without direct UI access.
+
+        If *method* is given it becomes the app's active method before the
+        file loads, so its scaling and parameters apply. *detector* selects
+        the channel to load (None => keep the loader's default).
+        """
         try:
             self.signals.log_message.emit(f"Loading file: {file_path}")
             
@@ -338,9 +442,12 @@ class AutomationWorker(QRunnable):
                     # so we can restore it after the file load
                     status_text = self.app.status_bar.currentMessage()
                     
+                    if method is not None:
+                        self.app.apply_batch_method(method)
+
                     # Load the file (which will update the status bar directly)
                     # Pass batch_mode=True to suppress error dialogs
-                    self.app.on_file_selected(file_path, batch_mode=True)
+                    self.app.on_file_selected(file_path, batch_mode=True, detector=detector)
                     
                     # Set our success flag
                     self.load_success = True

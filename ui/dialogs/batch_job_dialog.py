@@ -1,7 +1,12 @@
+import os
+
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
                               QListWidget, QFileDialog, QMenu, QAbstractItemView,
-                              QCheckBox, QGroupBox, QFormLayout, QSpinBox, QMessageBox)
+                              QCheckBox, QGroupBox, QFormLayout, QSpinBox, QMessageBox,
+                              QComboBox, QLineEdit, QWidget)
 from PySide6.QtCore import Qt, Signal, QSize
+
+MAX_DETECTOR_RUNS = 2
 
 class BatchJobDialog(QDialog):
     """Dialog for setting up a batch processing job."""
@@ -92,6 +97,8 @@ class BatchJobDialog(QDialog):
 
         # Add options group to main layout
         layout.addWidget(options_group)
+
+        layout.addWidget(self._build_detector_group())
         
         # File handling options group
         file_group = QGroupBox("File Handling Options")
@@ -132,6 +139,127 @@ class BatchJobDialog(QDialog):
         
         layout.addLayout(button_layout)
     
+    def _build_detector_group(self):
+        """Per-detector runs: each detector channel processed with its own method."""
+        group = QGroupBox("Detectors and Methods")
+        group_layout = QVBoxLayout(group)
+
+        self.per_detector_check = QCheckBox("Process each detector below with its own method")
+        self.per_detector_check.setToolTip(
+            "Every sample is processed once per detector listed here, using that "
+            "detector's method. Results are saved per detector. When unchecked, "
+            "the detector selected in Settings → Select Detector Channel and the "
+            "current method are used."
+        )
+        group_layout.addWidget(self.per_detector_check)
+
+        self.detector_rows = []
+        rows_widget = QWidget()
+        form = QFormLayout(rows_widget)
+        form.setContentsMargins(0, 0, 0, 0)
+        for n in range(1, MAX_DETECTOR_RUNS + 1):
+            detector_combo = QComboBox()
+            detector_combo.setEditable(True)
+            detector_combo.setMinimumWidth(110)
+            detector_combo.setToolTip("Detector channel name, e.g. FID1A")
+            method_edit = QLineEdit()
+            method_edit.setPlaceholderText("Method file (.chromethod); blank = current settings")
+            browse = QPushButton("Browse...")
+            browse.clicked.connect(
+                lambda _=False, c=detector_combo, e=method_edit: self._browse_method(c, e))
+            row = QHBoxLayout()
+            row.addWidget(detector_combo)
+            row.addWidget(method_edit, 1)
+            row.addWidget(browse)
+            form.addRow(f"Detector {n}:", row)
+            self.detector_rows.append((detector_combo, method_edit))
+        group_layout.addWidget(rows_widget)
+
+        rows_widget.setEnabled(False)
+        self.per_detector_check.toggled.connect(rows_widget.setEnabled)
+        self._refresh_detector_choices()
+        return group
+
+    def _browse_method(self, detector_combo, method_edit):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Method", "", "ChromaKit Method (*.chromethod)")
+        if not path:
+            return
+        method_edit.setText(path)
+        if not detector_combo.currentText().strip():
+            try:
+                from logic.method import ChromaMethod
+                detector = ChromaMethod.from_file(path).detector
+            except Exception:
+                detector = None
+            if detector:
+                detector_combo.setCurrentText(detector)
+
+    def _refresh_detector_choices(self):
+        """Offer the detector channels found in the first sample of the added directories."""
+        detectors = []
+        for directory in self.directories:
+            try:
+                names = sorted(os.listdir(directory))
+            except OSError:
+                continue
+            for name in names:
+                path = os.path.join(directory, name)
+                if not (os.path.isdir(path) and name.endswith('.C')):
+                    continue
+                try:
+                    from logic.c_folder import CFolder
+                    detectors = list(CFolder.open(path).get_available_detectors() or [])
+                except Exception:
+                    detectors = []
+                break
+            if detectors:
+                break
+        for i, (combo, _) in enumerate(self.detector_rows):
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(detectors)
+            if current:
+                combo.setCurrentText(current)
+            elif i < len(detectors):
+                combo.setCurrentIndex(i)
+            else:
+                combo.setCurrentText("")
+            combo.blockSignals(False)
+
+    def get_detector_runs(self):
+        """Return [{'detector', 'method_path'}] for filled-in rows (empty when unchecked).
+
+        Raises ValueError describing the first problem found.
+        """
+        if not self.per_detector_check.isChecked():
+            return []
+        from logic.method import ChromaMethod
+        runs = []
+        for n, (combo, method_edit) in enumerate(self.detector_rows, start=1):
+            detector = combo.currentText().strip()
+            method_path = method_edit.text().strip()
+            if not detector and not method_path:
+                continue
+            if method_path:
+                if not os.path.isfile(method_path):
+                    raise ValueError(f"Detector {n}: method file not found:\n{method_path}")
+                try:
+                    method = ChromaMethod.from_file(method_path)
+                except Exception as e:
+                    raise ValueError(f"Detector {n}: could not read method:\n{e}")
+                detector = detector or (method.detector or "")
+            if not detector:
+                raise ValueError(f"Detector {n}: enter a detector channel name.")
+            if any(r['detector'] == detector for r in runs):
+                raise ValueError(f"Detector {detector} is listed more than once.")
+            runs.append({'detector': detector, 'method_path': method_path or None})
+        if not runs:
+            raise ValueError("Enter at least one detector, or uncheck "
+                             "\"Process each detector below with its own method\".")
+        return runs
+
     def add_directory(self):
         """Add a directory to the list."""
         directory = QFileDialog.getExistingDirectory(
@@ -172,6 +300,7 @@ class BatchJobDialog(QDialog):
             # Add to the list
             self.directories.append(directory)
             self.directory_list.addItem(directory)
+            self._refresh_detector_choices()
             
             # Enable start button if we have directories
             self.start_button.setEnabled(True)
@@ -217,6 +346,12 @@ class BatchJobDialog(QDialog):
             )
             return
         
+        try:
+            detector_runs = self.get_detector_runs()
+        except ValueError as e:
+            QMessageBox.warning(self, "Detectors and Methods", str(e))
+            return
+
         # Gather options
         options = {
             'integration': self.integration_check.isChecked(),
@@ -227,6 +362,7 @@ class BatchJobDialog(QDialog):
             'overwrite_existing': self.overwrite_check.isChecked(),
             'time_steps': self.time_steps_check.isChecked(),
             'skip_ui_updates': self.skip_ui_check.isChecked(),
+            'detector_runs': detector_runs,
         }
         
         # Emit signal with directories and options
