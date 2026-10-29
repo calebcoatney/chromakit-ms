@@ -19,6 +19,7 @@ setup(
     include_package_data=True,
     package_data={
         "": ["*.qss", "*.png", "*.ico"],
+        "ui": ["icons/*.svg"],
     },
     entry_points={
         "console_scripts": [

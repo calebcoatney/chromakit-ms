@@ -536,6 +536,8 @@ class ChromaKitApp(QMainWindow):
         if os.path.exists(qss_path):
             with open(qss_path, "r", encoding="utf-8") as f:
                 qss = f.read()
+            icons_dir = os.path.join(os.path.dirname(__file__), "icons").replace("\\", "/")
+            qss = qss.replace("@ICONS@", icons_dir)
             
             # Set the theme property on the main window first
             self.setProperty("theme", theme)
