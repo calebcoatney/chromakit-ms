@@ -2,9 +2,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QGroupBox, QFormLayout,
     QCheckBox, QSlider, QDoubleSpinBox, QSpinBox, QComboBox, QHBoxLayout,
     QLineEdit, QFrame, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QRadioButton, QButtonGroup
+    QAbstractItemView, QRadioButton, QButtonGroup, QStyle, QStyleOptionGroupBox
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QRect
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtCore import QRegularExpression
 import html
@@ -15,6 +15,60 @@ from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
 
 INFO_ICON = "\u24d8"
 INFO_COLOR = "#1a73e8"
+
+
+def _fix_table_height(table, rows=3):
+    """Size a table to show exactly `rows` rows so the panel scrolls instead of squashing it."""
+    table.verticalHeader().setDefaultSectionSize(30)
+    height = (table.horizontalHeader().sizeHint().height()
+              + rows * table.verticalHeader().defaultSectionSize()
+              + 2 * table.frameWidth())
+    table.setFixedHeight(height)
+
+
+class _TitleHelpIcon(QLabel):
+    """Info icon overlaid on a QGroupBox, just after its title text.
+
+    QGroupBox titles are plain text drawn by the style, so the icon is a child
+    label positioned from the style's title rect and kept there on resize.
+    """
+
+    def __init__(self, group: QGroupBox, tip: str):
+        super().__init__(INFO_ICON, group)
+        self._group = group
+        self.setStyleSheet(f"color: {INFO_COLOR}; font-weight: bold; padding: 0 3px 0 4px;")
+        # Opaque background so the group box frame line doesn't strike through the icon.
+        self.setAutoFillBackground(True)
+        self.setToolTip(tip)
+        self.setCursor(Qt.WhatsThisCursor)
+        self.adjustSize()
+        group.installEventFilter(self)
+        self._reposition()
+        self.raise_()
+
+    def _reposition(self):
+        group = self._group
+        opt = QStyleOptionGroupBox()
+        opt.initFrom(group)
+        opt.text = group.title()
+        opt.textAlignment = group.alignment()
+        opt.subControls = QStyle.SC_GroupBoxLabel | QStyle.SC_GroupBoxFrame
+        opt.lineWidth = 1
+        rect = group.style().subControlRect(
+            QStyle.CC_GroupBox, opt, QStyle.SC_GroupBoxLabel, group
+        )
+        if not rect.isValid():
+            fm = group.fontMetrics()
+            rect = QRect(8, 0, fm.horizontalAdvance(group.title()), fm.height())
+        self.move(rect.right() - 1, rect.center().y() - self.height() // 2)
+
+    def eventFilter(self, obj, event):
+        if obj is self._group and event.type() in (
+            QEvent.Resize, QEvent.Show, QEvent.FontChange, QEvent.StyleChange
+        ):
+            self._reposition()
+        return False
+
 
 class ParametersFrame(QWidget):
     """Frame containing integration parameters for chromatogram processing."""
@@ -200,18 +254,7 @@ class ParametersFrame(QWidget):
 
             section_tip = help_map.get(SECTION_KEY)
             if section_tip:
-                about = QLabel(
-                    f"{icon_html} <span style='color:#666666;'>About this section</span>"
-                )
-                about.setTextFormat(Qt.RichText)
-                about.setStyleSheet("font-size: 10px;")
-                about.setToolTip(section_tip)
-                about.setCursor(Qt.WhatsThisCursor)
-                layout = group.layout()
-                if isinstance(layout, QFormLayout):
-                    layout.insertRow(0, about)
-                elif layout is not None:
-                    layout.insertWidget(0, about)
+                _TitleHelpIcon(group, section_tip)
 
     def _init_smoothing_controls(self):
         """Initialize smoothing controls"""
@@ -518,7 +561,7 @@ class ParametersFrame(QWidget):
         self.break_point_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.break_point_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.break_point_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.break_point_table.setMaximumHeight(120)
+        _fix_table_height(self.break_point_table)
         bp_layout.addWidget(self.break_point_table)
         
         bp_add_btn = QPushButton("+ Add Break Point")
@@ -617,7 +660,7 @@ class ParametersFrame(QWidget):
         self.peak_splitting_windows_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.peak_splitting_windows_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.peak_splitting_windows_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.peak_splitting_windows_table.setMaximumHeight(120)
+        _fix_table_height(self.peak_splitting_windows_table)
         peak_splitting_layout.addRow(self.peak_splitting_windows_table)
 
         add_window_btn = QPushButton("+ Add Window")
@@ -983,7 +1026,7 @@ class ParametersFrame(QWidget):
         self.range_filter_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.range_filter_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.range_filter_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.range_filter_table.setMaximumHeight(150)
+        _fix_table_height(self.range_filter_table)
         layout.addWidget(self.range_filter_table)
 
         add_btn = QPushButton("+ Add Range")
@@ -1053,7 +1096,7 @@ class ParametersFrame(QWidget):
         self.peak_group_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.peak_group_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.peak_group_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.peak_group_table.setMaximumHeight(150)
+        _fix_table_height(self.peak_group_table)
         layout.addWidget(self.peak_group_table)
 
         add_btn = QPushButton("+ Add Group")
