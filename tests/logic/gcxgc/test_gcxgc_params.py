@@ -29,3 +29,11 @@ def test_gui_params_carry_gcxgc():
 def test_defaults_turn_processing_on():
     g = GCxGCParams()
     assert g.baseline_enabled and g.peaks_enabled and g.modulation_period_s is None
+
+
+def test_band_and_solvent_settings_default_and_round_trip(tmp_path):
+    assert GCxGCParams().remove_bands is True and GCxGCParams().solvent_end_min is None
+    m = ChromaMethod(name="g", signal_type="gcxgc", gcxgc=GCxGCParams(remove_bands=False, solvent_end_min=7.0))
+    m.to_file(tmp_path / "g.chromethod")
+    again = ChromaMethod.from_file(tmp_path / "g.chromethod").gcxgc
+    assert again.remove_bands is False and again.solvent_end_min == 7.0

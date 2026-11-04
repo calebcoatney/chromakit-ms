@@ -34,7 +34,10 @@ The Parameters tab has the GCxGC controls:
 - **2D Baseline Correction.** On by default. Lambda and Diff. Order tune the 2D baseline fit.
 - **2D Peak Detection.** On by default. Min Prominence (in detector counts; blank for none),
   2D RT Tolerance and Min Modulations control how slices from neighbouring modulations are joined into
-  one peak. Spectrum Window (scans, at least 1) sets how far around a peak's expected position ChromaKit
+  one peak. Ignore persistent bands (on by default, TIC detection only) stops air and column bleed from
+  being reported as long peaks, without changing any peak's volume; turn it off for dense samples, where
+  real peaks can fill a 2D column for minutes. Solvent Cut-off (min) ignores peaks with an apex before that
+  first-dimension time; blank keeps them all. Spectrum Window (scans, at least 1) sets how far around a peak's expected position ChromaKit
   looks for its mass-spectral apex. FID→TOF Offset is "Auto (fit)" by default; choose "Fixed" to enter
   the offset in TOF scans yourself. Both are greyed out when detecting on a TIC, where spectra come
   straight from the TIC apex (see [MS-only runs and GNPS export](#ms-only-runs-and-gnps-export)).

@@ -179,6 +179,8 @@ class GCxGCParams(BaseModel):
     min_prominence: Optional[float] = 1e4
     rt2_grouping_tolerance: int = Field(default=2, ge=1, le=20, description="scans")
     min_modulations: int = Field(default=2, ge=1, le=10)
+    remove_bands: bool = Field(default=True, description="TIC detection: ignore signal persisting along 1tR (air, bleed)")
+    solvent_end_min: Optional[float] = Field(default=None, ge=0.0, description="ignore peaks with an apex before this 1tR")
     use_dbc_spectra: bool = True
     apex_window_scans: int = Field(default=10, ge=1, le=50,
                                    description="TOF scans searched each side of an FID peak's mapped apex")

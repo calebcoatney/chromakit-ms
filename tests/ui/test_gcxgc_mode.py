@@ -1022,3 +1022,55 @@ def test_heatmaps_use_a_data_driven_floor_so_an_uncorrected_fid_is_not_flat(qtbo
     assert images[1].norm.vmin > 29000.0                       # the FID, not clipped from zero
     pf.render_gcxgc(frame(0.0, "fid"), frame(0.0, "tic"), show_fid=False)    # degenerate stays valid
     assert pf._gcxgc_axes[0].images[0].norm.vmin <= pf._gcxgc_axes[0].images[0].norm.vmax
+
+
+def _detect_kwargs(app, monkeypatch):
+    from logic.gcxgc_processor import GCxGCProcessor
+    seen = {}
+    real = GCxGCProcessor.detect_peaks
+
+    def spy(self, **kwargs):
+        seen.update(kwargs)
+        return real(self, **kwargs)
+    monkeypatch.setattr(GCxGCProcessor, "detect_peaks", spy)
+    app.button_frame.integrate_button.click()
+    return seen
+
+
+def test_band_and_solvent_widgets_write_into_the_method(gcxgc_app):
+    app, _ = gcxgc_app
+    pf = app.parameters_frame
+    pf.gcxgc_remove_bands.setChecked(False)
+    pf.gcxgc_solvent_end_entry.setText("7")
+    pf.gcxgc_solvent_end_entry.editingFinished.emit()
+    assert app.current_method.gcxgc.remove_bands is False
+    assert app.current_method.gcxgc.solvent_end_min == 7.0
+
+
+def test_apply_method_restores_band_and_solvent_widgets(qtbot):
+    from logic.method import ChromaMethod, GCxGCParams
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    app.parameters_frame.apply_method(ChromaMethod(
+        name="g", signal_type="gcxgc", gcxgc=GCxGCParams(remove_bands=False, solvent_end_min=6.5)))
+    assert not app.parameters_frame.gcxgc_remove_bands.isChecked()
+    assert app.parameters_frame.gcxgc_solvent_end_entry.text() == "6.5"
+
+
+def test_bands_are_removed_on_a_tic_and_solvent_cut_off_reaches_detection(gcxgc_app, monkeypatch):
+    app, _ = gcxgc_app
+    pf = app.parameters_frame
+    pf.gcxgc_signal_combo.setCurrentIndex(pf.gcxgc_signal_combo.findData("dbc_tic"))
+    pf.gcxgc_solvent_end_entry.setText("0.5")
+    pf.gcxgc_solvent_end_entry.editingFinished.emit()
+    seen = _detect_kwargs(app, monkeypatch)
+    assert seen["remove_bands"] is True and seen["solvent_end_min"] == 0.5
+    assert app._gcxgc_export_settings["solvent_end_min"] == 0.5
+
+
+def test_bands_are_not_removed_on_the_fid(gcxgc_app, monkeypatch):
+    app, _ = gcxgc_app
+    pf = app.parameters_frame
+    pf.gcxgc_signal_combo.setCurrentIndex(pf.gcxgc_signal_combo.findData("fid"))
+    assert not pf.gcxgc_remove_bands.isEnabled()
+    assert _detect_kwargs(app, monkeypatch)["remove_bands"] is False
