@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import numpy as np
 from pybaselines import Baseline2D
+from scipy.ndimage import median_filter
 from scipy.signal import find_peaks, peak_prominences
 
 from logic.gcxgc_peak import GCxGC2DPeak
 from logic.gcxgc_run import Frame2D, GCxGCRun
 
 _trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
+# Persistent-band removal: the band level at each point is the running median along 1tR over this
+# many minutes, and a signal must clear it by this fraction to count as a peak.
+_BAND_WINDOW_MIN = 4.0
+_BAND_MARGIN = 0.5
 
 
 class GCxGCProcessor:
@@ -33,12 +39,26 @@ class GCxGCProcessor:
         self._corrected = np.maximum(self.frame.data - baseline, 0.0)
         return self._corrected
 
+    def _above_bands(self, data: np.ndarray) -> np.ndarray:
+        """Signal above whatever persists along 1tR (air, column bleed), for finding peaks only.
+
+        shortcut: real peaks in one 2D column for over half the window also read as a band (the 8260 SAF
+        DBC TIC loses 46 of 408 peaks), so the app applies this to TIC detection only; for dense
+        samples on a TIC, turn it off.
+        """
+        modulations_per_min = 60.0 * self.frame.hz / self.frame.N
+        window = int(round(_BAND_WINDOW_MIN * modulations_per_min)) | 1      # odd, so it is centred
+        band = median_filter(data, size=(window, 1), mode="nearest")
+        return np.maximum(data - (1.0 + _BAND_MARGIN) * band, 0.0)
+
     def detect_peaks(self, min_height=None, min_prominence=None, rt2_grouping_tolerance=2,
-                     min_sub_peaks=2) -> list[GCxGC2DPeak]:
+                     min_sub_peaks=2, *, remove_bands=False, solvent_end_min=None) -> list[GCxGC2DPeak]:
+        """Find peaks. remove_bands changes where peaks are found, never what a found peak integrates."""
         data = self._corrected if self._corrected is not None else self.frame.data
+        search = self._above_bands(data) if remove_bands else data
         sub_peaks: dict[int, list[tuple[int, float, int, int]]] = {}
         for i in range(self.n_mods):
-            col = data[i]
+            col = search[i]
             kwargs = {}
             if min_height is not None:
                 kwargs["height"] = min_height
@@ -52,6 +72,8 @@ class GCxGCProcessor:
                             for x, lb, rb in zip(idxs, left.astype(int), right.astype(int))]
         groups = [g for g in _group_sub_peaks(sub_peaks, rt2_grouping_tolerance) if len(g) >= min_sub_peaks]
         peaks = [self._build_peak(n + 1, g, data) for n, g in enumerate(groups)]
+        if solvent_end_min is not None:
+            peaks = [p for p in peaks if self.frame.t1_min[p.apex_mod] >= solvent_end_min]
         peaks.sort(key=lambda p: p.rt1)
         for n, p in enumerate(peaks):
             p.peak_number = p.feature_id = n + 1

@@ -1847,6 +1847,8 @@ class ChromaKitApp(QMainWindow):
                     min_prominence=params['min_prominence'],
                     rt2_grouping_tolerance=params['rt2_grouping_tolerance'],
                     min_sub_peaks=params['min_sub_peaks'],
+                    remove_bands=params['remove_bands'] and signal != 'fid',    # the FID sees no air or bleed
+                    solvent_end_min=params['solvent_end_min'],
                 )
         except Exception as e:
             self._clear_gcxgc_results()       # the layout was applied; the old peaks no longer match it
