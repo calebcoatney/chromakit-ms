@@ -16,9 +16,13 @@ kept (they are stored outside the app folder).
 `ChromaKit.exe --self-test "%TEMP%\ck"` writes a check to `%TEMP%\ck\self-test.txt`.
 
 **Changes for existing users:**
-- GCxGC MGF entries now follow MZmine's GC (GNPS) export: `PEPMASS` is the base peak, plus `MSLEVEL=2`,
-  `RTINSECONDS`, `CHARGE` and `Num peaks`.
-- Exported MGF and MSP spectra are trimmed by **Export Min S/N** (default 5). Set it to 0 for the old
-  behaviour (every ion kept).
-- Saved MS time offsets now live in the `overrides` folder beside the program (source installs) or under
-  `%LOCALAPPDATA%\ChromaKit` (the Windows app).
+- GCxGC peak lists change on TIC detection. **Ignore persistent bands** (new, on by default) stops air and
+  column bleed from being reported as long peaks, so their false markers go and real streaks get their
+  own. Peak volumes still integrate the full signal. Turn it off for dense samples, where real peaks can
+  fill a 2D column for minutes. FID detection is unchanged.
+- **Solvent Cut-off (min)** (new, blank by default) ignores peaks with an apex before that first-dimension
+  time.
+- A run's saved Phase Shift can cut through its peaks. If most of the signal sits against the top and
+  bottom edges of the plot, enter a Phase Shift that moves it clear, then click Integrate.
+- Re-export GCxGC results made with an earlier version: their peak lists can differ.
+- Integrate now says why it found no peaks.

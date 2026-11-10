@@ -1829,6 +1829,17 @@ class ParametersFrame(QWidget):
         self.gcxgc_min_sub_peaks_spin.setValue(g.min_modulations)
         self.gcxgc_min_sub_peaks_spin.setToolTip("Minimum number of modulations a peak must span.")
         pk.addRow("Min Modulations:", self.gcxgc_min_sub_peaks_spin)
+        self.gcxgc_remove_bands = QCheckBox("Ignore persistent bands (TIC only)")
+        self.gcxgc_remove_bands.setChecked(g.remove_bands)
+        self.gcxgc_remove_bands.setToolTip(
+            "When detecting on a TIC, do not report signal that persists along the first dimension "
+            "(air, column bleed) as peaks. Peak volumes are not changed. Turn off for dense samples, "
+            "where real peaks can fill a 2D column for minutes. Has no effect on the FID.")
+        pk.addRow(self.gcxgc_remove_bands)
+        self.gcxgc_solvent_end_entry = QLineEdit("" if g.solvent_end_min is None else f"{g.solvent_end_min:g}")
+        self.gcxgc_solvent_end_entry.setValidator(QRegularExpressionValidator(QRegularExpression(r'^([0-9]*\.?[0-9]+)?$')))
+        self.gcxgc_solvent_end_entry.setToolTip("Ignore peaks whose apex is before this 1st-dimension time (min). Blank = none.")
+        pk.addRow("Solvent Cut-off (min):", self.gcxgc_solvent_end_entry)
         self.gcxgc_use_dbc = QCheckBox("Use DBC spectra (.dbc.lsc) for MS search")
         self.gcxgc_use_dbc.setChecked(g.use_dbc_spectra)
         pk.addRow(self.gcxgc_use_dbc)
@@ -1884,9 +1895,10 @@ class ParametersFrame(QWidget):
         self.params_layout.addWidget(peaks_group)
 
         # Every edit writes back into current_params['gcxgc'] (→ method, dirty flag).
-        for w in (self.gcxgc_pm_entry, self.gcxgc_phase_entry, self.gcxgc_prominence_entry):
+        for w in (self.gcxgc_pm_entry, self.gcxgc_phase_entry, self.gcxgc_prominence_entry,
+                  self.gcxgc_solvent_end_entry):
             w.editingFinished.connect(self._on_gcxgc_widget_changed)
-        for w in (self.gcxgc_baseline_enabled, self.gcxgc_peaks_enabled, self.gcxgc_use_dbc):
+        for w in (self.gcxgc_baseline_enabled, self.gcxgc_peaks_enabled, self.gcxgc_use_dbc, self.gcxgc_remove_bands):
             w.toggled.connect(self._on_gcxgc_widget_changed)
         for w in (self.gcxgc_lam_slider, self.gcxgc_diff_order_spin, self.gcxgc_rt2_tolerance_spin,
                   self.gcxgc_min_sub_peaks_spin, self.gcxgc_apex_window_spin, self.gcxgc_offset_spin,
@@ -1902,6 +1914,7 @@ class ParametersFrame(QWidget):
         """Detecting on a TIC: the FID-only controls do nothing, so disable them; Show FID applies."""
         on_tic = self.gcxgc_signal_combo.currentData() in ("tic", "dbc_tic")
         self.gcxgc_show_fid.setEnabled(on_tic)
+        self.gcxgc_remove_bands.setEnabled(on_tic)
         self.gcxgc_offset_mode_combo.setEnabled(not on_tic)
         self.gcxgc_offset_spin.setEnabled(
             not on_tic and self.gcxgc_offset_mode_combo.currentData() == "fixed")
@@ -1932,6 +1945,8 @@ class ParametersFrame(QWidget):
             min_prominence=opt_float(self.gcxgc_prominence_entry),
             rt2_grouping_tolerance=self.gcxgc_rt2_tolerance_spin.value(),
             min_modulations=self.gcxgc_min_sub_peaks_spin.value(),
+            remove_bands=self.gcxgc_remove_bands.isChecked(),
+            solvent_end_min=opt_float(self.gcxgc_solvent_end_entry),
             use_dbc_spectra=self.gcxgc_use_dbc.isChecked(),
             apex_window_scans=self.gcxgc_apex_window_spin.value(),
             offset_mode=self.gcxgc_offset_mode_combo.currentData(),
@@ -2018,6 +2033,8 @@ class ParametersFrame(QWidget):
             'min_prominence': prom if prom and prom > 0 else None,
             'rt2_grouping_tolerance': g['rt2_grouping_tolerance'],
             'min_sub_peaks': g['min_modulations'],
+            'remove_bands': g['remove_bands'],
+            'solvent_end_min': g['solvent_end_min'],
             'use_dbc': g['use_dbc_spectra'],
             'apex_window': g['apex_window_scans'],
             'offset_mode': g['offset_mode'],
