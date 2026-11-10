@@ -1030,13 +1030,15 @@ class ParametersFrame(QWidget):
         layout.addWidget(self.range_filter_table)
 
         add_btn = QPushButton("+ Add Range")
-        add_btn.clicked.connect(self._add_range_filter_row)
+        add_btn.clicked.connect(lambda: self._add_range_filter_row())
         layout.addWidget(add_btn)
 
         self.section_groups['range_filters'] = group
         self.params_layout.addWidget(group)
+        for start, end in self.current_params.get('peaks', {}).get('range_filters') or []:
+            self._add_range_filter_row(start, end, notify=False)
 
-    def _add_range_filter_row(self):
+    def _add_range_filter_row(self, start=0.0, end=60.0, notify=True):
         """Add a new row to the range filter table."""
         row = self.range_filter_table.rowCount()
         self.range_filter_table.insertRow(row)
@@ -1044,13 +1046,14 @@ class ParametersFrame(QWidget):
         start_spin = QDoubleSpinBox()
         start_spin.setDecimals(3)
         start_spin.setRange(0, 9999)
+        start_spin.setValue(start)
         start_spin.valueChanged.connect(self._on_range_filters_changed)
         self.range_filter_table.setCellWidget(row, 0, start_spin)
 
         end_spin = QDoubleSpinBox()
         end_spin.setDecimals(3)
         end_spin.setRange(0, 9999)
-        end_spin.setValue(60.0)
+        end_spin.setValue(end)
         end_spin.valueChanged.connect(self._on_range_filters_changed)
         self.range_filter_table.setCellWidget(row, 1, end_spin)
 
@@ -1058,6 +1061,8 @@ class ParametersFrame(QWidget):
         del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda checked, r=row: self._remove_range_filter_row(r))
         self.range_filter_table.setCellWidget(row, 2, del_btn)
+        if notify:
+            self._on_range_filters_changed()
 
     def _remove_range_filter_row(self, row):
         """Remove a row from the range filter table."""
@@ -1100,13 +1105,15 @@ class ParametersFrame(QWidget):
         layout.addWidget(self.peak_group_table)
 
         add_btn = QPushButton("+ Add Group")
-        add_btn.clicked.connect(self._add_peak_group_row)
+        add_btn.clicked.connect(lambda: self._add_peak_group_row())
         layout.addWidget(add_btn)
 
         self.section_groups['peak_grouping'] = group
         self.params_layout.addWidget(group)
+        for start, end in self.current_params.get('integration', {}).get('peak_groups') or []:
+            self._add_peak_group_row(start, end, notify=False)
 
-    def _add_peak_group_row(self):
+    def _add_peak_group_row(self, start=0.0, end=60.0, notify=True):
         """Add a new row to the peak grouping table."""
         row = self.peak_group_table.rowCount()
         self.peak_group_table.insertRow(row)
@@ -1114,13 +1121,14 @@ class ParametersFrame(QWidget):
         start_spin = QDoubleSpinBox()
         start_spin.setDecimals(3)
         start_spin.setRange(0, 9999)
+        start_spin.setValue(start)
         start_spin.valueChanged.connect(self._on_peak_groups_changed)
         self.peak_group_table.setCellWidget(row, 0, start_spin)
 
         end_spin = QDoubleSpinBox()
         end_spin.setDecimals(3)
         end_spin.setRange(0, 9999)
-        end_spin.setValue(60.0)
+        end_spin.setValue(end)
         end_spin.valueChanged.connect(self._on_peak_groups_changed)
         self.peak_group_table.setCellWidget(row, 1, end_spin)
 
@@ -1128,6 +1136,8 @@ class ParametersFrame(QWidget):
         del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda checked, r=row: self._remove_peak_group_row(r))
         self.peak_group_table.setCellWidget(row, 2, del_btn)
+        if notify:
+            self._on_peak_groups_changed()
 
     def _remove_peak_group_row(self, row):
         """Remove a row from the peak grouping table."""

@@ -192,6 +192,8 @@ class TestDetectorsSideBySide:
         output = tmp_path / "out.xlsx"
 
         cfg = _config_with_compound_and_detector()
+        # The first header row must be identical for both detectors, so lead with Sample ID.
+        cfg['header_fields'].sort(key=lambda hf: hf['key'] != 'sample_id')
         thread = ProcessingThread(directory=str(tmp_path), output_file=str(output),
                                   format_config=cfg)
         assert thread.process_json_to_excel(str(tmp_path), str(output)) is True

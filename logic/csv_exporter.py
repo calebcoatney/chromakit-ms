@@ -7,6 +7,7 @@ SpectralFeature, etc.) without any type-specific branching.
 
 import csv
 import os
+from numbers import Real
 from typing import Any, List
 
 
@@ -29,7 +30,15 @@ def export_results_to_csv(features: List[Any], filepath: str) -> bool:
         return False
 
     try:
-        rows = [f.as_dict() for f in features]
+        rows = [
+            {
+                key: int(round(value))
+                if isinstance(value, Real) and not isinstance(value, bool)
+                else value
+                for key, value in feature.as_dict().items()
+            }
+            for feature in features
+        ]
         headers = list(rows[0].keys())
 
         os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)

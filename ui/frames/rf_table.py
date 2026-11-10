@@ -30,9 +30,6 @@ RF_COLUMNS = [
 class RFTableFrame(QWidget):
     rf_table_changed = Signal()
 
-    _COMPOUND_KEYS = ("Compound", "compound", "name", "Name")
-    _RF_KEYS = ("Response Factor", "response_factor", "RF", "rf")
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self._applying = False
@@ -115,6 +112,15 @@ class RFTableFrame(QWidget):
                 "response_factor", f"Response Factor ({RF_UNIT_LABELS[code]})"
             )
 
+    @staticmethod
+    def _header_kind(header: str) -> str | None:
+        normalized = "".join(char for char in header.casefold() if char.isalnum())
+        if normalized == "name" or normalized.startswith(("compound", "species")):
+            return "compound"
+        if normalized.startswith(("rf", "responsefactor")):
+            return "response_factor"
+        return None
+
     def _on_import(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Import RF Table", "", "CSV Files (*.csv);;All Files (*)"
@@ -128,14 +134,48 @@ class RFTableFrame(QWidget):
             if lines and lines[0].strip().lower().startswith("# rf_unit:"):
                 unit_code = lines[0].split(":", 1)[1].strip()
                 lines = lines[1:]
+            records = list(csv.reader(io.StringIO("\n".join(lines))))
+            if not records or not records[0]:
+                raise ValueError("CSV file is empty")
+
+            headers = records[0]
+            compound_col = next(
+                (index for index, header in enumerate(headers)
+                 if self._header_kind(header) == "compound"),
+                None,
+            )
+            rf_col = next(
+                (index for index, header in enumerate(headers)
+                 if self._header_kind(header) == "response_factor"),
+                None,
+            )
+
+            if compound_col is not None and rf_col is not None and compound_col != rf_col:
+                data_rows = records[1:]
+            elif len(headers) == 2 and compound_col is None and rf_col is None:
+                compound_col, rf_col = 0, 1
+                data_rows = records[1:]
+                try:
+                    float(headers[1])
+                except ValueError:
+                    pass
+                else:
+                    data_rows = records
+            else:
+                raise ValueError(
+                    "CSV must contain Compound or Species and RF or Response Factor "
+                    "columns, or exactly two columns with unrecognized headers."
+                )
+
             rows = []
-            reader = csv.DictReader(io.StringIO("\n".join(lines)))
-            for raw in reader:
-                name = next((raw[k] for k in self._COMPOUND_KEYS if k in raw and raw[k]), None)
-                rf = next((raw[k] for k in self._RF_KEYS if k in raw and raw[k] not in (None, "")), None)
-                if name is None or rf is None:
+            for record in data_rows:
+                if len(record) <= max(compound_col, rf_col):
                     continue
-                rows.append({"Compound": str(name).strip(), "response_factor": float(rf)})
+                name = record[compound_col].strip()
+                rf = record[rf_col].strip()
+                if not name or not rf:
+                    continue
+                rows.append({"Compound": name, "response_factor": float(rf)})
         except Exception as e:
             QMessageBox.critical(self, "Import RF Table Failed", str(e))
             return
