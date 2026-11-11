@@ -5,8 +5,8 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QLabel, QComboBox, QDialogButtonBox,
     QTabWidget  # Add QTabWidget to imports
 )
-from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer, QSettings, QThread, Signal, QUrl
-from PySide6.QtGui import QIcon, QBrush, QColor, QDesktopServices
+from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer, QSettings, QThread, Signal
+from PySide6.QtGui import QIcon, QBrush, QColor
 from ui.frames.tree import FileTreeFrame
 from ui.frames.plot import PlotFrame
 from ui.frames.parameters import ParametersFrame
@@ -18,6 +18,7 @@ from ui.frames.buttons import ButtonFrame
 from ui.dialogs.automation_dialog import AutomationDialog
 from ui.dialogs.export_settings_dialog import ExportSettingsDialog
 from ui.dialogs.scaling_factors_dialog import ScalingFactorsDialog
+from ui.dialogs.update_dialog import UpdateDialog
 from logic.automation_worker import AutomationWorker
 from logic.processor import ChromatogramProcessor
 from logic.batch_search import BatchSearchWorker
@@ -319,15 +320,19 @@ class ChromaKitApp(QMainWindow):
         from logic.update_check import is_newer
         if not is_newer(version, __version__):
             return
-        self._update_url = url
+        self._update_url, self._update_version = url, version
         if self.update_button is None:
             self.update_button = QPushButton()
-            self.update_button.clicked.connect(
-                lambda: QDesktopServices.openUrl(QUrl(self._update_url)))
+            self.update_button.clicked.connect(self._show_update_dialog)
             self.statusBar().addPermanentWidget(self.update_button)
         self.update_button.setText(f"Update available: v{version}")
-        self.update_button.setToolTip(f"Open the ChromaKit {version} release page")
+        self.update_button.setToolTip(f"How to update to ChromaKit {version}")
         self.update_button.setVisible(True)
+
+    def _show_update_dialog(self) -> None:
+        from logic.update_check import detect_install
+        kind, source_dir = detect_install()
+        UpdateDialog(self._update_version, self._update_url, kind, source_dir, self).exec()
 
     def _apply_method_to_frames(self):
         """Push current_method into each frame, guarded so frame change
