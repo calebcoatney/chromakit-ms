@@ -1,6 +1,6 @@
 """Build a click-to-label HTML sheet for marking shoulders and riders on real runs.
 
-    python -m tools.shoulder_label_sheet RUN.D [RUN.D ...] --out DIR [--method M.chromethod]
+    python -m tools.shoulder_label_sheet RUN.D|RUN.C [...] --out DIR [--method M.chromethod] [--detector FID1A]
 
 Writes DIR/label_sheet.html: one panel per peak cluster of each run, showing the
 baseline-corrected signal only (no detector output, so the labels are not
@@ -22,14 +22,28 @@ import numpy as np
 from scipy.signal import find_peaks, peak_widths
 
 
-def load_run(path: str, method_path: str | None = None, prominence: float | None = None):
-    """Load a .D run and process it the way the app would. Returns (x, corrected_y, params)."""
+def resolve_d(path: str) -> str:
+    """A GC2 run is a `<run>.C` folder wrapping `data/<run>.D`; return the .D."""
+    p = Path(path)
+    if p.suffix == '.C':
+        ds = sorted((p / 'data').glob('*.D'))
+        if len(ds) != 1:
+            raise ValueError(f'{path}: expected one data/*.D inside, found {len(ds)}')
+        return str(ds[0])
+    return str(p)
+
+
+def load_run(path: str, method_path: str | None = None, prominence: float | None = None,
+             detector: str | None = None):
+    """Load a .D (or .C) run and process it the way the app would.
+    `detector` picks the channel (e.g. FID1A, FID2B, TCD3C); None auto-detects.
+    Returns (x, corrected_y, params)."""
     from logic.data_handler import DataHandler
     from logic.processor import ChromatogramProcessor
     from logic.method import ChromaMethod
     from api.utils import convert_params_for_processor
 
-    data = DataHandler().load_data_directory(path)
+    data = DataHandler().load_data_directory(resolve_d(path), detector=detector)
     x = np.asarray(data['chromatogram']['x'], dtype=float)
     y = np.asarray(data['chromatogram']['y'], dtype=float)
     method = ChromaMethod.from_file(method_path) if method_path else ChromaMethod(name="label-sheet", signal_type="gc")
@@ -116,7 +130,7 @@ function draw(){
 }
 document.getElementById('zoom').onchange=e=>{zoom=+e.target.value;draw()};
 document.getElementById('save').onclick=()=>{
-  const out={runs:DATA.runs.map((run,ri)=>({name:run.name,path:run.path,method:run.method,
+  const out={runs:DATA.runs.map((run,ri)=>({name:run.name,path:run.path,method:run.method,detector:run.detector,
     panels:run.panels.map(p=>[p.x[0],p.x[p.x.length-1]]),
     labels:run.panels.flatMap((p,pi)=>(marks[key(ri,pi)]||[]).map(m=>({rt:+m.rt.toFixed(4),kind:m.kind})))}))};
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([JSON.stringify(out,null,2)],{type:'application/json'}));
@@ -132,12 +146,13 @@ def main(argv=None):
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--method', default=None, help='.chromethod to process with (default: ChromaMethod defaults)')
     ap.add_argument('--min-snr', type=float, default=20.0, help='smallest peak (x noise) that gets a panel')
+    ap.add_argument('--detector', default=None, help='channel, e.g. FID1A, FID2B, TCD3C (default: auto)')
     args = ap.parse_args(argv)
     runs = []
     for path in args.runs:
-        x, y, _ = load_run(path, args.method)
+        x, y, _ = load_run(path, args.method, detector=args.detector)
         spans, _ = panels_for_run(x, y, args.min_snr)
-        runs.append(dict(name=Path(path).name, path=str(path), method=args.method,
+        runs.append(dict(name=Path(path).name, path=str(path), method=args.method, detector=args.detector,
                          panels=[dict(x=[round(float(v), 5) for v in x[a:b + 1]],
                                       y=[round(float(v), 3) for v in y[a:b + 1]]) for a, b in spans]))
         print(f'{Path(path).name}: {len(spans)} panels')

@@ -396,7 +396,7 @@ def score_labelled(labels_path, sensitivity=5, processor_file=None, tol_fwhm=0.5
     tp = fp = fn = kind_ok = 0
     per_run = []
     for run_ in doc['runs']:
-        x, y, params = load_run(run_['path'], run_.get('method'))
+        x, y, params = load_run(run_['path'], run_.get('method'), detector=run_.get('detector'))
         params['shoulders'] = {'enabled': True, 'sensitivity': sensitivity, 'window_length': 41,
                                'polyorder': 3, 'apex_distance': 10}
         out = proc.process(x, y, params)

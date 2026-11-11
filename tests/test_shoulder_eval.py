@@ -77,3 +77,11 @@ def test_label_sheet_merges_overlapping_peak_windows():
     spans, _ = panels_for_run(x, y)
     assert len(spans) == 2
     assert x[spans[0][0]] < 0.5 and x[spans[0][1]] > 0.53
+
+
+def test_label_sheet_finds_the_d_inside_a_c_folder(tmp_path):
+    from tools.shoulder_label_sheet import resolve_d
+    d = tmp_path / 'run.C' / 'data' / 'run.D'
+    d.mkdir(parents=True)
+    assert resolve_d(str(tmp_path / 'run.C')) == str(d)
+    assert resolve_d(str(d)) == str(d)
