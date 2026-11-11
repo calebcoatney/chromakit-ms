@@ -111,7 +111,8 @@ def test_no_prefill_without_saved_path_or_detector(qtbot, tmp_path):
 # ---- instrument tags, four rows, setup file, workbook ----
 
 def _row(dialog, i, instrument, detector, method_path=""):
-    dialog.instrument_combos[i].setCurrentText(instrument)
+    combo = dialog.instrument_combos[i]
+    combo.setCurrentIndex(combo.findData(instrument))
     _fill(dialog, i, detector, method_path)
 
 
@@ -209,13 +210,20 @@ def test_row_whose_tag_no_folder_has_is_refused(dialog, tmp_path):
         dialog.get_detector_runs()
 
 
-def test_workbook_field_enabled_only_with_tagged_folder(dialog, tmp_path):
+def test_workbook_field_enabled_only_in_gc12_mode(dialog, tmp_path):
     assert not dialog.workbook_edit.isEnabled()
     path = _folder(tmp_path, "plain")
     _add(dialog, path)
-    assert not dialog.workbook_edit.isEnabled()
+    dialog.per_detector_check.setChecked(True)
+    _row(dialog, 0, "GC1", "FID1A")
+    assert not dialog.workbook_edit.isEnabled()  # no folder tagged
     dialog.set_directory_instrument(path, "GC1")
     assert dialog.workbook_edit.isEnabled()
+    _row(dialog, 0, "", "FID1A")
+    assert not dialog.workbook_edit.isEnabled()  # no row has an instrument
+    _row(dialog, 0, "GC1", "FID1A")
+    dialog.per_detector_check.setChecked(False)
+    assert not dialog.workbook_edit.isEnabled()
 
 
 def test_workbook_prefilled_when_both_tags_present(dialog, tmp_path):
@@ -228,6 +236,8 @@ def test_workbook_prefilled_when_both_tags_present(dialog, tmp_path):
 
 def test_workbook_needs_both_instruments(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "g1"), "GC1")
+    dialog.per_detector_check.setChecked(True)
+    _row(dialog, 0, "GC1", "FID1A")
     dialog.workbook_edit.setText(str(tmp_path / "out.xlsx"))
     with pytest.raises(ValueError, match="GC2"):
         dialog.get_workbook_path()
@@ -250,6 +260,8 @@ def test_workbook_needs_json_export(qtbot, tmp_path):
     d._main = main
     _add(d, _folder(tmp_path, "g1"), "GC1")
     _add(d, _folder(tmp_path, "g2"), "GC2")
+    d.per_detector_check.setChecked(True)
+    _row(d, 0, "GC1", "FID1A")
     d.workbook_edit.setText(str(tmp_path / "out.xlsx"))
     with pytest.raises(ValueError) as e:
         d.get_workbook_path()
@@ -340,3 +352,50 @@ def test_corrupt_remembered_setup_is_ignored(qtbot):
     d = BatchJobDialog()
     qtbot.addWidget(d)
     assert d.get_setup_rows() == []
+
+
+# ---- auto-tagged folders must not change a non-GC1&2 job ----
+
+def _autotagged(dialog, tmp_path):
+    path = _folder(tmp_path, "260224 GC1 R1 Run 311")
+    dialog._append_directory(path)
+    assert dialog.directory_instruments[path] == "GC1"
+    return path
+
+
+def _start(dialog):
+    got = []
+    dialog.start_batch.connect(lambda dirs, opts: got.append(opts))
+    dialog.on_start_processing()
+    return got[0]
+
+
+def test_autotagged_folder_with_box_unchecked_is_a_plain_job(dialog, tmp_path):
+    path = _autotagged(dialog, tmp_path)
+    assert dialog.get_detector_runs() == []
+    opts = _start(dialog)
+    assert opts['detector_runs'] == []
+    assert opts['directory_instruments'] == {path: ""}
+    assert opts['gc12_workbook'] is None
+
+
+def test_autotagged_folder_with_blank_instrument_rows_keeps_pr5_behaviour(dialog, tmp_path):
+    path = _autotagged(dialog, tmp_path)
+    dialog.per_detector_check.setChecked(True)
+    _row(dialog, 0, "", "FID1A")
+    _row(dialog, 1, "", "FID2B")
+    expected = [{'instrument': '', 'detector': 'FID1A', 'method_path': None},
+                {'instrument': '', 'detector': 'FID2B', 'method_path': None}]
+    assert dialog.get_detector_runs() == expected
+    opts = _start(dialog)
+    assert opts['detector_runs'] == expected
+    assert opts['directory_instruments'] == {path: ""}
+    assert opts['gc12_workbook'] is None
+
+
+def test_filled_rows_are_not_used_when_box_unchecked(dialog, tmp_path):
+    _autotagged(dialog, tmp_path)
+    _row(dialog, 0, "GC1", "FID1A")
+    assert not dialog.per_detector_check.isChecked()
+    assert dialog.get_detector_runs() == []
+    assert _start(dialog)['detector_runs'] == []

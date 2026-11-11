@@ -190,8 +190,9 @@ class BatchJobDialog(QDialog):
         self.workbook_edit.setPlaceholderText("GC1&2 paste workbook (.xlsx); needs a GC1 and a GC2 folder")
         self.workbook_edit.setAccessibleName("Output workbook")
         self.workbook_edit.setToolTip(
-            "Where to write the paired GC1 and GC2 results. Enabled when a folder is tagged. "
-            "Needs JSON export during batch.")
+            "Where to write the paired GC1 and GC2 results. Needs a tagged folder, a ticked "
+            "\"Process each detector below\" box with at least one detector row that has an "
+            "instrument, and JSON export during batch.")
         label.setBuddy(self.workbook_edit)
         self.workbook_browse = QPushButton("Browse...")
         self.workbook_browse.setAccessibleName("Browse for output workbook")
@@ -199,6 +200,11 @@ class BatchJobDialog(QDialog):
         row.addWidget(label)
         row.addWidget(self.workbook_edit, 1)
         row.addWidget(self.workbook_browse)
+        self.per_detector_check.toggled.connect(self._update_workbook_state)
+        for inst_combo, (combo, method_edit) in zip(self.instrument_combos, self.detector_rows):
+            inst_combo.currentIndexChanged.connect(self._update_workbook_state)
+            combo.currentTextChanged.connect(self._update_workbook_state)
+            method_edit.textChanged.connect(self._update_workbook_state)
         self._update_workbook_state()
         return row
 
@@ -212,7 +218,8 @@ class BatchJobDialog(QDialog):
 
     def _update_workbook_state(self):
         """Enable the workbook field when a folder is tagged; prefill it when both tags exist."""
-        tagged = any(self.directory_instruments.get(d) for d in self.directories)
+        tagged = (any(self.directory_instruments.get(d) for d in self.directories)
+                  and self._gc12_mode())
         self.workbook_edit.setEnabled(tagged)
         self.workbook_browse.setEnabled(tagged)
         if self.workbook_edit.text().strip():
@@ -511,9 +518,7 @@ class BatchJobDialog(QDialog):
         Empty when unchecked and no folder is tagged. Raises ValueError describing
         the first problem found.
         """
-        tagged = [(d, self.directory_instruments.get(d, "")) for d in self.directories]
-        tagged = [(d, tag) for d, tag in tagged if tag]
-        if not self.per_detector_check.isChecked() and not tagged:
+        if not self.per_detector_check.isChecked():
             return []
         from logic.method import ChromaMethod
         runs = []
@@ -539,6 +544,10 @@ class BatchJobDialog(QDialog):
                 raise ValueError(f"{label} is listed more than once.")
             runs.append({'instrument': instrument, 'detector': detector,
                          'method_path': method_path or None})
+        if runs and not any(r['instrument'] for r in runs):
+            return runs  # PR #5 job: tags don't apply without an instrument on a row
+        tagged = [(d, self.directory_instruments.get(d, "")) for d in self.directories]
+        tagged = [(d, tag) for d, tag in tagged if tag]
         for directory, tag in tagged:
             if not any(r['instrument'] == tag for r in runs):
                 name = os.path.basename(directory.rstrip("/\\")) or directory
@@ -553,13 +562,18 @@ class BatchJobDialog(QDialog):
                              "\"Process each detector below with its own method\".")
         return runs
 
+    def _gc12_mode(self):
+        """Tags take effect only when the per-detector box is ticked and a filled row has an instrument."""
+        return (self.per_detector_check.isChecked()
+                and any(r['instrument'] for r in self.get_setup_rows()))
+
     def get_workbook_path(self):
         """The GC1&2 workbook path, or None when the field is off or empty.
 
         Raises ValueError when the job can't produce it.
         """
         path = self.workbook_edit.text().strip()
-        if not self.workbook_edit.isEnabled() or not path:
+        if not self._gc12_mode() or not self.workbook_edit.isEnabled() or not path:
             return None
         tags = {self.directory_instruments.get(d, "") for d in self.directories}
         for tag in ("GC1", "GC2"):
@@ -689,7 +703,9 @@ class BatchJobDialog(QDialog):
             'skip_ui_updates': self.skip_ui_check.isChecked(),
             'apply_manual_overrides': self.manual_overrides_check.isChecked(),
             'detector_runs': detector_runs,
-            'directory_instruments': dict(self.directory_instruments),
+            'directory_instruments': {
+                d: (self.directory_instruments.get(d, "") if self._gc12_mode() else "")
+                for d in self.directories},
             'gc12_workbook': workbook,
             'gc12_rows': [dict(r) for r in detector_runs],
         }
