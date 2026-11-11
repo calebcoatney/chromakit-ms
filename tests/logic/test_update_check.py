@@ -1,6 +1,9 @@
 import io
 import json
+import pathlib
+import re
 import ssl
+import urllib.request
 
 import pytest
 
@@ -49,3 +52,74 @@ def test_network_failures_give_none(exc):
 
 def test_malformed_json_gives_none():
     assert uc.latest_release(opener=_opener(raw=b"<html>")) is None
+
+
+# ---- install type and update instructions -------------------------------------------------------
+
+def _reader(payload):
+    text = payload if isinstance(payload, str) or payload is None else json.dumps(payload)
+    return lambda: text
+
+
+def test_frozen_build_wins_over_any_distribution():
+    kind, path = uc.detect_install(frozen=True, read_direct_url=_reader({"dir_info": {"editable": True}, "url": "file:///x"}))
+    assert (kind, path) == ("frozen", None)
+
+
+def test_git_install():
+    payload = {"url": "https://github.com/calebcoatney/chromakit-ms", "vcs_info": {"vcs": "git", "commit_id": "abc"}}
+    assert uc.detect_install(frozen=False, read_direct_url=_reader(payload)) == ("git", None)
+
+
+def test_editable_install_keeps_posix_source_path():
+    payload = {"url": "file:///home/me/my%20src/chromakit-qt", "dir_info": {"editable": True}}
+    kind, path = uc.detect_install(frozen=False, read_direct_url=_reader(payload))
+    assert kind == "editable" and path.endswith("my src/chromakit-qt")
+
+
+def test_editable_install_windows_drive_path(monkeypatch):
+    import nturl2path
+    monkeypatch.setattr(urllib.request, "url2pathname", nturl2path.url2pathname)
+    payload = {"url": "file:///C:/Users/me/chromakit-qt", "dir_info": {"editable": True}}
+    kind, path = uc.detect_install(frozen=False, read_direct_url=_reader(payload))
+    assert kind == "editable" and path == "C:\\Users\\me\\chromakit-qt"
+
+
+@pytest.mark.parametrize("payload", [
+    None,                                        # no distribution / no direct_url.json
+    "not json",
+    "[]",
+    {"url": "https://example.com/x.zip", "archive_info": {}},
+    {"dir_info": {"editable": False}, "url": "file:///x"},
+    {"dir_info": {"editable": True}},            # editable with no url: nothing to show
+    {"vcs_info": {"vcs": "hg"}},
+])
+def test_everything_else_is_unknown(payload):
+    assert uc.detect_install(frozen=False, read_direct_url=_reader(payload)) == ("unknown", None)
+
+
+def test_reader_that_raises_is_unknown():
+    def boom():
+        raise RuntimeError("broken metadata")
+    assert uc.detect_install(frozen=False, read_direct_url=boom) == ("unknown", None)
+
+
+def test_default_detection_never_raises():
+    kind, _ = uc.detect_install()
+    assert kind in {"frozen", "editable", "git", "unknown"}
+
+
+def test_pip_command_text_is_exact():
+    assert uc.pip_upgrade_command("/opt/py/bin/python") == (
+        '"/opt/py/bin/python" -m pip install --upgrade '
+        '"chromakit-ms[ms] @ git+https://github.com/calebcoatney/chromakit-ms"')
+    assert "@" in uc.pip_upgrade_command("p") and "\uff20" not in uc.pip_upgrade_command("p")
+
+
+def test_ms_is_a_real_extra():
+    setup_py = (pathlib.Path(__file__).resolve().parents[2] / "setup.py").read_text(encoding="utf-8")
+    assert re.search(r'"ms"\s*:', setup_py)
+
+
+def test_git_pull_command():
+    assert uc.git_pull_command("/src/chromakit-qt") == 'git -C "/src/chromakit-qt" pull'

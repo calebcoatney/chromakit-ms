@@ -90,6 +90,13 @@ PARAMETER_HELP = {
             "• A baseline that runs too <b>low</b> (below the true background) "
             "gives areas that are too large and can make noise look like peaks."
         ),
+        "Enable Baseline Correction": (
+            "<b>Enable Baseline Correction</b><br>"
+            "Turns baseline fitting on or off. When off, no baseline is subtracted: "
+            "peaks are detected and integrated on the (smoothed) signal measured from "
+            "zero, so areas include any background offset. The algorithm, λ, offset "
+            "and break-point settings are ignored."
+        ),
         "Show Corrected Signal": (
             "<b>Show Corrected Signal</b><br>"
             "Display only. Unchecked shows the raw signal with the fitted baseline "

@@ -65,6 +65,7 @@ def _method():
     m.smoothing.method = "savgol"
     m.smoothing.diff_order = 2
     m.baseline.baseline_offset = 1.5
+    m.baseline.enabled = False
     m.baseline.fastchrom = FastchromParams(half_window=7, smooth_half_window=9)
     m.baseline.break_points = [BreakPoint(time=3.0, tolerance=0.2), BreakPoint(time=6.0, tolerance=0.05)]
     m.peaks.mode = "peak_splitting"
@@ -79,6 +80,7 @@ def _method():
     (lambda f: f.smooth_method_combo.currentData(), "savgol"),
     (lambda f: f.smooth_diff_order_combo.currentData(), 2),
     (lambda f: float(f.baseline_offset_input.text()), 1.5),
+    (lambda f: f.baseline_enabled.isChecked(), False),
     (lambda f: (f.fc_half_window.value(), f.fc_smooth_half_window.value()), (7, 9)),
     (lambda f: _table_rows(f.break_point_table), [[3.0, 0.2], [6.0, 0.05]]),
     (lambda f: f.peak_mode_combo.currentData(), "peak_splitting"),
@@ -86,7 +88,7 @@ def _method():
     (lambda f: f.splitting_method_combo.currentData(), "emg"),
     (lambda f: _table_rows(f.peak_splitting_windows_table), [[3.0, 4.0]]),
     (lambda f: _table_rows(f.peak_group_table), [[7.0, 7.5]]),
-], ids=["smoothing.method", "smoothing.diff_order", "baseline.baseline_offset",
+], ids=["smoothing.method", "smoothing.diff_order", "baseline.baseline_offset", "baseline.enabled",
         "baseline.fastchrom", "baseline.break_points", "peaks.mode",
         "peaks.range_filters", "deconvolution.splitting_method",
         "deconvolution.windows", "integration.peak_groups"])
@@ -95,6 +97,31 @@ def test_apply_method_restores_control(qtbot, read, expected):
     qtbot.addWidget(frame)
     frame.apply_method(_method())
     assert read(frame) == expected
+
+
+def test_baseline_enabled_checkbox_writes_back_and_gates_controls(qtbot):
+    app = _app(qtbot)
+    pf = app.parameters_frame
+    assert pf.baseline_enabled.isChecked()
+    assert app.current_method.baseline.enabled is True
+
+    pf.baseline_enabled.setChecked(False)
+    assert pf.current_params['baseline']['enabled'] is False
+    assert app.current_method.baseline.enabled is False
+    for w in (pf.baseline_algorithm, pf.lam_container, pf.fastchrom_container,
+              pf.baseline_offset_input, pf.break_point_frame):
+        assert not w.isEnabled()
+
+    pf.baseline_enabled.setChecked(True)
+    assert app.current_method.baseline.enabled is True
+    assert pf.baseline_algorithm.isEnabled() and pf.break_point_frame.isEnabled()
+
+
+def test_apply_method_baseline_off_disables_baseline_controls(qtbot):
+    frame = ParametersFrame()
+    qtbot.addWidget(frame)
+    frame.apply_method(_method())
+    assert not frame.baseline_algorithm.isEnabled()
 
 
 def test_apply_method_does_not_rewrite_params(qtbot):

@@ -95,6 +95,17 @@ class BatchJobDialog(QDialog):
         self.skip_ui_check.setChecked(True)
         options_layout.addWidget(self.skip_ui_check)
 
+        # Manual overrides (opt-in; deliberately not remembered between runs)
+        self.manual_overrides_check = QCheckBox("Apply manual assignment overrides (manual_assignments.json)")
+        self.manual_overrides_check.setToolTip(
+            "<p>Re-assign peaks using the saved manual assignments: a peak within 0.05 min of a saved "
+            "retention time takes that compound name. Where a saved assignment has a stored mass "
+            "spectrum, the peak's spectrum must match it (similarity 0.7 or higher); if it can't be "
+            "compared, for example GC-only data, that assignment is skipped. Off by default.</p>"
+        )
+        self.manual_overrides_check.setChecked(False)
+        options_layout.addWidget(self.manual_overrides_check)
+
         # Add options group to main layout
         layout.addWidget(options_group)
 
@@ -178,7 +189,25 @@ class BatchJobDialog(QDialog):
         rows_widget.setEnabled(False)
         self.per_detector_check.toggled.connect(rows_widget.setEnabled)
         self._refresh_detector_choices()
+        self._prefill_first_row_from_main_window()
         return group
+
+    def _prefill_first_row_from_main_window(self):
+        """Offer the saved method's detector and path in the first row.
+
+        Only fills an empty row and never ticks per_detector_check.
+        """
+        parent = self.parent()
+        path = getattr(parent, "current_method_path", None)
+        method = getattr(parent, "current_method", None)
+        detector = getattr(method, "detector", None)
+        if not path or not detector:
+            return
+        combo, method_edit = self.detector_rows[0]
+        if combo.currentText().strip() or method_edit.text().strip():
+            return
+        combo.setCurrentText(detector)
+        method_edit.setText(str(path))
 
     def _browse_method(self, detector_combo, method_edit):
         path, _ = QFileDialog.getOpenFileName(
@@ -362,6 +391,7 @@ class BatchJobDialog(QDialog):
             'overwrite_existing': self.overwrite_check.isChecked(),
             'time_steps': self.time_steps_check.isChecked(),
             'skip_ui_updates': self.skip_ui_check.isChecked(),
+            'apply_manual_overrides': self.manual_overrides_check.isChecked(),
             'detector_runs': detector_runs,
         }
         

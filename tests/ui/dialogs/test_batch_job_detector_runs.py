@@ -65,3 +65,31 @@ def test_invalid_rows_raise(dialog, rows):
         _fill(dialog, i, det, path)
     with pytest.raises(ValueError):
         dialog.get_detector_runs()
+
+
+def _dialog_with_main(qtbot, path, detector):
+    from PySide6.QtWidgets import QWidget
+    main = QWidget()
+    qtbot.addWidget(main)
+    main.current_method_path = path
+    main.current_method = ChromaMethod(name="m", signal_type="gc", detector=detector)
+    d = BatchJobDialog(main)
+    d._main = main  # parent must outlive the dialog's use
+    return d
+
+
+def test_first_row_prefilled_from_saved_method(qtbot, tmp_path):
+    p = tmp_path / "m.chromethod"
+    d = _dialog_with_main(qtbot, p, "FID2B")
+    combo, edit = d.detector_rows[0]
+    assert combo.currentText() == "FID2B"
+    assert edit.text() == str(p)
+    assert not d.per_detector_check.isChecked()
+    assert d.detector_rows[1][0].currentText() == ""
+
+
+def test_no_prefill_without_saved_path_or_detector(qtbot, tmp_path):
+    for path, det in [(None, "FID2B"), (tmp_path / "m.chromethod", None)]:
+        d = _dialog_with_main(qtbot, path, det)
+        assert d.detector_rows[0][0].currentText() == ""
+        assert d.detector_rows[0][1].text() == ""
