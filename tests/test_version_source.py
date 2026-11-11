@@ -8,10 +8,10 @@ from logic import gcxgc_export as ge
 
 def test_version_is_one_source():
     from pathlib import Path
-    assert chromakit_version.__version__ == "0.2.1"
+    assert chromakit_version.__version__ == "0.2.2"
     setup_text = (Path(chromakit_version.__file__).parent / "setup.py").read_text(encoding="utf-8")
     assert "chromakit_version.py" in setup_text and 'version="0.1.0"' not in setup_text
-    assert ge._chromakit_version() == "0.2.1"
+    assert ge._chromakit_version() == "0.2.2"
 
 
 def test_build_info_commit_wins(monkeypatch):
