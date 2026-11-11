@@ -1,6 +1,7 @@
 """Manual assignment overrides in batch: opt-in, and never applied on RT alone when a spectrum can't be compared."""
 import json
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -86,3 +87,42 @@ def test_dialog_checkbox_off_by_default_and_flows_into_options(qtbot, tmp_path):
     with qtbot.waitSignal(dlg.start_batch) as blocker:
         dlg.on_start_processing()
     assert blocker.args[1]['apply_manual_overrides'] is True
+
+
+def _stub_similarity(monkeypatch, value):
+    """Stand in for ms_toolkit.similarity so the threshold is tested without ms_toolkit."""
+    seen = []
+
+    def dot_product_similarity(s1, s2):
+        seen.append((s1, s2))
+        return value
+
+    monkeypatch.setitem(sys.modules, "ms_toolkit.similarity",
+                        ModuleType("ms_toolkit.similarity"))
+    sys.modules["ms_toolkit.similarity"].dot_product_similarity = dot_product_similarity
+    monkeypatch.setattr("logic.batch_search.extract_peak_spectrum",
+                        lambda *a, **k: {"mz": [41, 43], "intensities": [90, 60]})
+    return seen
+
+
+@pytest.mark.parametrize("similarity", [0.7, 0.95])
+def test_option_on_similar_spectrum_applies(tmp_path, monkeypatch, similarity):
+    peak = _peak()
+    worker, _ = _worker(tmp_path, monkeypatch, _entry(True),
+                        {"apply_manual_overrides": True}, [peak])
+    seen = _stub_similarity(monkeypatch, similarity)
+    worker._apply_manual_overrides()
+    assert seen == [([(41, 90), (43, 60)], [(41, 100), (43, 50)])]
+    assert peak.compound_id == "Testane"
+    assert peak.manual_assignment is True
+
+
+def test_option_on_dissimilar_spectrum_skips_and_logs(tmp_path, monkeypatch):
+    peak = _peak()
+    worker, logs = _worker(tmp_path, monkeypatch, _entry(True),
+                           {"apply_manual_overrides": True}, [peak])
+    _stub_similarity(monkeypatch, 0.69)
+    worker._apply_manual_overrides()
+    assert peak.compound_id == "Unknown"
+    assert not peak.manual_assignment
+    assert any("Testane" in m and "5.000" in m and "0.69 is below 0.7" in m for m in logs)
