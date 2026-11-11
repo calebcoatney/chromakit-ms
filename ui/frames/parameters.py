@@ -2023,6 +2023,9 @@ class ParametersFrame(QWidget):
             if item.widget():
                 item.widget().hide()
                 item.widget().deleteLater()
+        # The app adds this checkbox to the baseline section after an MS baseline
+        # correction; it goes with the old section, and the app recreates it on the next one.
+        self.use_corrected_ms_data_check = None
 
         # Rebuild title
         parameters_label = QLabel("Integration Parameters")

@@ -71,7 +71,7 @@ def test_corrected_ms_checkbox_follows_the_gate(app):
     window, tmp_path = app
     pf = window.parameters_frame
     _load(window, tmp_path, "gconly.D")
-    assert not hasattr(pf, "use_corrected_ms_data_check")   # not created yet: no error
+    assert pf.use_corrected_ms_data_check is None   # not created yet: no error
 
     _load(window, tmp_path, "gcms_a.D")
     pf.use_corrected_ms_data_check = QCheckBox("Use Baseline-Corrected MS Data", pf)
@@ -101,3 +101,72 @@ def test_method_load_keeps_ms_baseline_button_hidden_for_gc_only(app, monkeypatc
     _load_method(window, tmp_path, monkeypatch)      # same signal factor: reprocess path
     assert window.parameters_frame.ms_baseline_button.isHidden()
 
+
+class _FakeMS:
+    def __init__(self):
+        self.xlabels = np.linspace(0, 10, 5)
+        self.data = np.ones((5, 3))
+
+
+class _FakeDialog:
+    def close(self):
+        pass
+
+
+def _complete_ms_baseline(window, monkeypatch):
+    """Drive the real MS-baseline completion handler (creates the checkbox)."""
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr("ui.app.QMessageBox.question", lambda *a, **k: QMessageBox.No)
+    ms = _FakeMS()
+    window._on_ms_baseline_correction_completed(ms, ms.data * 0.5, ms.data * 0.5, _FakeDialog())
+    return window.parameters_frame.use_corrected_ms_data_check
+
+
+def test_corrected_ms_checkbox_lives_in_the_baseline_section(app, monkeypatch):
+    window, tmp_path = app
+    pf = window.parameters_frame
+    _load(window, tmp_path, "gcms_a.D")
+
+    cb = _complete_ms_baseline(window, monkeypatch)
+    assert cb is not None
+    assert not cb.isWindow()                          # parented, not a stray top-level window
+    assert pf.section_groups['baseline'].isAncestorOf(cb)
+    assert not cb.isHidden()
+
+    _load(window, tmp_path, "gconly.D")
+    assert cb.isHidden()
+
+
+def test_corrected_ms_checkbox_survives_a_method_rebuild(app, monkeypatch, qtbot):
+    from PySide6.QtCore import QCoreApplication, QEvent
+    window, tmp_path = app
+    _load(window, tmp_path, "gcms_a.D")
+    _complete_ms_baseline(window, monkeypatch)
+
+    _load_method(window, tmp_path, monkeypatch)       # rebuilds the baseline section
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)   # run the deleteLater()s
+    _load(window, tmp_path, "gcms_b.D")               # gate must not touch the deleted checkbox
+    _load(window, tmp_path, "gconly.D")
+
+    _load(window, tmp_path, "gcms_c.D")
+    cb = _complete_ms_baseline(window, monkeypatch)   # created again in the new section
+    assert window.parameters_frame.section_groups['baseline'].isAncestorOf(cb)
+
+
+def test_gate_skips_a_deleted_or_unparented_checkbox(app, capsys):
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QWidget
+    window, tmp_path = app
+    pf = window.parameters_frame
+
+    holder = QWidget()
+    pf.use_corrected_ms_data_check = QCheckBox("Use Baseline-Corrected MS Data", holder)
+    holder.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    window._apply_ms_visibility(True)                 # no "Internal C++ object already deleted"
+
+    stray = QCheckBox("Use Baseline-Corrected MS Data")
+    pf.use_corrected_ms_data_check = stray
+    window._apply_ms_visibility(True)
+    assert not stray.isVisible()                      # never shown as its own window
+    assert capsys.readouterr().out.count("WARNING: MS gate skipped") == 2

@@ -923,10 +923,18 @@ class ChromaKitApp(QMainWindow):
         self.button_frame.batch_search_button.setVisible(ms_ui)
         self.button_frame.deconvolve_ms_button.setVisible(ms_ui and not is_gcxgc)
         self.parameters_frame.ms_baseline_button.setVisible(has_ms_data)
-        # created lazily after the first MS baseline correction, which needs MS data
+        # created lazily after the first MS baseline correction, which needs MS data.
+        # Never show an unparented checkbox: setVisible(True) would open it as its own window.
         corrected_check = getattr(self.parameters_frame, 'use_corrected_ms_data_check', None)
         if corrected_check is not None:
-            corrected_check.setVisible(has_ms_data)
+            try:
+                parented = corrected_check.parent() is not None
+            except RuntimeError:      # its C++ object is already deleted
+                parented = False
+            if parented:
+                corrected_check.setVisible(has_ms_data)
+            else:
+                print("WARNING: MS gate skipped the corrected-MS checkbox: it is deleted or unparented")
 
     @Slot(str)
     def on_directory_opened(self, dir_path):
@@ -4673,20 +4681,18 @@ class ChromaKitApp(QMainWindow):
             # Update status
             self.status_bar.showMessage("MS baseline correction completed. Use the MS options to toggle corrected data.")
             
-            # Add a toggle checkbox to the parameters frame's baseline section
-            if not hasattr(self.parameters_frame, 'use_corrected_ms_data_check'):
-                # Create checkbox to toggle between original and corrected data
-                self.parameters_frame.use_corrected_ms_data_check = QCheckBox("Use Baseline-Corrected MS Data")
-                self.parameters_frame.use_corrected_ms_data_check.setChecked(True)
-                self.parameters_frame.use_corrected_ms_data_check.setToolTip("Toggle between original and baseline-corrected MS data")
-                
-                # Add it to the baseline section of parameters frame
-                baseline_layout = self.parameters_frame.baseline_group.layout()
-                if baseline_layout:
-                    baseline_layout.addWidget(self.parameters_frame.use_corrected_ms_data_check)
-                
+            # Add a toggle checkbox to the parameters frame's baseline section.
+            # ParametersFrame clears the attribute when it rebuilds its controls
+            # (the checkbox is deleted with the old section), so create it again then.
+            if getattr(self.parameters_frame, 'use_corrected_ms_data_check', None) is None:
+                check = QCheckBox("Use Baseline-Corrected MS Data")
+                check.setChecked(True)
+                check.setToolTip("Toggle between original and baseline-corrected MS data")
+                self.parameters_frame.section_groups['baseline'].layout().addRow(check)
+                self.parameters_frame.use_corrected_ms_data_check = check
+
                 # Connect signal to update function
-                self.parameters_frame.use_corrected_ms_data_check.toggled.connect(self._toggle_corrected_ms_data)
+                check.toggled.connect(self._toggle_corrected_ms_data)
                 self._apply_ms_visibility(self._has_ms_data)
             else:
                 # Just make sure it's visible and checked
