@@ -32,9 +32,12 @@ GUI_ONLY_KEYS = {}
 
 @pytest.fixture(scope='module')
 def key_sets(qapp):
-    gui = ParametersFrame().current_params
+    frame = ParametersFrame()
+    gui = frame.current_params
     method = ChromaMethod(name='parity', signal_type='gc').to_gui_params()
-    return gui, method
+    yield gui, method
+    frame.close()
+    frame.deleteLater()
 
 
 def test_top_level_sections_match(key_sets):
@@ -46,6 +49,9 @@ SECTIONS = ['smoothing', 'baseline', 'peaks', 'peak_splitting', 'negative_peaks'
             'shoulders', 'integration', 'gcxgc']
 
 
+# shortcut: compares keys one level deep (section -> key); keys inside a nested dict
+# such as baseline['fastchrom'] are not checked. Recurse into nested dicts when a
+# nested key goes missing on one side, or when another section gains a nested dict.
 @pytest.mark.parametrize('section', SECTIONS)
 def test_section_keys_match(key_sets, section):
     gui, method = key_sets

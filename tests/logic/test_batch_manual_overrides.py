@@ -5,7 +5,6 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-import logic.automation_worker as aw
 from logic.automation_worker import AutomationWorker
 
 

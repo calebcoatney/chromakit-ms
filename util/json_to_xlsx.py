@@ -585,6 +585,8 @@ class JsonToExcelConverter(QDialog):
         # True once the user changes the preset combo (or saves a preset) by hand;
         # automatic detector matching then leaves the selection alone.
         self._preset_chosen_by_user = False
+        # Set below, once the UI exists and the last-used format is restored
+        self._format_snapshot = None
 
         # Initialize variables for Excel to JSON
         self.excel_input_file = ""
