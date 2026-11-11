@@ -4448,6 +4448,8 @@ class ChromaKitApp(QMainWindow):
         
         # Store options for use during processing
         self.batch_options = options
+        self._gc12_records = {}
+        self._batch_cancelled = False
         if options.get('detector_runs'):
             self._save_method_state_for_batch()
         
@@ -4467,6 +4469,8 @@ class ChromaKitApp(QMainWindow):
         if hasattr(self, 'current_batch_worker') and self.current_batch_worker:
             self.current_batch_worker.cancelled = True
         
+        self._batch_cancelled = True
+
         # Clean up
         self.current_batch_directory = None
         self.batch_directories = []
@@ -4491,6 +4495,7 @@ class ChromaKitApp(QMainWindow):
         if not hasattr(self, 'batch_directories') or not self.batch_directories:
             print("No more directories to process - completing")
             self._restore_method_state_after_batch()
+            self._finish_gc12_workbook()
             self.batch_dialog.complete_processing()
             return
         
@@ -4526,6 +4531,11 @@ class ChromaKitApp(QMainWindow):
         worker.signals.error.connect(
             lambda msg: self.on_batch_directory_error(next_dir, msg)
         )
+
+        worker.signals.run_completed.connect(
+            lambda c_path, detector, ok, msg:
+                self._gc12_records.__setitem__((c_path, detector), (ok, msg))
+        )
         
         # Store reference to the current worker
         self.current_batch_worker = worker
@@ -4539,6 +4549,44 @@ class ChromaKitApp(QMainWindow):
                         self.batch_dialog.directory_status[d]['status'] in ['completed', 'failed', 'skipped']])
         total = len(self.batch_dialog.directory_status)
         self.batch_dialog.update_overall_progress(completed, total)
+
+    def _finish_gc12_workbook(self):
+        """Write the GC1&2 paired workbook once the queue has drained.
+
+        Returns the log line, or None when no workbook was requested. Never
+        raises: the per-channel JSONs are already on disk.
+        """
+        options = self.batch_options
+        path = options.get('gc12_workbook')
+        if not path:
+            return None
+        if self._batch_cancelled:
+            line = "Batch cancelled - GC1&2 workbook not written"
+            self.batch_dialog.add_log_message(line)
+            return line
+        try:
+            from logic import gc12_workbook
+            rows = options.get('gc12_rows', [])
+            tags = options.get('directory_instruments', {})
+            per_instrument = {}
+            for instrument in ("GC1", "GC2"):
+                detectors = [r['detector'] for r in rows if r['instrument'] == instrument]
+                injections = []
+                for folder, tag in tags.items():
+                    if tag == instrument:
+                        injections += gc12_workbook.collect_injections(
+                            folder, instrument, detectors, self._gc12_records)
+                per_instrument[instrument] = injections
+            pairs = gc12_workbook.pair_injections(per_instrument["GC1"], per_instrument["GC2"])
+            summary = gc12_workbook.write_paired_workbook(pairs, path)
+            line = f"GC1&2 workbook written: {path} ({summary.message()})"
+            self.batch_dialog.add_log_message(line)
+            return line
+        except Exception as e:
+            line = f"ERROR writing GC1&2 workbook: {e}"
+            self.batch_dialog.add_log_message(line)
+            self.status_bar.showMessage(line)
+            return line
 
     def on_batch_directory_completed(self, directory, success):
         """Handle completion of a batch directory."""
