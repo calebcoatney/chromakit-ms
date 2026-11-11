@@ -1,6 +1,7 @@
 """Build a click-to-label HTML sheet for marking shoulders and riders on real runs.
 
     python -m tools.shoulder_label_sheet RUN.D|RUN.C [...] --out DIR [--method M.chromethod] [--detector FID1A]
+    python -m tools.shoulder_label_sheet --review labels.json --sample 40 --out DIR   # check someone's labels
 
 Writes DIR/label_sheet.html: one panel per peak cluster of each run, showing the
 baseline-corrected signal only (no detector output, so the labels are not
@@ -114,6 +115,7 @@ button,select{font:inherit;padding:4px 10px}
 <script>
 const DATA = __DATA__;
 const marks = {}; // key run|panel -> [{rt,kind}]
+DATA.runs.forEach((run,ri)=>run.panels.forEach((pn,pi)=>{ if(pn.draft&&pn.draft.length) marks[ri+'|'+pi]=pn.draft.map(m=>({rt:m.rt,kind:m.kind})); }));
 let zoom = 1;
 function key(r,p){return r+'|'+p}
 function draw(){
@@ -152,16 +154,40 @@ draw();
 </script></body></html>"""
 
 
+def review_runs(labels_path, n_panels, seed=0):
+    """A random sample of `n_panels` already-labelled panels, with the draft
+    marks pre-filled, for a person to check and correct."""
+    import random
+    doc = json.loads(Path(labels_path).read_text())
+    pool = [(ri, pi) for ri, r in enumerate(doc['runs']) for pi in range(len(r['panels']))]
+    pick = sorted(random.Random(seed).sample(pool, min(n_panels, len(pool))))
+    runs = []
+    for ri in sorted({ri for ri, _ in pick}):
+        r = doc['runs'][ri]
+        x, y, _ = load_run(r['path'], r.get('method'), detector=r.get('detector'))
+        panels = []
+        for _, pi in [q for q in pick if q[0] == ri]:
+            lo, hi = r['panels'][pi]
+            m = (x >= lo) & (x <= hi)
+            panels.append(dict(x=[round(float(v), 5) for v in x[m]], y=[round(float(v), 3) for v in y[m]],
+                               draft=[l for l in r['labels'] if lo <= l['rt'] <= hi]))
+        runs.append(dict(name=r['name'], path=r['path'], method=r.get('method'), detector=r.get('detector'), panels=panels))
+    return runs
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('runs', nargs='+')
+    ap.add_argument('runs', nargs='*')
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--method', default=None, help='.chromethod to process with (default: ChromaMethod defaults)')
     ap.add_argument('--min-snr', type=float, default=20.0, help='smallest peak (x noise) that gets a panel')
     ap.add_argument('--detector', default=None, help='channel, e.g. FID1A, FID2B, TCD3C (default: auto)')
+    ap.add_argument('--review', type=Path, default=None,
+                    help='labels.json: show a random sample of its panels with the marks pre-filled')
+    ap.add_argument('--sample', type=int, default=40, help='panels to sample with --review')
     args = ap.parse_args(argv)
-    runs = []
-    for path in args.runs:
+    runs = review_runs(args.review, args.sample) if args.review else []
+    for path in ([] if args.review else args.runs):
         x, y, _ = load_run(path, args.method, detector=args.detector)
         spans, _ = panels_for_run(x, y, args.min_snr)
         runs.append(dict(name=Path(path).name, path=str(path), method=args.method, detector=args.detector,
