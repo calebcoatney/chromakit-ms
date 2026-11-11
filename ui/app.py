@@ -370,6 +370,11 @@ class ChromaKitApp(QMainWindow):
             path = getattr(self, "current_method_path", None)
             self.method_label.setToolTip(str(path) if path else "Not saved")
 
+    def _open_channel(self):
+        """The open file's detector channel, or None when no file is open or it is unknown."""
+        detector = getattr(self.data_handler, "current_detector", None)
+        return detector if detector and detector != "Unknown" else None
+
     def _stamp_method_detector(self):
         """Record the open channel in the method so batch runs can prefill it.
 
@@ -377,8 +382,8 @@ class ChromaKitApp(QMainWindow):
         Leaves the method's detector alone when no file is open or the channel
         is unknown.
         """
-        detector = getattr(self.data_handler, "current_detector", None)
-        if detector and detector != "Unknown" and self.current_method is not None:
+        detector = self._open_channel()
+        if detector and self.current_method is not None:
             self.current_method.detector = detector
 
     def save_method(self):
@@ -459,7 +464,8 @@ class ChromaKitApp(QMainWindow):
             else:
                 note = f"Method detector {wanted} not in this file; showing {self.data_handler.current_detector}. "
         if detector is not None or self.signal_factor != previous_signal_factor:
-            self.on_file_selected(folder, detector=detector)   # reloads and reprocesses once
+            # A .C load with no detector auto-detects the default channel: name the open one.
+            self.on_file_selected(folder, detector=detector or self._open_channel())   # reloads and reprocesses once
             if self.status_bar.currentMessage().startswith("Error loading file"):
                 return      # the reload failed; keep its error in the status bar
         elif self._gcxgc_mode:
@@ -4870,9 +4876,10 @@ class ChromaKitApp(QMainWindow):
         self.current_method.area_factor = None if area_factor == 1.0 else area_factor
         self._mark_dirty(True)
 
-        # Reload current file so the new signal_factor takes effect immediately.
+        # Reload current file so the new signal_factor takes effect immediately,
+        # on the channel it shows (a .C load with no detector auto-detects the default).
         if hasattr(self, 'current_directory_path') and self.current_directory_path:
-            self.on_file_selected(self.current_directory_path)
+            self.on_file_selected(self.current_directory_path, detector=self._open_channel())
 
     def show_parameter_visibility_dialog(self):
         """Show dialog to configure which parameter sections are visible."""

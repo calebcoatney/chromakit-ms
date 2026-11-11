@@ -404,7 +404,7 @@ def test_load_method_with_new_signal_factor_reloads_once(qtbot, tmp_path, monkey
     app = _make(qtbot)
     calls = _open_file(app, monkeypatch)
     _load_with(app, monkeypatch, tmp_path, signal_factor=2.0)
-    assert calls["reload"] == [("/data/sample1.D", {"detector": None})]
+    assert calls["reload"] == [("/data/sample1.D", {"detector": "FID1A"})]   # the open channel
     assert calls["process"] == []
 
 
