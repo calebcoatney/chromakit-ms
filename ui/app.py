@@ -2818,7 +2818,12 @@ class ChromaKitApp(QMainWindow):
         # Create and show the automation dialog
         self.automation_dialog = AutomationDialog(self)
         self.automation_dialog.cancelled.connect(self.cancel_automation)
-        
+
+        # Manual overrides are a per-batch opt-in (Batch Job dialog). A finished batch's
+        # options outlive it, and the worker reads them: Automation never opts in.
+        if getattr(self, 'batch_options', None):
+            self.batch_options.pop('apply_manual_overrides', None)
+
         # Create the worker
         self.automation_worker = AutomationWorker(self, parent_dir)
         
