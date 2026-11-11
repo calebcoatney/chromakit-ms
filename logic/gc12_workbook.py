@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from logic.paste_blocks import (
     parse_timestamp,
     write_channel_block,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_PAIR_GAP_S = 300
 
@@ -82,7 +85,8 @@ def acquisition_time(d_path: str, detector: str | None = None) -> datetime | Non
                 parsed = parse_timestamp(str(date))
                 if parsed is not None:
                     return parsed
-    except Exception:
+    except Exception as exc:
+        logger.warning("Could not read acquisition time from %s: %s", d_path, exc)
         return None
     return None
 
@@ -138,11 +142,18 @@ def pair_injections(
         pairs.append(_make_pair(a, gc2[j], None,
                                 ["paired by injection counter only (no acquisition time)"]))
 
-    # 3. singles
+    # 3. singles: say why (outside the window, or never dated so only the counter could pair it)
+    minutes = f"{max_gap_s / 60:g} min"
+
+    def single_note(inj: Injection, other: str) -> str:
+        if inj.acquired is None:
+            return "no acquisition time; no unique injection-counter match"
+        return f"no {other} injection within {minutes}"
+
     for i in free1:
-        pairs.append(Pair(gc1[i], None, None, None, ["no GC2 injection within 5 min"]))
+        pairs.append(Pair(gc1[i], None, None, None, [single_note(gc1[i], "GC2")]))
     for j in free2:
-        pairs.append(Pair(None, gc2[j], None, None, ["no GC1 injection within 5 min"]))
+        pairs.append(Pair(None, gc2[j], None, None, [single_note(gc2[j], "GC1")]))
 
     # 4. order by time, untimed last
     def key(p: Pair):
@@ -190,7 +201,7 @@ def collect_injections(directory: str, instrument: str, detectors: list[str],
         if os.path.isfile(manifest):
             with open(manifest, encoding="utf-8") as f:
                 sample = json.load(f).get("sample_id") or stem
-        d_dirs = sorted(d for d in glob.glob(os.path.join(c_path, "data", "*.D"))
+        d_dirs = sorted(d for d in glob.glob(os.path.join(glob.escape(c_path), "data", "*.D"))
                         if os.path.isdir(d))
         d_name = os.path.basename(d_dirs[0]) if d_dirs else None
         acquired = acquisition_time(d_dirs[0], detectors[0]) if d_dirs and detectors else None
@@ -209,6 +220,7 @@ def collect_injections(directory: str, instrument: str, detectors: list[str],
 _NO_TIME = "NO ACQUISITION TIME"
 _CFG = GC12_PASTE_FORMAT_CONFIG
 _STRIDE = channel_width(_CFG) + 1
+_MAX_CHANNELS = 2  # a third block would spill past column O, over the workbook's matching table
 _PAIRING_HEADER = ["Pair", "GC1 injection", "GC1 time", "GC2 injection", "GC2 time",
                    "Δt (s)", "Counter match", "Channels OK", "Notes"]
 
@@ -330,6 +342,12 @@ def write_paired_workbook(pairs: list[Pair], path: str) -> WorkbookSummary:
     pairing = book.create_sheet("Pairing")
 
     # shortcut: a side with no injections at all gets 1 placeholder channel column, upgrade if the detector count is ever needed there
+    for p in pairs:
+        for inj in (p.gc1, p.gc2):
+            if inj and len(inj.channels) > _MAX_CHANNELS:
+                raise ValueError(
+                    f"{inj.instrument} has {len(inj.channels)} channels for injection "
+                    f"{inj.sample}; the paste layout holds at most {_MAX_CHANNELS} per instrument")
     n1 = max((len(p.gc1.channels) for p in pairs if p.gc1), default=1)
     n2 = max((len(p.gc2.channels) for p in pairs if p.gc2), default=1)
     row1 = row2 = 1

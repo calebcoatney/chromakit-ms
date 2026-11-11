@@ -122,6 +122,40 @@ def test_failed_channel_ignores_stale_json(tmp_path):
     assert i1[0].channels[1].json_path is None
 
 
+def test_unsaved_json_with_old_file_on_disk_is_failed(tmp_path):
+    """The worker records a failed run when the JSON save failed; the old file must not show."""
+    def rec(r):
+        for (c, d) in list(r):
+            if c.startswith(str(tmp_path / "GC1")) and d == "TCD3C":
+                r[(c, d)] = (False, "result JSON not saved")
+    i1, i2, _ = build(tmp_path, rec)
+    book, _ = write(tmp_path, i1, i2)
+    g1 = book["GC1 raw formatting"]
+    assert g1["I5"].value == "FAILED: result JSON not saved"
+    for r in g1.iter_rows(min_col=9, max_col=15):
+        for c in r:
+            assert c.value not in (1.5, 5.234, 100.0, 55.5)
+
+
+def test_three_channels_on_one_side_raise(tmp_path):
+    dets = ["FID1A", "TCD3C", "FID2B"]
+    make_c(tmp_path, "GC1", "S005", dets)
+    rec = {(os.path.join(str(tmp_path / "GC1"), "S005.C"), d): (True, "") for d in dets}
+    i1 = collect_injections(str(tmp_path / "GC1"), "GC1", dets, rec)
+    with pytest.raises(ValueError, match="GC1 has 3 channels"):
+        write_paired_workbook(pair_injections(i1, []), str(tmp_path / "o.xlsx"))
+    assert not (tmp_path / "o.xlsx").exists()
+
+
+def test_c_folder_with_brackets_finds_its_d(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(wb, "acquisition_time", lambda d, det=None: seen.append(d) or T0)
+    c = tmp_path / "GC1" / "run [1].C"
+    (c / "data" / "run [1].D").mkdir(parents=True)
+    inj = collect_injections(str(tmp_path / "GC1"), "GC1", ["FID1A"], {})
+    assert inj[0].d_name == "run [1].D" and inj[0].acquired == T0 and len(seen) == 1
+
+
 def test_unrecorded_channel_is_not_processed(tmp_path):
     def rec(r):
         r.pop((os.path.join(str(tmp_path / "GC1"), "S005.C"), "TCD3C"))

@@ -253,3 +253,44 @@ def test_run_completed_emitted_from_process_file_exit(tmp_path, monkeypatch):
     worker._run_detector = "FID1A"
     worker._process_file("/x/S1.C", "S1.C [FID1A]", "gc", set(), detector="FID1A")
     assert got == [("/x/S1.C", "FID1A", False, "Failed to load file")]
+
+
+def _save_worker(monkeypatch, saved):
+    app = SimpleNamespace(
+        batch_options={'ms_search': False},
+        integrated_peaks=[object()],
+        data_handler=SimpleNamespace(current_directory_path="/x/S1.C"),
+    )
+    worker = AutomationWorker(app, "/x")
+    monkeypatch.setattr(worker, "_load_file", lambda *a, **k: True)
+    monkeypatch.setattr(worker, "_process_and_integrate", lambda: True)
+    monkeypatch.setattr(worker, "_update_directory_progress", lambda *a: None)
+    monkeypatch.setattr(worker, "_save_integration_json_no_ui", lambda *a: saved)
+    worker._run_detector = "FID1A"
+    return worker
+
+
+@pytest.mark.parametrize("saved, run_result", [
+    (True, (True, "Processing completed")),
+    (False, (False, "result JSON not saved")),
+])
+def test_unsaved_json_is_recorded_as_failed_run(monkeypatch, saved, run_result):
+    worker = _save_worker(monkeypatch, saved)
+    runs, files = [], []
+    worker.signals.run_completed.connect(lambda *a: runs.append(a))
+    worker.signals.file_completed.connect(lambda *a: files.append(a))
+    worker._process_file("/x/S1.C", "S1.C [FID1A]", "gc", set(), detector="FID1A")
+    # file_completed is unchanged by the save outcome; run_completed fires exactly once.
+    assert files == [("S1.C [FID1A]", True, "Processing completed")]
+    assert runs == [("/x/S1.C", "FID1A", *run_result)]
+
+
+def test_json_fallback_file_does_not_count_as_saved(tmp_path):
+    worker = AutomationWorker(SimpleNamespace(export_manager=None), str(tmp_path))
+    wrote = []
+    worker._save_integration_json_no_ui_fallback = lambda *a: wrote.append(a) or True
+    # export_manager.export_during_batch raises -> fallback writes "<dir> - Unknown.json"
+    worker.app.export_manager = SimpleNamespace(
+        export_during_batch=lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert worker._save_integration_json_no_ui({'peaks': []}, str(tmp_path)) is False
+    assert len(wrote) == 1

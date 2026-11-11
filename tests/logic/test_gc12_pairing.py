@@ -117,3 +117,26 @@ def test_pairs_sorted_by_time():
     pairs = pair_injections([untimed, late], [early])
     keys = [(p.gc1 or p.gc2) for p in pairs]
     assert keys == [early, late, untimed]
+
+
+def test_timed_single_note_uses_window_minutes():
+    pairs = pair_injections([inj("GC1", T0, 5)], [], max_gap_s=600)
+    assert pairs[0].notes == ["no GC2 injection within 10 min"]
+    pairs = pair_injections([], [inj("GC2", T0, 5)])
+    assert pairs[0].notes == ["no GC1 injection within 5 min"]
+
+
+def test_undated_single_states_the_real_cause():
+    pairs = pair_injections([inj("GC1", None, 5), inj("GC1", None, 5)], [inj("GC2", None, 5)])
+    assert all(p.notes == ["no acquisition time; no unique injection-counter match"]
+               for p in pairs)
+
+
+def test_unreadable_acquisition_time_is_logged(monkeypatch, caplog):
+    def boom(p):
+        raise OSError("nope")
+
+    monkeypatch.setattr(gw.rb, "read", boom)
+    with caplog.at_level("WARNING", logger="logic.gc12_workbook"):
+        assert acquisition_time("/x/bad.D") is None
+    assert "/x/bad.D" in caplog.text and "nope" in caplog.text

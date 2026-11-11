@@ -5,20 +5,11 @@ import pytest
 
 pytest.importorskip('pytestqt')
 
-from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QWidget
 
 from logic.method import ChromaMethod
 from ui.dialogs import batch_job_dialog
 from ui.dialogs.batch_job_dialog import BatchJobDialog
-
-
-@pytest.fixture(autouse=True)
-def isolated_settings(tmp_path, monkeypatch):
-    """Keep every test off the user's real QSettings."""
-    ini = str(tmp_path / "s.ini")
-    monkeypatch.setattr(batch_job_dialog, "_settings",
-                        lambda: QSettings(ini, QSettings.IniFormat))
 
 
 @pytest.fixture

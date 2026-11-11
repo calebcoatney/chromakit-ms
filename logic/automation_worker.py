@@ -271,6 +271,7 @@ class AutomationWorker(QRunnable):
             # Step 2.5: Save integration results to JSON - 50% of one file's progress
             t2 = time.perf_counter()
             self._update_directory_progress(filename, "Saving integration results", 50)
+            json_saved = True  # nothing to save counts as saved: untagged jobs are unaffected
             if hasattr(self.app, 'integrated_peaks') and self.app.integrated_peaks:
                 current_dir = self.app.data_handler.current_directory_path
                 integration_results = {'peaks': self.app.integrated_peaks}
@@ -342,7 +343,14 @@ class AutomationWorker(QRunnable):
 
             # File completed successfully
             self._update_directory_progress(filename, "Completed", 100)
-            self._complete(filename, file_path, self._run_detector, True, "Processing completed")
+            if json_saved:
+                self._complete(filename, file_path, self._run_detector, True, "Processing completed")
+            else:
+                # file_completed is unchanged; the per-run record must not let the
+                # workbook trust an older result JSON.
+                self.signals.file_completed.emit(filename, True, "Processing completed")
+                self.signals.run_completed.emit(file_path, self._run_detector, False,
+                                                "result JSON not saved")
             self.signals.log_message.emit(f"Completed processing {filename}")
 
         except Exception as e:
@@ -1094,7 +1102,10 @@ class AutomationWorker(QRunnable):
             
             # Fallback to original method if new one fails
             try:
-                return self._save_integration_json_no_ui_fallback(integration_results, data_dir_path)
+                # The fallback writes "<dir> - Unknown.json", not the per-detector file
+                # the GC1&2 workbook reads, so the expected JSON still counts as not saved.
+                self._save_integration_json_no_ui_fallback(integration_results, data_dir_path)
+                return False
             except Exception as e2:
                 self.signals.log_message.emit(f"Fallback method also failed: {str(e2)}")
                 return False
