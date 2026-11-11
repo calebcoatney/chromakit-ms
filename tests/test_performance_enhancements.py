@@ -98,4 +98,5 @@ def test_csv_export_integration(tmp_path):
     with open(csv_path, "r") as f:
         content = f.read()
     assert "compound_id,peak_number,retention_time" in content
-    assert "P1,1,2,py,0,501,1,1" in content
+    # Only the area is rounded; times and widths keep full precision.
+    assert "P1,1,1.6,py,0.1,501,1.1,1.3" in content
