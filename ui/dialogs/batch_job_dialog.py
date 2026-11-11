@@ -189,7 +189,25 @@ class BatchJobDialog(QDialog):
         rows_widget.setEnabled(False)
         self.per_detector_check.toggled.connect(rows_widget.setEnabled)
         self._refresh_detector_choices()
+        self._prefill_first_row_from_main_window()
         return group
+
+    def _prefill_first_row_from_main_window(self):
+        """Offer the saved method's detector and path in the first row.
+
+        Only fills an empty row and never ticks per_detector_check.
+        """
+        parent = self.parent()
+        path = getattr(parent, "current_method_path", None)
+        method = getattr(parent, "current_method", None)
+        detector = getattr(method, "detector", None)
+        if not path or not detector:
+            return
+        combo, method_edit = self.detector_rows[0]
+        if combo.currentText().strip() or method_edit.text().strip():
+            return
+        combo.setCurrentText(detector)
+        method_edit.setText(str(path))
 
     def _browse_method(self, detector_combo, method_edit):
         path, _ = QFileDialog.getOpenFileName(

@@ -582,6 +582,9 @@ class JsonToExcelConverter(QDialog):
         # Initialize variables for JSON to Excel
         self.input_directory = initial_directory or ""
         self.output_file = ""
+        # True once the user changes the preset combo (or saves a preset) by hand;
+        # automatic detector matching then leaves the selection alone.
+        self._preset_chosen_by_user = False
 
         # Initialize variables for Excel to JSON
         self.excel_input_file = ""
@@ -597,6 +600,7 @@ class JsonToExcelConverter(QDialog):
             self.input_label.setText(initial_directory)
             self.json_dir_label.setText(initial_directory)
             self.log_text.append(f"Pre-loaded directory: {initial_directory}")
+            self._auto_select_preset_for_directory(initial_directory)
             self.update_process_button()
             self.update_json_update_button()
 
@@ -808,6 +812,7 @@ class JsonToExcelConverter(QDialog):
             self.input_label.setText(directory)
             self.log_text.append(f"Selected input directory: {directory}")
             self.update_process_button()
+            self._auto_select_preset_for_directory(directory)
     
     def select_output_file(self):
         """Select output Excel file location."""
@@ -991,6 +996,8 @@ class JsonToExcelConverter(QDialog):
         self.preset_combo = QComboBox()
         self.preset_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         preset_layout.addWidget(self.preset_combo, 1)
+        # `activated` fires only for user picks, not programmatic setCurrentIndex
+        self.preset_combo.activated.connect(self._mark_preset_chosen_by_user)
         load_btn = QPushButton("Load")
         load_btn.clicked.connect(self._load_selected_preset)
         preset_layout.addWidget(load_btn)
@@ -1194,6 +1201,68 @@ class JsonToExcelConverter(QDialog):
         for name in sorted(self._get_all_presets().keys()):
             self.preset_combo.addItem(name)
 
+    def _mark_preset_chosen_by_user(self, _index=None):
+        self._preset_chosen_by_user = True
+
+    @staticmethod
+    def _detectors_in_directory(directory: str, max_files: int = 20) -> set:
+        """Detector names found in the first result JSONs under directory.
+
+        Reads the 'detector' key, falling back to the name in 'signal'
+        ("Signal: <sample>\\FID1A.ch"). shortcut: stops after max_files JSONs,
+        so a detector that first appears later in a huge tree is not seen.
+        """
+        found, seen = set(), 0
+        for root, _, files in os.walk(directory):
+            if _is_inside_c_data_subtree(root):
+                continue
+            for name in sorted(files):
+                if not name.endswith('.json') or name.startswith('._') or name == 'manifest.json':
+                    continue
+                if seen >= max_files:
+                    return found
+                seen += 1
+                try:
+                    with open(os.path.join(root, name), 'r', encoding='utf-8') as fh:
+                        data = json.load(fh)
+                except Exception:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                detector = data.get('detector')
+                if not detector:
+                    signal = str(data.get('signal') or '')
+                    base = signal.replace('/', '\\').rsplit('\\', 1)[-1]
+                    detector = base[:-3] if base.lower().endswith('.ch') else ''
+                if detector and detector != 'Unknown':
+                    found.add(str(detector))
+        return found
+
+    def _auto_select_preset_for_directory(self, directory: str):
+        """Select (and apply) the saved preset whose name contains the JSONs' detector.
+
+        Rule: exactly one distinct detector in the directory, and a preset name
+        containing it case-insensitively (first in alphabetical order wins).
+        Presets store only a format config, so the name is the only link.
+        Skipped once the user picked a preset by hand.
+        """
+        if self._preset_chosen_by_user:
+            return
+        detectors = self._detectors_in_directory(directory)
+        if len(detectors) != 1:
+            return
+        detector = next(iter(detectors)).lower()
+        presets = self._get_all_presets()
+        for name in sorted(presets):
+            if detector in name.lower():
+                idx = self.preset_combo.findText(name)
+                if idx < 0:
+                    return
+                self.preset_combo.setCurrentIndex(idx)  # programmatic: does not set the flag
+                self._apply_format_config(presets[name])
+                self.log_text.append(f"Preset '{name}' selected for detector {next(iter(detectors))}.")
+                return
+
     def _save_preset_as(self):
         name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:")
         if not ok or not name.strip():
@@ -1204,6 +1273,7 @@ class JsonToExcelConverter(QDialog):
         self._save_all_presets(presets)
         self._refresh_preset_combo()
         # Select the just-saved preset
+        self._preset_chosen_by_user = True
         idx = self.preset_combo.findText(name)
         if idx >= 0:
             self.preset_combo.setCurrentIndex(idx)

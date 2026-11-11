@@ -363,11 +363,23 @@ class ChromaKitApp(QMainWindow):
             path = getattr(self, "current_method_path", None)
             self.method_label.setToolTip(str(path) if path else "Not saved")
 
+    def _stamp_method_detector(self):
+        """Record the open channel in the method so batch runs can prefill it.
+
+        Read from data_handler at save time (not from a batch-swapped method).
+        Leaves the method's detector alone when no file is open or the channel
+        is unknown.
+        """
+        detector = getattr(self.data_handler, "current_detector", None)
+        if detector and detector != "Unknown" and self.current_method is not None:
+            self.current_method.detector = detector
+
     def save_method(self):
         from pathlib import Path
         if self.current_method_path is None:
             return self.save_method_as()
         try:
+            self._stamp_method_detector()
             self.current_method.to_file(self.current_method_path)
             self._mark_dirty(False)
             self.status_bar.showMessage(f"Saved method '{self.current_method.name}'; it is now the current method")
@@ -384,6 +396,7 @@ class ChromaKitApp(QMainWindow):
             return
         try:
             self.current_method.name = Path(path).stem
+            self._stamp_method_detector()
             self.current_method.to_file(path)
             self.current_method_path = Path(path)
             self._mark_dirty(False)

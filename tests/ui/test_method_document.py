@@ -443,3 +443,43 @@ def test_save_reports_current_method(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr("ui.app.QFileDialog.getSaveFileName", lambda *a, **k: (str(target), ""))
     app.save_method_as()
     assert "saved" in app.status_bar.currentMessage() and "current method" in app.status_bar.currentMessage()
+
+
+def _stub_save_as(monkeypatch, out):
+    monkeypatch.setattr(
+        "ui.app.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), "ChromaKit Method (*.chromethod)"),
+    )
+
+
+def test_save_as_stamps_open_detector(qtbot, tmp_path, monkeypatch):
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    app.data_handler.current_detector = "FID2B"
+    out = tmp_path / "m.chromethod"
+    _stub_save_as(monkeypatch, out)
+    app.save_method_as()
+    assert ChromaMethod.from_file(out).detector == "FID2B"
+    assert app._method_dirty is False
+
+
+def test_plain_save_stamps_open_detector(qtbot, tmp_path):
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    out = tmp_path / "m.chromethod"
+    app.current_method_path = out
+    app.data_handler.current_detector = "FID1A"
+    app.save_method()
+    assert ChromaMethod.from_file(out).detector == "FID1A"
+    assert app._method_dirty is False
+
+
+def test_save_keeps_method_detector_when_channel_unknown(qtbot, tmp_path):
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    app.current_method.detector = "TCD3C"
+    app.data_handler.current_detector = "Unknown"
+    out = tmp_path / "m.chromethod"
+    app.current_method_path = out
+    app.save_method()
+    assert ChromaMethod.from_file(out).detector == "TCD3C"
