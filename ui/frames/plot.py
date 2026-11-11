@@ -1065,7 +1065,8 @@ class PlotFrame(QWidget):
     def set_ms_time_offset(self, offset_min: float) -> None:
         """Store the active MS time offset and refresh the TIC legend."""
         self.ms_time_offset = float(offset_min)
-        if self.tic_data is not None and len(self.tic_data.get('x', [])) > 0:
+        # tic_ax is None while a GC-only file hides the TIC; the previous file's tic_data lingers
+        if self.tic_ax is not None and self.tic_data is not None and len(self.tic_data.get('x', [])) > 0:
             self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
 
     def set_tic_visible(self, visible: bool):

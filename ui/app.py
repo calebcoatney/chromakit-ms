@@ -75,6 +75,8 @@ class ChromaKitApp(QMainWindow):
         
         # GCxGC mode flags
         self._gcxgc_mode: bool = False
+        self._has_ms_data: bool = True          # set per load by _apply_ms_visibility
+        self._ui_mode: str = "chromatography"   # set per load by set_mode
         self._gcxgc_metadata: dict = {}
         self._gcxgc_proc = None
         self._gcxgc_peaks: list = []
@@ -861,7 +863,7 @@ class ChromaKitApp(QMainWindow):
         rt_idx = self.right_tabs.indexOf(self.rt_table_frame)
         rf_idx = self.right_tabs.indexOf(self.rf_table_frame)
 
-        self.right_tabs.setTabVisible(ms_idx, is_chrom or is_gcxgc)
+        self._ui_mode = ui_mode
         self.right_tabs.setTabVisible(quant_idx, is_chrom)
         self.right_tabs.setTabVisible(rt_idx, is_chrom)
         self.right_tabs.setTabVisible(rf_idx, is_chrom)
@@ -869,8 +871,10 @@ class ChromaKitApp(QMainWindow):
         if is_gcxgc:
             self.right_tabs.setCurrentIndex(ms_idx)
 
+        # MS tab and MS buttons: one gate decides (GCxGC rules included)
+        self._apply_ms_visibility(self._has_ms_data)
+
         # Hide GCxGC-irrelevant buttons
-        self.button_frame.deconvolve_ms_button.setVisible(not is_gcxgc)
         if hasattr(self.ms_frame, 'inspect_btn'):
             self.ms_frame.inspect_btn.setVisible(not is_gcxgc)
         if hasattr(self.ms_frame, 'spectrum_toggle_btn'):
@@ -884,6 +888,25 @@ class ChromaKitApp(QMainWindow):
         # 5. Forward ui_mode to ParametersFrame for widget visibility
         if hasattr(self.parameters_frame, 'set_mode'):
             self.parameters_frame.set_mode(profile.ui_mode)
+
+    def _apply_ms_visibility(self, has_ms_data: bool) -> None:
+        """The single gate for MS-only UI: hidden (not just disabled) when the file has no MS data.
+
+        GCxGC always has MS, so it keeps the MS tab and MS Search All, but not Deconvolve MS.
+        Enable/disable state (e.g. waiting for integrated peaks) is managed elsewhere.
+        """
+        self._has_ms_data = has_ms_data
+        is_gcxgc = self._ui_mode == "gcxgc"
+        ms_ui = (self._ui_mode in ("chromatography", "gcxgc")) and (has_ms_data or is_gcxgc)
+
+        self.right_tabs.setTabVisible(self.right_tabs.indexOf(self.ms_frame), ms_ui)
+        self.button_frame.batch_search_button.setVisible(ms_ui)
+        self.button_frame.deconvolve_ms_button.setVisible(ms_ui and not is_gcxgc)
+        self.parameters_frame.ms_baseline_button.setVisible(has_ms_data)
+        # created lazily after the first MS baseline correction, which needs MS data
+        corrected_check = getattr(self.parameters_frame, 'use_corrected_ms_data_check', None)
+        if corrected_check is not None:
+            corrected_check.setVisible(has_ms_data)
 
     @Slot(str)
     def on_directory_opened(self, dir_path):
@@ -1012,6 +1035,7 @@ class ChromaKitApp(QMainWindow):
             has_ms_data = data.get('metadata', {}).get('has_ms_data', False)
             self.data_handler.current_directory_path = folder_path
             self.data_handler.has_ms_data = has_ms_data
+            self._apply_ms_visibility(has_ms_data)
             # Load any previously-saved MS time offset from the per-file sidecar.
             # (For .D paths this was already done inside load_data_directory; for
             # .C paths this is the only place it happens. Call is idempotent.)
@@ -1093,10 +1117,6 @@ class ChromaKitApp(QMainWindow):
             if not self._gcxgc_mode:
                 # Show or hide TIC plot based on MS data availability
                 self.plot_frame.set_tic_visible(has_ms_data)
-
-                # Enable or disable MS tab
-                ms_tab_index = self.right_tabs.indexOf(self.ms_frame)
-                self.right_tabs.setTabEnabled(ms_tab_index, has_ms_data)
 
                 # Plot TIC only if MS data is available
                 metadata = data.get('metadata', {})
@@ -4647,6 +4667,7 @@ class ChromaKitApp(QMainWindow):
                 
                 # Connect signal to update function
                 self.parameters_frame.use_corrected_ms_data_check.toggled.connect(self._toggle_corrected_ms_data)
+                self._apply_ms_visibility(self._has_ms_data)
             else:
                 # Just make sure it's visible and checked
                 self.parameters_frame.use_corrected_ms_data_check.setVisible(True)
