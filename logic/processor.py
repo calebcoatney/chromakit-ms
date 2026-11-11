@@ -481,6 +481,9 @@ class ChromatogramProcessor:
         peaks_y = np.array([])
         peak_metadata = []
         detection_signal = baseline_corrected_y  # Default to corrected signal
+        # Apexes dropped by the MS-range filter; merged with range-filter
+        # exclusions below so integration sees one set of excluded neighbours.
+        ms_excluded_x = np.array([])
         
         if params['peaks']['enabled']:
             # Apply smoothing to the baseline-corrected signal for detection.
@@ -513,6 +516,7 @@ class ChromatogramProcessor:
                     print(f"Solvent delay filtering: Removing {filtered_count} peaks outside MS range ({ms_min:.2f}-{ms_max:.2f} min)")
                 
                 # Apply the filter
+                ms_excluded_x = np.concatenate([ms_excluded_x, peaks_x[~ms_range_mask]])
                 peaks_x = peaks_x[ms_range_mask]
                 peaks_y = peaks_y[ms_range_mask]
                 
@@ -541,6 +545,7 @@ class ChromatogramProcessor:
                 filtered_count = len(neg_peaks_x) - np.sum(neg_mask)
                 if filtered_count > 0:
                     print(f"Solvent delay filtering: Removing {filtered_count} negative peaks outside MS range")
+                ms_excluded_x = np.concatenate([ms_excluded_x, neg_peaks_x[~neg_mask]])
                 neg_peaks_x = neg_peaks_x[neg_mask]
                 neg_peaks_y = neg_peaks_y[neg_mask]
                 if neg_peak_metadata:
@@ -583,6 +588,8 @@ class ChromatogramProcessor:
             peaks_y = peaks_y[range_mask]
             if peak_metadata and len(peak_metadata) > 0:
                 peak_metadata = [m for i, m in enumerate(peak_metadata) if i < len(range_mask) and range_mask[i]]
+
+        range_excluded_x = np.concatenate([ms_excluded_x, range_excluded_x])
 
         # Return processed data
         return {

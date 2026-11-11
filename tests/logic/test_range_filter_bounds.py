@@ -65,3 +65,21 @@ def test_no_range_filter_unchanged(setup):
     params['peaks']['range_filters'] = []
     peaks = _integrate(proc, x, y, params)
     assert [round(p.retention_time, 2) for p in peaks] == [4.0, 4.35, 7.0]
+
+
+def test_valley_to_ms_range_dropped_neighbour_is_left_bound(setup):
+    proc, x, y, params = setup
+    params['peaks']['range_filters'] = []
+    unfiltered = {round(p.retention_time, 2): p for p in _integrate(proc, x, y, params)}
+    valley = unfiltered[4.35].start_time
+
+    # MS data starts at 4.1 (solvent delay): the 4.0 apex is dropped by the
+    # MS-range filter, which must carry it as a valley neighbour just like a
+    # range-filter exclusion does.
+    processed = proc.process(x, y, params, ms_range=(4.1, 10.0))
+    assert 4.0 in np.round(processed['range_excluded_peaks_x'], 2)
+    peaks = proc.integrate_peaks(processed)['peaks']
+    kept = {round(p.retention_time, 2): p for p in peaks}
+    assert 4.0 not in kept
+    assert kept[4.35].start_time == pytest.approx(valley)
+    assert kept[4.35].area == pytest.approx(unfiltered[4.35].area)
