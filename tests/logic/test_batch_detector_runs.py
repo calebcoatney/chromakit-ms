@@ -20,7 +20,8 @@ def _method_file(tmp_path, name, detector=None):
 
 def test_no_detector_runs_gives_single_default_run():
     runs = build_detector_runs({})
-    assert runs == [{'detector': None, 'method': None, 'method_path': None, 'explicit': False}]
+    assert runs == [{'instrument': None, 'detector': None, 'method': None,
+                     'method_path': None, 'explicit': False}]
 
 
 def test_detector_runs_load_their_methods(tmp_path):
@@ -57,6 +58,41 @@ def test_duplicate_detector_raises():
     with pytest.raises(ValueError):
         build_detector_runs({'detector_runs': [
             {'detector': 'FID1A'}, {'detector': 'FID1A'}]})
+
+
+def _gc_rows(tmp_path):
+    ms = {n: _method_file(tmp_path, n) for n in ("m1", "m2", "m3", "m4")}
+    rows = [
+        {'instrument': 'GC1', 'detector': 'FID1A', 'method_path': ms['m1']},
+        {'instrument': 'GC1', 'detector': 'TCD3C', 'method_path': ms['m2']},
+        {'instrument': 'GC2', 'detector': 'FID1A', 'method_path': ms['m3']},
+        {'instrument': 'GC2', 'detector': 'FID2B', 'method_path': ms['m4']},
+    ]
+    return rows
+
+
+def test_same_detector_on_two_instruments(tmp_path):
+    opts = {'detector_runs': _gc_rows(tmp_path)}
+    gc1 = build_detector_runs(opts, "GC1")
+    gc2 = build_detector_runs(opts, "GC2")
+    assert [r['detector'] for r in gc1] == ['FID1A', 'TCD3C']
+    assert [r['method'].name for r in gc1] == ['m1', 'm2']
+    assert [r['detector'] for r in gc2] == ['FID1A', 'FID2B']
+    assert [r['method'].name for r in gc2] == ['m3', 'm4']
+    assert [r['instrument'] for r in gc2] == ['GC2', 'GC2']
+
+
+def test_duplicate_within_instrument_raises():
+    with pytest.raises(ValueError):
+        build_detector_runs({'detector_runs': [
+            {'instrument': 'GC1', 'detector': 'FID1A'},
+            {'instrument': 'GC1', 'detector': 'FID1A'}]}, "GC1")
+
+
+def test_tagged_folder_without_rows_raises():
+    with pytest.raises(ValueError, match="No detector rows for instrument GC2"):
+        build_detector_runs({'detector_runs': [
+            {'instrument': 'GC1', 'detector': 'FID1A'}]}, "GC2")
 
 
 # --- resolve_detector -------------------------------------------------------
@@ -178,3 +214,42 @@ def test_detector_run_without_method_gets_users_method_back(tmp_path, monkeypatc
     worker.run()
     # None asks the app for the user's own method back.
     assert applied == ['front', None]
+
+
+def test_worker_uses_directory_instrument(tmp_path, monkeypatch):
+    opts = {'detector_runs': _gc_rows(tmp_path),
+            'directory_instruments': {str(tmp_path): "GC2"}}
+    _, calls, _ = _run_worker(tmp_path, monkeypatch, opts, selected_detector=None,
+                              available=('FID1A', 'FID2B', 'TCD3C'))
+    assert calls == [
+        ('S1.C', 'S1.C [GC2 FID1A]', 'FID1A', 'm3'),
+        ('S1.C', 'S1.C [GC2 FID2B]', 'FID2B', 'm4'),
+        ('S2.C', 'S2.C [GC2 FID1A]', 'FID1A', 'm3'),
+        ('S2.C', 'S2.C [GC2 FID2B]', 'FID2B', 'm4'),
+    ]
+
+
+def test_run_completed_emitted_for_skip(tmp_path, monkeypatch):
+    _make_c_folders(tmp_path, ["S1"])
+    monkeypatch.setattr(aw.CFolder, "get_available_detectors", lambda self: ['FID1A'])
+    app = SimpleNamespace(batch_options={'detector_runs': [{'detector': 'FID2B'}]},
+                          data_handler=SimpleNamespace(current_detector=None))
+    worker = AutomationWorker(app, str(tmp_path))
+    got = []
+    worker.signals.run_completed.connect(lambda *a: got.append(a))
+    worker.run()
+    assert len(got) == 1
+    c_path, detector, ok, msg = got[0]
+    assert c_path == os.path.join(str(tmp_path), "S1.C")
+    assert detector == "FID2B" and ok is False and "not found" in msg
+
+
+def test_run_completed_emitted_from_process_file_exit(tmp_path, monkeypatch):
+    worker = AutomationWorker(SimpleNamespace(), str(tmp_path))
+    monkeypatch.setattr(worker, "_load_file", lambda *a, **k: False)
+    monkeypatch.setattr(worker, "_update_directory_progress", lambda *a: None)
+    got = []
+    worker.signals.run_completed.connect(lambda *a: got.append(a))
+    worker._run_detector = "FID1A"
+    worker._process_file("/x/S1.C", "S1.C [FID1A]", "gc", set(), detector="FID1A")
+    assert got == [("/x/S1.C", "FID1A", False, "Failed to load file")]
