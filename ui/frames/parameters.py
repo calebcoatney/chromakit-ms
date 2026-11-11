@@ -144,10 +144,7 @@ class ParametersFrame(QWidget):
             },
             'shoulders': {
                 'enabled': False,
-                'window_length': 41,
-                'polyorder': 3,
-                'sensitivity': 8,
-                'apex_distance': 10
+                'sensitivity': 5,
             },
             'integration': {
                 'peak_groups': []  # List of [start, end] time windows for grouping
@@ -864,7 +861,7 @@ class ParametersFrame(QWidget):
         self.shoulders_enabled.stateChanged.connect(self._on_shoulders_toggled)
         form_layout.addRow(self.shoulders_enabled)
         
-        shoulder_info = QLabel("Detects overlapping peaks (shoulders) on the flanks of main peaks\nusing noise-adaptive derivative analysis.")
+        shoulder_info = QLabel("Finds peaks merged into a larger one (shoulders) or riding its tail\n(riders): curvature proposes them, a peak-shape fit confirms them.")
         shoulder_info.setStyleSheet("color: #666666; font-size: 10px;")
         form_layout.addRow("", shoulder_info)
         
@@ -901,115 +898,12 @@ class ParametersFrame(QWidget):
             "Higher values detect smaller/weaker shoulders but may\n"
             "introduce false positives. Lower values are more conservative.\n\n"
             "1 = Very strict (only obvious shoulders)\n"
-            "5 = Moderate\n"
-            "8 = Default (good balance)\n"
-            "10 = Very sensitive (may detect noise features)"
+            "5 = Default\n"
+            "10 = Most sensitive"
         )
         detection_layout.addRow(sensitivity_label, sensitivity_container)
         
-        # Min peak-shoulder distance
-        distance_container = QWidget()
-        distance_layout = QHBoxLayout(distance_container)
-        distance_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.shoulder_distance_slider = QSlider(Qt.Horizontal)
-        self.shoulder_distance_slider.setMinimum(5)
-        self.shoulder_distance_slider.setMaximum(30)
-        self.shoulder_distance_slider.setValue(self.current_params['shoulders']['apex_distance'])
-        self.shoulder_distance_slider.setTickPosition(QSlider.TicksBelow)
-        self.shoulder_distance_slider.valueChanged.connect(self._on_shoulder_distance_changed)
-        
-        self.shoulder_distance_spinbox = QSpinBox()
-        self.shoulder_distance_spinbox.setMinimum(5)
-        self.shoulder_distance_spinbox.setMaximum(30)
-        self.shoulder_distance_spinbox.setValue(self.current_params['shoulders']['apex_distance'])
-        self.shoulder_distance_spinbox.valueChanged.connect(self.shoulder_distance_slider.setValue)
-        
-        distance_layout.addWidget(self.shoulder_distance_slider, 3)
-        distance_layout.addWidget(self.shoulder_distance_spinbox, 1)
-        
-        distance_label = QLabel("Min Separation:")
-        distance_label.setToolTip(
-            "Minimum distance (in data points) between a main peak\n"
-            "apex and a shoulder candidate. Increase to avoid detecting\n"
-            "features too close to the peak center."
-        )
-        detection_layout.addRow(distance_label, distance_container)
-        
         form_layout.addRow("Detection:", detection_frame)
-        
-        # --- Advanced smoothing parameters (collapsible) ---
-        self.shoulder_advanced_toggle = QPushButton("▶ Advanced")
-        self.shoulder_advanced_toggle.setFlat(True)
-        self.shoulder_advanced_toggle.setStyleSheet(
-            "QPushButton { text-align: left; color: #666666; font-size: 11px; padding: 2px; }"
-            "QPushButton:hover { color: #333333; }"
-        )
-        self.shoulder_advanced_toggle.clicked.connect(self._toggle_shoulder_advanced)
-        form_layout.addRow(self.shoulder_advanced_toggle)
-        
-        self.shoulder_advanced_frame = QFrame()
-        self.shoulder_advanced_frame.setFrameStyle(QFrame.Box)
-        advanced_layout = QFormLayout(self.shoulder_advanced_frame)
-        
-        advanced_info = QLabel("Savitzky-Golay filter parameters for derivative computation.\nLarger window = more smoothing, less noise sensitivity.")
-        advanced_info.setStyleSheet("color: #666666; font-size: 10px;")
-        advanced_layout.addRow("", advanced_info)
-        
-        # Window length
-        window_container = QWidget()
-        window_layout = QHBoxLayout(window_container)
-        window_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.shoulder_window_slider = QSlider(Qt.Horizontal)
-        self.shoulder_window_slider.setMinimum(5)
-        self.shoulder_window_slider.setMaximum(101)
-        self.shoulder_window_slider.setValue(self.current_params['shoulders']['window_length'])
-        self.shoulder_window_slider.setSingleStep(2)
-        self.shoulder_window_slider.setTickPosition(QSlider.TicksBelow)
-        self.shoulder_window_slider.valueChanged.connect(self._on_shoulder_window_changed)
-        
-        self.shoulder_window_spinbox = QSpinBox()
-        self.shoulder_window_spinbox.setMinimum(5)
-        self.shoulder_window_spinbox.setMaximum(101)
-        self.shoulder_window_spinbox.setValue(self.current_params['shoulders']['window_length'])
-        self.shoulder_window_spinbox.setSingleStep(2)
-        self.shoulder_window_spinbox.valueChanged.connect(self.shoulder_window_slider.setValue)
-        
-        window_layout.addWidget(self.shoulder_window_slider, 3)
-        window_layout.addWidget(self.shoulder_window_spinbox, 1)
-        
-        window_label = QLabel("Smoothing Window:")
-        window_label.setToolTip("Savitzky-Golay filter window size (must be odd).\nLarger = smoother derivatives, less sensitive to narrow features.")
-        advanced_layout.addRow(window_label, window_container)
-        
-        # Polynomial order
-        polyorder_container = QWidget()
-        polyorder_layout = QHBoxLayout(polyorder_container)
-        polyorder_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.shoulder_polyorder_slider = QSlider(Qt.Horizontal)
-        self.shoulder_polyorder_slider.setMinimum(1)
-        self.shoulder_polyorder_slider.setMaximum(5)
-        self.shoulder_polyorder_slider.setValue(self.current_params['shoulders']['polyorder'])
-        self.shoulder_polyorder_slider.setTickPosition(QSlider.TicksBelow)
-        self.shoulder_polyorder_slider.valueChanged.connect(self._on_shoulder_polyorder_changed)
-        
-        self.shoulder_polyorder_spinbox = QSpinBox()
-        self.shoulder_polyorder_spinbox.setMinimum(1)
-        self.shoulder_polyorder_spinbox.setMaximum(5)
-        self.shoulder_polyorder_spinbox.setValue(self.current_params['shoulders']['polyorder'])
-        self.shoulder_polyorder_spinbox.valueChanged.connect(self.shoulder_polyorder_slider.setValue)
-        
-        polyorder_layout.addWidget(self.shoulder_polyorder_slider, 3)
-        polyorder_layout.addWidget(self.shoulder_polyorder_spinbox, 1)
-        
-        polyorder_label = QLabel("Polynomial Order:")
-        polyorder_label.setToolTip("Order of the polynomial fit.\nHigher = preserves sharper features but may amplify noise.")
-        advanced_layout.addRow(polyorder_label, polyorder_container)
-        
-        self.shoulder_advanced_frame.setVisible(False)
-        form_layout.addRow(self.shoulder_advanced_frame)
         
         # Enable/disable controls based on initial state
         self._update_shoulder_controls_state()
@@ -1285,13 +1179,6 @@ class ParametersFrame(QWidget):
         # Enable/disable all shoulder detection controls
         self.shoulder_sensitivity_slider.setEnabled(overall_enabled)
         self.shoulder_sensitivity_spinbox.setEnabled(overall_enabled)
-        self.shoulder_distance_slider.setEnabled(overall_enabled)
-        self.shoulder_distance_spinbox.setEnabled(overall_enabled)
-        self.shoulder_advanced_toggle.setEnabled(overall_enabled)
-        self.shoulder_window_slider.setEnabled(overall_enabled)
-        self.shoulder_window_spinbox.setEnabled(overall_enabled)
-        self.shoulder_polyorder_slider.setEnabled(overall_enabled)
-        self.shoulder_polyorder_spinbox.setEnabled(overall_enabled)
 
     def _on_smoothing_toggled(self, state):
         """Handle smoothing enable/disable toggle"""
@@ -1689,41 +1576,11 @@ class ParametersFrame(QWidget):
         self._update_shoulder_controls_state()
         self.parameters_changed.emit(self.current_params)
     
-    def _on_shoulder_window_changed(self, value):
-        """Handle shoulder detection window length change"""
-        # Ensure value is odd
-        if value % 2 == 0:
-            value += 1
-        self.shoulder_window_slider.setValue(value)
-        self.shoulder_window_spinbox.setValue(value)
-        self.current_params['shoulders']['window_length'] = value
-        self.parameters_changed.emit(self.current_params)
-    
-    def _on_shoulder_polyorder_changed(self, value):
-        """Handle shoulder detection polynomial order change"""
-        self.shoulder_polyorder_slider.setValue(value)
-        self.shoulder_polyorder_spinbox.setValue(value)
-        self.current_params['shoulders']['polyorder'] = value
-        self.parameters_changed.emit(self.current_params)
-    
     def _on_shoulder_sensitivity_changed(self, value):
         """Handle shoulder sensitivity slider change"""
         self.shoulder_sensitivity_slider.setValue(value)
         self.shoulder_sensitivity_spinbox.setValue(value)
         self.current_params['shoulders']['sensitivity'] = value
-        self.parameters_changed.emit(self.current_params)
-    
-    def _toggle_shoulder_advanced(self):
-        """Toggle visibility of advanced shoulder detection parameters"""
-        visible = not self.shoulder_advanced_frame.isVisible()
-        self.shoulder_advanced_frame.setVisible(visible)
-        self.shoulder_advanced_toggle.setText("▼ Advanced" if visible else "▶ Advanced")
-    
-    def _on_shoulder_distance_changed(self, value):
-        """Handle shoulder apex-distance change"""
-        self.shoulder_distance_slider.setValue(value)
-        self.shoulder_distance_spinbox.setValue(value)
-        self.current_params['shoulders']['apex_distance'] = value
         self.parameters_changed.emit(self.current_params)
     
     def _on_min_width_changed(self):

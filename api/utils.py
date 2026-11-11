@@ -104,7 +104,7 @@ def convert_params_for_processor(params: dict) -> dict:
     # ── Shoulders ──
     if 'shoulders' in params:
         sh = params['shoulders']
-        # Processor expects: { enabled, window_length, polyorder, sensitivity, apex_distance }
+        # Processor expects: { enabled, sensitivity }
         # That matches our model already, so just pass through
     else:
         params['shoulders'] = {'enabled': False}

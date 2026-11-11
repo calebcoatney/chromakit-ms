@@ -181,10 +181,7 @@ def _build_processing_metadata(processing_params: Optional[Dict],
     sh = processing_params.get('shoulders', {})
     sh_info: Dict[str, Any] = {'enabled': sh.get('enabled', False)}
     if sh.get('enabled'):
-        sh_info['window_length'] = sh.get('window_length')
-        sh_info['polyorder'] = sh.get('polyorder')
         sh_info['sensitivity'] = sh.get('sensitivity')
-        sh_info['apex_distance'] = sh.get('apex_distance')
     meta['shoulders'] = sh_info
 
     # --- Integration / grouping ---

@@ -293,10 +293,12 @@ PARAMETER_HELP = {
     "shoulders": {
         SECTION_KEY: (
             "<b>Shoulder Detection</b><br>"
-            "Finds small peaks hidden on the sides of larger peaks (no separate "
-            "apex or valley), using derivatives of the signal. Detected shoulders "
-            "are split from the main peak, so the main peak's area becomes smaller "
-            "and the shoulder gets its own area."
+            "Finds peaks hidden in larger ones: <b>shoulders</b> (merged on a flank, "
+            "no valley) and <b>riders</b> (a small peak on a long tail). Curvature "
+            "proposes each candidate; it is kept only if a peak-shape fit with it is "
+            "significantly better than without it. Detected peaks are split from the "
+            "main peak, so the main peak's area becomes smaller and the shoulder gets "
+            "its own area."
         ),
         "Enable Shoulder Detection": (
             "<b>Enable Shoulder Detection</b><br>"
@@ -305,34 +307,15 @@ PARAMETER_HELP = {
         ),
         "Sensitivity:": (
             "<b>Shoulder Sensitivity</b> (1–10)<br>"
-            "Sets the signal-to-noise threshold a shoulder needs.<br><br>"
-            "• <b>Higher</b> finds weaker shoulders and splits more peaks, but noise "
-            "may split peaks that should stay whole.<br>"
+            "How strong a curvature bump must be to be tested as a shoulder.<br><br>"
+            "• <b>Higher</b> finds weaker and closer shoulders; the shape fit still "
+            "rejects most noise, but more peaks get split.<br>"
             "• <b>Lower</b> splits only obvious shoulders.<br>"
-            "8 = default; 1 = very strict; 10 = very sensitive."
-        ),
-        "Min Separation:": (
-            "<b>Minimum Separation</b> (data points)<br>"
-            "How close a shoulder may be to the main peak apex.<br><br>"
-            "• <b>Higher</b> ignores features near the apex (fewer false splits on "
-            "peak tops).<br>"
-            "• <b>Lower</b> allows shoulders close to the apex to be split."
+            "5 = default; 1 = very strict; 10 = most sensitive."
         ),
         "Detection:": (
             "<b>Shoulder Detection Settings</b><br>"
-            "Sensitivity and minimum separation for shoulder candidates."
-        ),
-        "Smoothing Window:": (
-            "<b>Derivative Smoothing Window</b> (odd number of points)<br>"
-            "Savitzky-Golay window used to calculate derivatives for shoulder search.<br><br>"
-            "• <b>Larger</b> gives smoother derivatives and fewer false shoulders, "
-            "but very narrow shoulders may be missed.<br>"
-            "• <b>Smaller</b> finds narrower features but is more affected by noise."
-        ),
-        "Polynomial Order:": (
-            "<b>Derivative Polynomial Order</b><br>"
-            "• <b>Higher</b> follows sharp features but increases noise.<br>"
-            "• <b>Lower</b> gives smoother, steadier derivatives."
+            "How sensitive the shoulder search is."
         ),
     },
     "range_filters": {

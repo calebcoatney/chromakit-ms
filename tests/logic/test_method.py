@@ -44,10 +44,7 @@ _GUI_PARAMS = {
         "dedup_sigma_factor": 1.32, "dedup_rt_tolerance": 0.005,
     },
     "negative_peaks": {"enabled": False, "min_prominence": 1e5},
-    "shoulders": {
-        "enabled": False, "window_length": 41, "polyorder": 3,
-        "sensitivity": 8, "apex_distance": 10,
-    },
+    "shoulders": {"enabled": False, "sensitivity": 5},
     "integration": {"peak_groups": []},
 }
 
@@ -353,3 +350,14 @@ def test_old_file_with_chemstation_area_factor_loads_as_none():
         assert not hasattr(loaded, "chemstation_area_factor")
     finally:
         os.unlink(path)
+
+
+def test_old_shoulder_fields_are_ignored_on_load():
+    """Methods saved before the fit-verified detector carry three fields it no longer reads."""
+    m = ChromaMethod.model_validate({
+        "name": "old", "signal_type": "gc",
+        "shoulders": {"enabled": True, "window_length": 41, "polyorder": 3,
+                      "sensitivity": 8, "apex_distance": 10},
+    })
+    assert m.shoulders.enabled is True and m.shoulders.sensitivity == 8
+    assert "window_length" not in m.shoulders.model_dump()

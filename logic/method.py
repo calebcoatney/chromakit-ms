@@ -104,11 +104,10 @@ class NegativePeakParams(BaseModel):
 
 
 class ShoulderParams(BaseModel):
+    # Methods saved before the fit-verified detector (logic/shoulders.py) also
+    # carry window_length, polyorder and apex_distance; they are ignored on load.
     enabled: bool = False
-    window_length: int = 41
-    polyorder: int = 3
-    sensitivity: int = Field(default=8, ge=1, le=10, description="Detection sensitivity 1-10")
-    apex_distance: int = 10
+    sensitivity: int = Field(default=5, ge=1, le=10, description="Detection sensitivity 1-10")
 
 
 class IntegrationSubParams(BaseModel):
