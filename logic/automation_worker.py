@@ -1128,8 +1128,32 @@ class AutomationWorker(QRunnable):
         # Additional log to help with debugging
         print("MS library search completed - search_completed flag set to True")
 
+    def _override_spectrum_skip_reason(self, peak, override):
+        """Return why `override`'s stored spectrum can't be matched to `peak`, or None if it matches."""
+        try:
+            directory = self.app.data_handler.current_directory_path
+            from logic.batch_search import extract_peak_spectrum
+            peak_spectrum = extract_peak_spectrum(directory, peak, extraction_method='apex', debug=False)
+            if not peak_spectrum or 'mz' not in peak_spectrum or 'intensities' not in peak_spectrum:
+                return "no mass spectrum available for the peak"
+            stored = override['spectrum']
+            spectrum1 = list(zip(peak_spectrum['mz'], peak_spectrum['intensities']))
+            spectrum2 = list(zip(stored['mz'], stored['intensities']))
+            from ms_toolkit.similarity import dot_product_similarity
+            similarity = dot_product_similarity(spectrum1, spectrum2)
+        except Exception as e:  # ImportError of ms_toolkit included: any failure means "can't compare"
+            return f"spectrum comparison failed ({type(e).__name__}: {e})"
+        if similarity < 0.7:
+            return f"spectrum similarity {similarity:.2f} is below 0.7"
+        return None
+
     def _apply_manual_overrides(self):
-        """Apply manual assignment overrides to peaks based on retention time."""
+        """Apply manual assignment overrides to peaks based on retention time.
+
+        Runs only when the batch option 'apply_manual_overrides' is set (default off).
+        """
+        if not (getattr(self.app, 'batch_options', None) or {}).get('apply_manual_overrides', False):
+            return
         if not hasattr(self.app, 'integrated_peaks') or not self.app.integrated_peaks:
                 return
         
@@ -1162,44 +1186,17 @@ class AutomationWorker(QRunnable):
                     
                     # Check if peak RT is within tolerance
                     if abs(peak.position - override_rt) <= rt_tolerance:
-                        # We have a retention time match
-                        # If we have spectrum data for both, we could check similarity
-                        if 'spectrum' in override and hasattr(self.app, 'data_handler') and hasattr(self.app.data_handler, 'current_directory_path'):
-                            # Extract spectrum for this peak
-                            try:
-                                from logic.batch_search import extract_peak_spectrum
-                                
-                                peak_spectrum = extract_peak_spectrum(
-                                    self.app.data_handler.current_directory_path,
-                                    peak,
-                                    extraction_method='apex',
-                                    debug=False
-                                )
-                                
-                                if peak_spectrum and 'mz' in peak_spectrum and 'intensities' in peak_spectrum:
-                                    # Get override spectrum
-                                    override_spectrum = override['spectrum']
-                                    
-                                    # Convert to tuples for similarity function
-                                    spectrum1 = [(m, i) for m, i in zip(peak_spectrum['mz'], peak_spectrum['intensities'])]
-                                    spectrum2 = [(m, i) for m, i in zip(override_spectrum['mz'], override_spectrum['intensities'])]
-                                    
-                                    try:
-                                        # Import similarity function
-                                        from ms_toolkit.similarity import dot_product_similarity
-                                        
-                                        # Calculate similarity
-                                        similarity = dot_product_similarity(spectrum1, spectrum2)
-                                        
-                                        # If below threshold, skip this override
-                                        if similarity < 0.7:
-                                            continue
-                                    except ImportError:
-                                        # If ms_toolkit is not available, just proceed with RT match
-                                        pass
-                            except Exception as e:
-                                self.signals.log_message.emit(f"Error comparing spectra for manual override: {str(e)}")
-                        
+                        # Retention time matches. An entry with a stored spectrum must also
+                        # match the peak's spectrum; if that can't be checked, skip it
+                        # rather than assign on retention time alone.
+                        if 'spectrum' in override:
+                            skip_reason = self._override_spectrum_skip_reason(peak, override)
+                            if skip_reason:
+                                self.signals.log_message.emit(
+                                    f"Skipped manual override '{override['compound_name']}' for peak at "
+                                    f"RT={peak.position:.3f}: {skip_reason}")
+                                continue
+
                         # Apply the override assignment
                         peak.compound_id = override['compound_name']
                         if hasattr(peak, 'Compound_ID'):

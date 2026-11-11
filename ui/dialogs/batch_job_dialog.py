@@ -95,6 +95,17 @@ class BatchJobDialog(QDialog):
         self.skip_ui_check.setChecked(True)
         options_layout.addWidget(self.skip_ui_check)
 
+        # Manual overrides (opt-in; deliberately not remembered between runs)
+        self.manual_overrides_check = QCheckBox("Apply manual assignment overrides (manual_assignments.json)")
+        self.manual_overrides_check.setToolTip(
+            "<p>Re-assign peaks using the saved manual assignments: a peak within 0.05 min of a saved "
+            "retention time takes that compound name. Where a saved assignment has a stored mass "
+            "spectrum, the peak's spectrum must match it (similarity 0.7 or higher); if it can't be "
+            "compared, for example GC-only data, that assignment is skipped. Off by default.</p>"
+        )
+        self.manual_overrides_check.setChecked(False)
+        options_layout.addWidget(self.manual_overrides_check)
+
         # Add options group to main layout
         layout.addWidget(options_group)
 
@@ -362,6 +373,7 @@ class BatchJobDialog(QDialog):
             'overwrite_existing': self.overwrite_check.isChecked(),
             'time_steps': self.time_steps_check.isChecked(),
             'skip_ui_updates': self.skip_ui_check.isChecked(),
+            'apply_manual_overrides': self.manual_overrides_check.isChecked(),
             'detector_runs': detector_runs,
         }
         
