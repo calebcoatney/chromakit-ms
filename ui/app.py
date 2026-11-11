@@ -153,6 +153,10 @@ class ChromaKitApp(QMainWindow):
         # Create status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        # Permanent indicator of the applied method (kept in sync by _update_window_title).
+        self.method_label = QLabel()
+        self.method_label.setAccessibleName("Current method")
+        self.status_bar.addPermanentWidget(self.method_label)
 
         self._last_ms_peak_index = None
         self._deconvolve_ms_run = False
@@ -352,6 +356,10 @@ class ChromaKitApp(QMainWindow):
         if getattr(self, "current_profile", None) is not None:
             title += f"  \u2014  {self.current_profile.display_name}"
         self.setWindowTitle(title)
+        if getattr(self, "method_label", None) is not None:
+            self.method_label.setText(f"Method: {name}{star}")
+            path = getattr(self, "current_method_path", None)
+            self.method_label.setToolTip(str(path) if path else "Not saved")
 
     def save_method(self):
         from pathlib import Path
@@ -360,6 +368,7 @@ class ChromaKitApp(QMainWindow):
         try:
             self.current_method.to_file(self.current_method_path)
             self._mark_dirty(False)
+            self.status_bar.showMessage(f"Saved method '{self.current_method.name}'; it is now the current method")
         except Exception as e:
             QMessageBox.critical(self, "Save Method Failed", str(e))
 
@@ -377,6 +386,7 @@ class ChromaKitApp(QMainWindow):
             self.current_method_path = Path(path)
             self._mark_dirty(False)
             self._update_window_title()
+            self.status_bar.showMessage(f"Saved method '{self.current_method.name}'; it is now the current method")
         except Exception as e:
             QMessageBox.critical(self, "Save Method Failed", str(e))
 
@@ -395,12 +405,51 @@ class ChromaKitApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Load Method Failed", str(e))
             return
+        previous_signal_factor = self.signal_factor
         self.current_method = method
         self._sync_scaling_from_method()
         self.current_method_path = Path(path)
         self._apply_method_to_frames()
         self._mark_dirty(False)
         self._update_window_title()
+        self._reapply_method_to_open_file(previous_signal_factor)
+
+    def _reapply_method_to_open_file(self, previous_signal_factor):
+        """After a user-driven method load, bring the open file in line with the method.
+
+        Reloads when the signal factor (applied at load time) changed or the method names
+        another detector present in the file; otherwise reprocesses the loaded data the way
+        a parameter edit does. No-op without an open file. Not used by the batch swaps.
+        """
+        folder = getattr(self, 'current_directory_path', None)
+        if not folder:
+            return
+        method = self.current_method
+        sample = os.path.basename(folder)
+        note = ""
+        detector = None
+        wanted = method.detector
+        if wanted and wanted != self.data_handler.current_detector:
+            available = (self.current_cf.get_available_detectors() if getattr(self, 'current_cf', None) is not None
+                         else self.data_handler.get_available_detectors())
+            if wanted in available:
+                detector = wanted
+            else:
+                note = f"Method detector {wanted} not in this file; showing {self.data_handler.current_detector}. "
+        if detector is not None or self.signal_factor != previous_signal_factor:
+            self.on_file_selected(folder, detector=detector)   # reloads and reprocesses once
+            if self.status_bar.currentMessage().startswith("Error loading file"):
+                return      # the reload failed; keep its error in the status bar
+        elif self._gcxgc_mode:
+            if self._gcxgc_run is not None:
+                try:
+                    self._apply_gcxgc_layout_from_ui()
+                except ValueError as e:
+                    note += f"GCxGC layout from the method ignored: {e}. "
+                self._render_gcxgc_frames()
+        elif self.current_x is not None and self.current_y is not None:
+            self.process_and_display(self.current_x, self.current_y, new_file=False, profile=self.current_profile)
+        self.status_bar.showMessage(f"{note}Applied method '{method.name}' to {sample}")
 
     def apply_batch_method(self, method):
         """Make *method* the active method for one batch detector run.

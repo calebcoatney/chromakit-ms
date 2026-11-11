@@ -353,3 +353,93 @@ def test_apply_batch_method_none_restores_users_method(qtbot):
     assert app.current_method.name == "front"
     app.apply_batch_method(None)
     assert app.current_method.name == "mine"
+
+
+# ── Loading a method re-applies it to the open file ─────────────────────────
+
+def _load_with(app, monkeypatch, tmp_path, **method_kwargs):
+    from logic.method import ChromaMethod
+    path = tmp_path / "m.chromethod"
+    ChromaMethod(name="applied", signal_type="gc", **method_kwargs).to_file(path)
+    monkeypatch.setattr("ui.app.QFileDialog.getOpenFileName", lambda *a, **k: (str(path), ""))
+    monkeypatch.setattr(app, "_maybe_prompt_save", lambda: True)
+    app.load_method()
+
+
+def _open_file(app, monkeypatch, detectors=("FID1A", "FID2B")):
+    import numpy as np
+    app.current_directory_path = "/data/sample1.D"
+    app.current_cf = None
+    app.current_x = np.linspace(0, 10, 50)
+    app.current_y = np.zeros(50)
+    app.data_handler.current_detector = "FID1A"
+    monkeypatch.setattr(app.data_handler, "get_available_detectors", lambda: list(detectors))
+    calls = {"process": [], "reload": []}
+    monkeypatch.setattr(app, "process_and_display", lambda *a, **k: calls["process"].append(app.parameters_frame.get_parameters()))
+    monkeypatch.setattr(app, "on_file_selected", lambda path, **k: calls["reload"].append((path, k)))
+    return calls
+
+
+def test_load_method_reprocesses_open_file_with_new_params(qtbot, tmp_path, monkeypatch):
+    from logic.method import PeakParams
+    app = _make(qtbot)
+    calls = _open_file(app, monkeypatch)
+    _load_with(app, monkeypatch, tmp_path, peaks=PeakParams(range_filters=[[1.0, 2.0]]))
+    assert calls["reload"] == []
+    assert len(calls["process"]) == 1
+    assert calls["process"][0]["peaks"]["range_filters"] == [[1.0, 2.0]]
+    assert "applied" in app.status_bar.currentMessage() and "sample1.D" in app.status_bar.currentMessage()
+
+
+def test_load_method_without_open_file_only_fills_frames(qtbot, tmp_path, monkeypatch):
+    app = _make(qtbot)
+    calls = {"process": [], "reload": []}
+    monkeypatch.setattr(app, "process_and_display", lambda *a, **k: calls["process"].append(1))
+    monkeypatch.setattr(app, "on_file_selected", lambda *a, **k: calls["reload"].append(1))
+    _load_with(app, monkeypatch, tmp_path)
+    assert calls == {"process": [], "reload": []}
+
+
+def test_load_method_with_new_signal_factor_reloads_once(qtbot, tmp_path, monkeypatch):
+    app = _make(qtbot)
+    calls = _open_file(app, monkeypatch)
+    _load_with(app, monkeypatch, tmp_path, signal_factor=2.0)
+    assert calls["reload"] == [("/data/sample1.D", {"detector": None})]
+    assert calls["process"] == []
+
+
+def test_load_method_detector_present_reloads_with_it(qtbot, tmp_path, monkeypatch):
+    app = _make(qtbot)
+    calls = _open_file(app, monkeypatch)
+    _load_with(app, monkeypatch, tmp_path, detector="FID2B")
+    assert calls["reload"] == [("/data/sample1.D", {"detector": "FID2B"})]
+    assert calls["process"] == []
+
+
+def test_load_method_detector_absent_keeps_channel_and_says_so(qtbot, tmp_path, monkeypatch):
+    app = _make(qtbot)
+    calls = _open_file(app, monkeypatch)
+    _load_with(app, monkeypatch, tmp_path, detector="TCD3C")
+    assert calls["reload"] == []
+    assert len(calls["process"]) == 1
+    assert "TCD3C not in this file; showing FID1A" in app.status_bar.currentMessage()
+
+
+def test_method_label_tracks_name_dirty_and_path(qtbot, tmp_path, monkeypatch):
+    app = _make(qtbot)
+    assert app.method_label.text() == "Method: Untitled"
+    assert app.method_label.toolTip() == "Not saved"
+    assert app.method_label.accessibleName()
+    app._mark_dirty(True)
+    assert app.method_label.text() == "Method: Untitled*"
+    _load_with(app, monkeypatch, tmp_path)
+    assert app.method_label.text() == "Method: applied"
+    assert app.method_label.toolTip() == str(tmp_path / "m.chromethod")
+
+
+def test_save_reports_current_method(qtbot, tmp_path, monkeypatch):
+    app = _make(qtbot)
+    target = tmp_path / "saved.chromethod"
+    monkeypatch.setattr("ui.app.QFileDialog.getSaveFileName", lambda *a, **k: (str(target), ""))
+    app.save_method_as()
+    assert "saved" in app.status_bar.currentMessage() and "current method" in app.status_bar.currentMessage()
