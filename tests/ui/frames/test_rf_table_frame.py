@@ -100,6 +100,36 @@ def test_import_csv_replaces_and_accepts_spellings(qtbot, tmp_path, monkeypatch)
     assert fired == [True]
 
 
+@pytest.mark.parametrize(
+    ("contents", "expected"),
+    [
+        ("Species,RF\nMethane,1000\n", [("Methane", 1000.0)]),
+        (
+            "Response Factor (area/mol%),Compound\n2000,Ethane\n",
+            [("Ethane", 2000.0)],
+        ),
+        ("Component,Value\nPropane,3000\n", [("Propane", 3000.0)]),
+        ("Methane,1000\nEthane,2000\n", [("Methane", 1000.0), ("Ethane", 2000.0)]),
+    ],
+)
+def test_import_csv_detects_headers_and_two_column_fallback(
+    qtbot, tmp_path, monkeypatch, contents, expected
+):
+    frame = _make(qtbot)
+    src = tmp_path / "in.csv"
+    src.write_text(contents)
+    monkeypatch.setattr(
+        "ui.frames.rf_table.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(src), "CSV Files (*.csv)"),
+    )
+
+    frame.import_btn.click()
+
+    assert [
+        (entry.compound, entry.response_factor) for entry in frame.get_rf_entries()
+    ] == expected
+
+
 def test_unit_dropdown_has_all_codes(qtbot):
     frame = _make(qtbot)
     codes = [frame.unit_combo.itemData(i) for i in range(frame.unit_combo.count())]

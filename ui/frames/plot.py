@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy, QMenu, QApplication
 from PySide6.QtCore import Signal, Qt, QPoint
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QCursor, QAction, QIcon, QPainter, QPen, QPixmap
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import (
@@ -60,6 +60,7 @@ class PlotFrame(QWidget):
         
         # Add toolbar
         self.toolbar = NavigationToolbar(self.canvas, self)
+        self._add_zoom_out_action()
         
         # Add widgets to layout
         self.layout.addWidget(self.canvas)
@@ -84,6 +85,58 @@ class PlotFrame(QWidget):
         
         # Set up initial empty plots
         self._setup_empty_plots()
+
+    def _add_zoom_out_action(self):
+        """Add a one-step zoom-out control beside Matplotlib's zoom tool."""
+        icon_size = self.toolbar.iconSize()
+        pixmap = QPixmap(icon_size)
+        pixmap.fill(Qt.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(self.toolbar.palette().color(self.toolbar.foregroundRole()), 1.8)
+        painter.setPen(pen)
+        center = icon_size.width() // 2 - 2
+        radius = max(4, icon_size.width() // 4)
+        painter.drawEllipse(center - radius, center - radius, radius * 2, radius * 2)
+        painter.drawLine(center + radius - 1, center + radius - 1,
+                         icon_size.width() - 2, icon_size.height() - 2)
+        painter.drawLine(center - radius // 2, center, center + radius // 2, center)
+        painter.end()
+
+        action = QAction(QIcon(pixmap), "Zoom Out", self.toolbar)
+        action.setToolTip("Zoom Out")
+        action.setStatusTip("Zoom out one step")
+        action.triggered.connect(self._zoom_out)
+
+        zoom_action = next(
+            (item for item in self.toolbar.actions() if item.text().strip().lower() == "zoom"),
+            None,
+        )
+        if zoom_action:
+            self.toolbar.insertAction(zoom_action, action)
+        else:
+            self.toolbar.addAction(action)
+
+    def _zoom_out(self):
+        """Expand each plot's current view around its center by 20 percent."""
+        self.toolbar.push_current()
+        seen_x_groups = set()
+        for ax in self.figure.axes:
+            x_group = frozenset(id(shared_ax) for shared_ax in ax.get_shared_x_axes().get_siblings(ax))
+            if x_group not in seen_x_groups:
+                lower, upper = ax.get_xlim()
+                center = (lower + upper) / 2
+                half_span = (upper - lower) * 0.6
+                ax.set_xlim(center - half_span, center + half_span)
+                seen_x_groups.add(x_group)
+
+            lower, upper = ax.get_ylim()
+            center = (lower + upper) / 2
+            half_span = (upper - lower) * 0.6
+            ax.set_ylim(center - half_span, center + half_span)
+
+        self.canvas.draw_idle()
 
     def apply_theme(self):
         """Apply the current theme to the plots."""

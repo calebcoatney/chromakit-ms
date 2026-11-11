@@ -78,6 +78,31 @@ from util.json_to_xlsx import ProcessingThread, DEFAULT_FORMAT_CONFIG
 import copy
 
 
+def _config_with_compound_and_detector():
+    """Default format with the Compound ID column and Detector header switched on."""
+    cfg = copy.deepcopy(DEFAULT_FORMAT_CONFIG)
+    for col in cfg['columns']:
+        if col['key'] == 'Compound ID':
+            col['enabled'] = True
+    for hf in cfg['header_fields']:
+        if hf['key'] == 'detector':
+            hf['enabled'] = True
+    return cfg
+
+
+class TestDefaultFormatConfig:
+    def test_default_header_is_signal_sample_timestamp_without_labels(self):
+        fields = DEFAULT_FORMAT_CONFIG['header_fields']
+        enabled = [hf['key'] for hf in fields if hf['enabled']]
+        assert enabled == ['signal', 'sample_id', 'timestamp']
+        assert [hf['key'] for hf in fields[:3]] == enabled
+        assert not any(hf['show_label'] for hf in fields)
+
+    def test_default_columns(self):
+        enabled = [c['display'] for c in DEFAULT_FORMAT_CONFIG['columns'] if c['enabled']]
+        assert enabled == ['Peak #', 'Ret Time', 'Integrator', 'Width', 'Area',
+                           'Start Time', 'End Time']
+
 def _make_json_file(path: str, peaks: list, sample_id: str = "TEST-001"):
     """Write a minimal valid ChromaKit JSON file for the converter."""
     data = {
@@ -113,7 +138,7 @@ class TestProcessingThreadFilter:
         thread = ProcessingThread(
             directory=str(json_dir),
             output_file=str(output),
-            format_config=copy.deepcopy(DEFAULT_FORMAT_CONFIG),
+            format_config=_config_with_compound_and_detector(),
             skip_unidentified=True,
         )
         # Call the worker directly (not via run()) to avoid threading
@@ -151,6 +176,42 @@ class TestProcessingThreadFilter:
         )
         thread.process_json_to_excel(str(json_dir), str(output))
         assert thread._skipped_count == 0
+
+
+class TestDetectorsSideBySide:
+    def test_two_detectors_of_one_sample_share_first_row_with_one_blank_column(self, tmp_path):
+        results = tmp_path / "S1.C" / "results"
+        results.mkdir(parents=True)
+        peak = {"peak_number": 1, "retention_time": 2.0, "compound_id": "Decane",
+                "area": 1000.0, "width": 0.1, "integrator": "BB",
+                "start_time": 1.9, "end_time": 2.1}
+        for det in ("FID1A", "FID2B"):
+            data = {"sample_id": "S1", "timestamp": "2026-06-22 14:00:00",
+                    "method": "m", "detector": det, "peaks": [peak]}
+            (results / f"S1 - {det}.json").write_text(json.dumps(data))
+        output = tmp_path / "out.xlsx"
+
+        cfg = _config_with_compound_and_detector()
+        # The first header row must be identical for both detectors, so lead with Sample ID.
+        cfg['header_fields'].sort(key=lambda hf: hf['key'] != 'sample_id')
+        thread = ProcessingThread(directory=str(tmp_path), output_file=str(output),
+                                  format_config=cfg)
+        assert thread.process_json_to_excel(str(tmp_path), str(output)) is True
+
+        ws = load_workbook(str(output)).active
+        n_cols = len([c for c in cfg['columns'] if c['enabled']])
+        any_label = any(h.get('show_label', True) for h in cfg['header_fields'] if h['enabled'])
+        width = max(n_cols, 2 if any_label else 1)
+        second_col = 1 + width + 1
+
+        detector_cells = [(c.row, c.column) for row in ws.iter_rows() for c in row
+                          if c.value in ("FID1A", "FID2B")]
+        rows = {r for r, _ in detector_cells}
+        assert len(rows) == 1, detector_cells          # same row for both detectors
+        assert ws.cell(row=1, column=1).value is not None
+        assert ws.cell(row=1, column=second_col).value == ws.cell(row=1, column=1).value
+        for r in range(1, ws.max_row + 1):              # one empty spacer column
+            assert ws.cell(row=r, column=second_col - 1).value is None
 
 
 class TestIsInsideCDataSubtree:
@@ -222,7 +283,7 @@ class TestProcessingThreadSkipsStaleCData:
         thread = ProcessingThread(
             directory=str(tmp_path),
             output_file=str(output),
-            format_config=copy.deepcopy(DEFAULT_FORMAT_CONFIG),
+            format_config=_config_with_compound_and_detector(),
             skip_unidentified=False,
         )
         ok = thread.process_json_to_excel(str(tmp_path), str(output))

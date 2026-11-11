@@ -402,6 +402,45 @@ class ChromaKitApp(QMainWindow):
         self._mark_dirty(False)
         self._update_window_title()
 
+    def apply_batch_method(self, method):
+        """Make *method* the active method for one batch detector run.
+
+        Main thread only. Applies the method's scaling and parameters without
+        touching the method file path or the unsaved-changes flag; the user's
+        own method is restored when the batch ends. ``None`` (a run with no
+        method file) means the user's own method, not the previous run's.
+        """
+        if method is None:
+            state = getattr(self, '_batch_saved_method_state', None)
+            if state is None:
+                raise RuntimeError("apply_batch_method(None) outside a per-detector batch")
+            method = state[0]
+        self.current_method = method.model_copy(deep=True)
+        self._sync_scaling_from_method()
+        self._apply_method_to_frames()
+
+    def _save_method_state_for_batch(self):
+        self._batch_saved_method_state = (
+            self.current_method,
+            self.current_method_path,
+            self._method_dirty,
+            getattr(self.data_handler, 'current_detector', None),
+        )
+
+    def _restore_method_state_after_batch(self):
+        state = getattr(self, '_batch_saved_method_state', None)
+        if state is None:
+            return
+        self._batch_saved_method_state = None
+        method, path, dirty, detector = state
+        self.current_method = method
+        self.current_method_path = path
+        self._sync_scaling_from_method()
+        self._apply_method_to_frames()
+        if detector is not None:
+            self.data_handler.current_detector = detector
+        self._mark_dirty(dirty)
+
     def _sync_scaling_from_method(self):
         """Pull scaling from current_method into session state (self.* and the
         data handler). None/0 on the method => x1 in the session. Called after a
@@ -503,6 +542,8 @@ class ChromaKitApp(QMainWindow):
         if os.path.exists(qss_path):
             with open(qss_path, "r", encoding="utf-8") as f:
                 qss = f.read()
+            icons_dir = os.path.join(os.path.dirname(__file__), "icons").replace("\\", "/")
+            qss = qss.replace("@ICONS@", icons_dir)
             
             # Set the theme property on the main window first
             self.setProperty("theme", theme)
@@ -4287,6 +4328,8 @@ class ChromaKitApp(QMainWindow):
         
         # Store options for use during processing
         self.batch_options = options
+        if options.get('detector_runs'):
+            self._save_method_state_for_batch()
         
         # CRITICAL: Set the batch_directories property
         self.batch_directories = directories.copy()
@@ -4321,11 +4364,13 @@ class ChromaKitApp(QMainWindow):
         # If we have no batch dialog or it's been closed, stop processing
         if not hasattr(self, 'batch_dialog') or not self.batch_dialog:
             print("No batch dialog - stopping processing")
+            self._restore_method_state_after_batch()
             return
         
         # If no more directories, we're done
         if not hasattr(self, 'batch_directories') or not self.batch_directories:
             print("No more directories to process - completing")
+            self._restore_method_state_after_batch()
             self.batch_dialog.complete_processing()
             return
         

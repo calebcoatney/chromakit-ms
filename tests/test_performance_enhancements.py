@@ -85,8 +85,8 @@ def test_json_export_integration(tmp_path):
 
 def test_csv_export_integration(tmp_path):
     peak = ChromatographicPeak(
-        compound_id="P1", peak_number=1, retention_time=1.23,
-        integrator="py", width=0.1, area=500.0,
+        compound_id="P1", peak_number=1, retention_time=1.6,
+        integrator="py", width=0.1, area=500.6,
         start_time=1.1, end_time=1.3
     )
     
@@ -98,4 +98,5 @@ def test_csv_export_integration(tmp_path):
     with open(csv_path, "r") as f:
         content = f.read()
     assert "compound_id,peak_number,retention_time" in content
-    assert "P1,1,1.23" in content
+    # Only the area is rounded; times and widths keep full precision.
+    assert "P1,1,1.6,py,0.1,501,1.1,1.3" in content

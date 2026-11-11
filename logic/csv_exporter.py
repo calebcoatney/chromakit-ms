@@ -7,6 +7,7 @@ SpectralFeature, etc.) without any type-specific branching.
 
 import csv
 import os
+from numbers import Real
 from typing import Any, List
 
 
@@ -29,7 +30,15 @@ def export_results_to_csv(features: List[Any], filepath: str) -> bool:
         return False
 
     try:
-        rows = [f.as_dict() for f in features]
+        # Areas are written as whole numbers. Everything else keeps full
+        # precision: rounding retention times or widths destroys the data.
+        rows = []
+        for feature in features:
+            row = feature.as_dict()
+            area = row.get("area")
+            if isinstance(area, Real) and not isinstance(area, bool):
+                row["area"] = int(round(area))
+            rows.append(row)
         headers = list(rows[0].keys())
 
         os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
