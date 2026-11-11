@@ -48,7 +48,7 @@ class UpdateDialog(QDialog):
             row.addWidget(field)
             copy = QPushButton("Copy")
             copy.setToolTip("Copy the command to the clipboard")
-            copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.command))
+            copy.clicked.connect(lambda: self._copy_command(copy))
             row.addWidget(copy)
             layout.addLayout(row)
             if kind == "git" and (platform or sys.platform) == "win32":
@@ -66,6 +66,10 @@ class UpdateDialog(QDialog):
         buttons.addWidget(notes)
         buttons.addWidget(close)
         layout.addLayout(buttons)
+
+    def _copy_command(self, button: QPushButton) -> None:
+        QGuiApplication.clipboard().setText(self.command)
+        button.setText("Copied")      # status feedback (WCAG 4.1.3); stays until the dialog closes
 
     def body_text(self) -> str:
         return self._body.text()

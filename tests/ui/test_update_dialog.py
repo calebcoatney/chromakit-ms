@@ -71,3 +71,14 @@ def test_powershell_hint_only_on_windows_git(qtbot):
         qtbot.addWidget(d)
     assert _has_hint(win) and not _has_hint(mac) and not _has_hint(ed)
     assert win.findChild(QLineEdit).text() == pip_upgrade_command(__import__("sys").executable)
+
+
+def test_copy_button_says_copied_after_copying(qtbot):
+    # status feedback for the copy (WCAG 4.1.3): the button's text, and so its name, changes
+    dlg = UpdateDialog("9.9.9", URL, "git", None, executable="/opt/py/python")
+    qtbot.addWidget(dlg)
+    copy = _button(dlg, "Copy")
+    copy.click()
+    assert copy.text() == "Copied"
+    assert copy.accessibleName() in ("", "Copied")       # nothing pins a stale name
+    assert QApplication.clipboard().text() == pip_upgrade_command("/opt/py/python")
