@@ -145,3 +145,49 @@ def test_c_folder_scaling_dialog_reload_keeps_channel(app):
     window._on_scaling_factors_changed(3.0, 1.0)
 
     assert [(d, ch, sf) for _, d, ch, sf in _FakeCFolder.loads] == [("FID2B", "FID2B", 3.0)]
+
+
+# ── Issue 6: the "Applied method" note must not hide the load's own message ─
+
+def test_reload_keeps_the_loads_ms_offset_warning(app):
+    window, tmp_path, loads, mp = app
+    _open(window, tmp_path, "gcms.D")
+
+    def offset_sidecar(path):
+        window.data_handler.ms_time_offset = 0.25
+    mp.setattr(window.data_handler, "apply_offset_from_sidecar", offset_sidecar)
+
+    _load_method(window, tmp_path, mp, signal_factor=2.0)
+    msg = window.status_bar.currentMessage()
+    assert "MS offset active: +0.2500 min" in msg
+    assert "Applied method 'applied' to gcms.D" in msg
+
+
+def test_failed_reload_is_not_reported_as_applied(app):
+    window, tmp_path, loads, mp = app
+    path = _open(window, tmp_path, "gconly.D")
+
+    def broken(path, detector=None):
+        raise OSError("disk went away")
+    mp.setattr(window.data_handler, "load_data_directory", broken)
+    mp.setattr("ui.app.QMessageBox.critical", lambda *a, **k: None)
+
+    _load_method(window, tmp_path, mp, signal_factor=2.0)
+    msg = window.status_bar.currentMessage()
+    assert msg.startswith("Error loading file")
+    assert "Applied method" not in msg
+
+
+def test_cancelled_reload_is_not_reported_as_applied(app):
+    from logic.gcxgc_run import MissingModulationPeriod
+    window, tmp_path, loads, mp = app
+    _open(window, tmp_path, "sample.C")
+
+    def needs_period(self, signal_factor=1.0, detector=None):
+        raise MissingModulationPeriod("no modulation period")
+    mp.setattr(_FakeCFolder, "load_signal", needs_period)
+    mp.setattr(window, "_load_gcxgc_with_prompted_period", lambda path: None)
+
+    _load_method(window, tmp_path, mp, signal_factor=2.0)
+    msg = window.status_bar.currentMessage()
+    assert msg == "Load cancelled: no modulation period entered"

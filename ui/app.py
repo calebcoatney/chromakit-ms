@@ -463,11 +463,14 @@ class ChromaKitApp(QMainWindow):
                 detector = wanted
             else:
                 note = f"Method detector {wanted} not in this file; showing {self.data_handler.current_detector}. "
+        load_message = ""
         if detector is not None or self.signal_factor != previous_signal_factor:
             # A .C load with no detector auto-detects the default channel: name the open one.
             self.on_file_selected(folder, detector=detector or self._open_channel())   # reloads and reprocesses once
-            if self.status_bar.currentMessage().startswith("Error loading file"):
-                return      # the reload failed; keep its error in the status bar
+            if self.current_x is None and not self._gcxgc_mode:
+                return      # the reload failed or was cancelled; keep its message in the status bar
+            # keep the load's own warnings (MS offset active, GCxGC layout ignored)
+            load_message = self.status_bar.currentMessage() + "; "
         elif self._gcxgc_mode:
             if self._gcxgc_run is not None:
                 try:
@@ -477,7 +480,7 @@ class ChromaKitApp(QMainWindow):
                 self._render_gcxgc_frames()
         elif self.current_x is not None and self.current_y is not None:
             self.process_and_display(self.current_x, self.current_y, new_file=False, profile=self.current_profile)
-        self.status_bar.showMessage(f"{note}Applied method '{method.name}' to {sample}")
+        self.status_bar.showMessage(f"{load_message}{note}Applied method '{method.name}' to {sample}")
 
     def apply_batch_method(self, method):
         """Make *method* the active method for one batch detector run.
