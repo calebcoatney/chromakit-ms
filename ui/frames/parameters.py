@@ -104,6 +104,7 @@ class ParametersFrame(QWidget):
                 'savgol_polyorder': 1
             },
             'baseline': {
+                'enabled': True,
                 'show_corrected': False,
                 'method': 'arpls',  # Changed from 'asls' to 'arpls'
                 'lambda': 1e4,      # Changed from 1e6 to 1e4
@@ -422,6 +423,12 @@ class ParametersFrame(QWidget):
         baseline_group = QGroupBox("Baseline Correction")
         form_layout = QFormLayout(baseline_group)
         
+        # Master switch: off integrates the smoothed signal without baseline subtraction
+        self.baseline_enabled = QCheckBox("Enable Baseline Correction")
+        self.baseline_enabled.setChecked(self.current_params['baseline'].get('enabled', True))
+        self.baseline_enabled.stateChanged.connect(self._on_baseline_toggled)
+        form_layout.addRow(self.baseline_enabled)
+
         # Change the checkbox label and meaning
         self.baseline_show_corrected = QCheckBox("Show Corrected Signal")
         self.baseline_show_corrected.setChecked(self.current_params['baseline']['show_corrected'])
@@ -545,6 +552,7 @@ class ParametersFrame(QWidget):
         
         # Break point controls for segmented baseline fitting
         bp_frame = QFrame()
+        self.break_point_frame = bp_frame
         bp_frame.setFrameStyle(QFrame.Box)
         bp_layout = QVBoxLayout(bp_frame)
         
@@ -576,6 +584,7 @@ class ParametersFrame(QWidget):
         form_layout.addRow(self.baseline_advanced_container)
         
         # Add to parameters layout
+        self._update_baseline_controls_state()
         self.section_groups['baseline'] = baseline_group
         self.section_groups['baseline_advanced'] = self.baseline_advanced_container
         self.params_layout.addWidget(baseline_group)
@@ -1378,6 +1387,23 @@ class ParametersFrame(QWidget):
             self.savgol_polyorder_spinbox.setValue(value)
             self.savgol_polyorder_spinbox.blockSignals(False)
         self.current_params['smoothing']['savgol_polyorder'] = value
+        self.parameters_changed.emit(self.current_params)
+
+    def _update_baseline_controls_state(self):
+        """Grey out the fit settings while baseline correction is off.
+
+        Show Corrected Signal and the MS baseline button stay live: the first is
+        display-only and the second works on the m/z traces, not this fit.
+        """
+        enabled = self.baseline_enabled.isChecked()
+        for w in (self.baseline_algorithm, self.lam_container, self.fastchrom_container,
+                  self.baseline_offset_input, self.break_point_frame):
+            w.setEnabled(enabled)
+
+    def _on_baseline_toggled(self, state):
+        """Handle baseline correction enable/disable toggle"""
+        self.current_params['baseline']['enabled'] = bool(state)
+        self._update_baseline_controls_state()
         self.parameters_changed.emit(self.current_params)
 
     def _on_baseline_display_toggled(self, state):
