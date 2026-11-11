@@ -594,6 +594,8 @@ class JsonToExcelConverter(QDialog):
 
         # Load last-used format config
         self._load_last_format_config()
+        # Format as restored/applied by code; a later difference means the user edited it
+        self._format_snapshot = self.get_current_format_config()
 
         # Pre-populate directory labels if initial_directory was provided
         if initial_directory:
@@ -1244,10 +1246,13 @@ class JsonToExcelConverter(QDialog):
         Rule: exactly one distinct detector in the directory, and a preset name
         containing it case-insensitively (first in alphabetical order wins).
         Presets store only a format config, so the name is the only link.
-        Skipped once the user picked a preset by hand.
+        Skipped once the user picked a preset or edited the Format tab by hand
+        (current config differs from the last code-applied snapshot).
         """
         if self._preset_chosen_by_user:
             return
+        if self.get_current_format_config() != self._format_snapshot:
+            return  # Format-tab edits count as a manual choice
         detectors = self._detectors_in_directory(directory)
         if len(detectors) != 1:
             return
@@ -1260,6 +1265,7 @@ class JsonToExcelConverter(QDialog):
                     return
                 self.preset_combo.setCurrentIndex(idx)  # programmatic: does not set the flag
                 self._apply_format_config(presets[name])
+                self._format_snapshot = self.get_current_format_config()
                 self.log_text.append(f"Preset '{name}' selected for detector {next(iter(detectors))}.")
                 return
 

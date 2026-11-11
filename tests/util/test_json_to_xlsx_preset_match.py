@@ -81,3 +81,14 @@ def test_user_choice_is_not_overridden(make_dialog, tmp_path):
 def test_programmatic_selection_is_not_manual(make_dialog, tmp_path):
     d = make_dialog(PRESETS, _results(tmp_path, "FID2B"))
     assert d._preset_chosen_by_user is False
+
+
+def test_format_edit_blocks_auto_select(make_dialog, tmp_path):
+    d = make_dialog(PRESETS, None)
+    before = d.preset_combo.currentText()
+    cb, _ = d._column_widgets[0]
+    cb.setChecked(not cb.isChecked())
+    edited = d.get_current_format_config()
+    d._auto_select_preset_for_directory(_results(tmp_path, "FID2B"))
+    assert d.get_current_format_config() == edited
+    assert d.preset_combo.currentText() == before
