@@ -55,9 +55,11 @@ def load_run(path: str, method_path: str | None = None, prominence: float | None
     return x, np.asarray(out['corrected_y'], dtype=float), params
 
 
-def panels_for_run(x, y, min_snr=20.0, pad_fwhm=3.0):
+def panels_for_run(x, y, min_snr=20.0, pad_fwhm=3.0, max_fwhm=40.0):
     """Peak clusters worth reviewing: peaks above `min_snr` x noise, windows
-    of +-pad_fwhm FWHM around each, overlapping windows merged."""
+    of +-pad_fwhm FWHM around each, overlapping windows merged. A merged
+    stretch longer than `max_fwhm` median FWHMs (a crowded run merges into a
+    few huge panels) is cut at its lowest points into panels of about that width."""
     d2 = np.diff(y, 2)
     sd = 1.4826 * np.median(np.abs(d2 - np.median(d2))) / np.sqrt(6)
     peaks, _ = find_peaks(y, prominence=min_snr * sd)
@@ -72,7 +74,17 @@ def panels_for_run(x, y, min_snr=20.0, pad_fwhm=3.0):
             merged[-1][1] = max(merged[-1][1], b)
         else:
             merged.append([a, b])
-    return merged, sd
+    width = max(int(max_fwhm * np.median(w)), 20)
+    slack = max(int(5 * np.median(w)), 2)
+    out = []
+    for a, b in merged:
+        while b - a > width + slack:
+            lo, hi = a + width - slack, a + width + slack
+            cut = lo + int(np.argmin(y[lo:hi + 1]))
+            out.append([a, cut])
+            a = cut
+        out.append([a, b])
+    return out, sd
 
 
 HTML = r"""<!doctype html>

@@ -177,7 +177,9 @@ def _classify(parent: EMG, child: EMG, parent_apex_rt, child_apex_rt, rider_heig
 def detect_shoulders(x, y, peak_indices, *, sensitivity: float = DEFAULT_SENSITIVITY,
                      alpha: float = 1e-4, min_snr: float = 3.0, k_win: float = 0.6,
                      rider_height_ratio: float = 1.0,
-                     noise: float | None = None) -> list[ShoulderCall]:
+                     noise: float | None = None,
+                     min_dip_frac: float = 0.0, min_child_frac: float = 0.0,
+                     min_rss_drop: float = 0.0) -> list[ShoulderCall]:
     """Find shoulders and riders on the peaks at ``peak_indices``.
 
     Args:
@@ -189,6 +191,14 @@ def detect_shoulders(x, y, peak_indices, *, sensitivity: float = DEFAULT_SENSITI
         min_snr: smallest child (fitted height / noise SD) that is reported.
         k_win: Savitzky-Golay window for d2y, in multiples of the peak's FWHM.
         rider_height_ratio: see :func:`_classify`.
+        min_dip_frac: a candidate's d2y dip must be at least this fraction of
+            the parent's own apex curvature |d2y|.
+        min_child_frac: the fitted child must be at least this fraction of
+            the parent's height.
+        min_rss_drop: adding the child must remove at least this fraction of
+            the parent-only fit's residual.
+            These three scale with the parent, not the noise: on a big real
+            peak, its mismatch to the EMG shape is far above noise.
         noise: the signal's noise SD, if the caller knows it better than
             :func:`noise_sd` on ``y`` (e.g. ``y`` has filled-in masked regions).
     """
@@ -224,7 +234,8 @@ def detect_shoulders(x, y, peak_indices, *, sensitivity: float = DEFAULT_SENSITI
         if b - a <= win:
             continue
         d2 = savgol_filter(y[a:b], win, poly, deriv=2, delta=dx)
-        mins, props = find_peaks(-d2, prominence=k_prom * d2_noise)
+        apex_curv = abs(float(d2[min(max(p - a, 0), len(d2) - 1)]))
+        mins, props = find_peaks(-d2, prominence=max(k_prom * d2_noise, min_dip_frac * apex_curv))
         mins = mins + a
         own = mins[np.argmin(np.abs(mins - p))] if len(mins) else p
         guard = max(2, win // 2)
@@ -259,9 +270,11 @@ def detect_shoulders(x, y, peak_indices, *, sensitivity: float = DEFAULT_SENSITI
             f_stat = ((base_rss - rss2) / 4) / (rss2 / dof) if rss2 > 0 else np.inf
             if f_stat < f_dist.ppf(1 - alpha, 4, dof):
                 continue
+            if base_rss - rss2 < min_rss_drop * base_rss:
+                continue
             child = EMG(*p2[-4:])
             cy = child(t)
-            if cy.max() < min_snr * sd:
+            if cy.max() < max(min_snr * sd, min_child_frac * y[p]):
                 continue
             seeds, base_p, base_rss = trial, p2, rss2
             parent = EMG(*p2[:4])

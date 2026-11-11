@@ -380,6 +380,27 @@ def run(detector, cases):
 # Real runs, scored against labels from tools/shoulder_label_sheet.py
 # --------------------------------------------------------------------------
 
+def real_run_params(params, corrected_y, sensitivity, from_method, prominence_snr=30.0):
+    """Processor params for scoring a real run whose signal is already
+    baseline-corrected (tools.shoulder_label_sheet.load_run): baseline off so it
+    is not applied twice, peaks on, shoulders on at `sensitivity`. Without a
+    method the prominence is `prominence_snr` x the run's noise (the default
+    method's absolute 1e5 finds nothing on a small FID signal)."""
+    from logic.shoulders import noise_sd
+    p = {k: dict(v) if isinstance(v, dict) else v for k, v in params.items()}
+    p['baseline'] = dict(p.get('baseline', {}), enabled=False)
+    p['peaks'] = dict(p.get('peaks', {}), enabled=True)
+    if not from_method:
+        p['smoothing'] = dict(p.get('smoothing', {}), enabled=False)
+        prom = prominence_snr * noise_sd(corrected_y)
+        # the processor reads a prominence <= 1 as a fraction of the signal range
+        p['peaks']['min_prominence'] = prom if prom > 1 else prom / float(np.ptp(corrected_y))
+    # window_length/polyorder/apex_distance: read only by the legacy detector
+    p['shoulders'] = {'enabled': True, 'sensitivity': sensitivity, 'window_length': 41,
+                      'polyorder': 3, 'apex_distance': 10}
+    return p
+
+
 def score_labelled(labels_path, sensitivity=5, processor_file=None, tol_fwhm=0.5):
     """Precision/recall of shoulder+rider calls against Caleb's labels.
 
@@ -388,6 +409,7 @@ def score_labelled(labels_path, sensitivity=5, processor_file=None, tol_fwhm=0.5
     `tol_fwhm` x the FWHM of the nearest detected peak. An ordinary peak at a
     labelled spot also counts as found (it was split, just with a valley).
     Kind (shoulder vs rider) is reported separately, not required to match.
+    A call on a spot listed in the run's `unsure` counts neither way.
     """
     from scipy.signal import peak_widths
     from tools.shoulder_label_sheet import load_run
@@ -397,9 +419,7 @@ def score_labelled(labels_path, sensitivity=5, processor_file=None, tol_fwhm=0.5
     per_run = []
     for run_ in doc['runs']:
         x, y, params = load_run(run_['path'], run_.get('method'), detector=run_.get('detector'))
-        params['shoulders'] = {'enabled': True, 'sensitivity': sensitivity, 'window_length': 41,
-                               'polyorder': 3, 'apex_distance': 10}
-        out = proc.process(x, y, params)
+        out = proc.process(x, y, real_run_params(params, y, sensitivity, bool(run_.get('method'))))
         reps = reports_from_processed(x, out)
         peaks = [int(np.argmin(np.abs(x - r.rt))) for r in reps if r.kind == 'peak']
         widths = peak_widths(out['corrected_y'], peaks, rel_height=0.5)[0] * np.median(np.diff(x)) if peaks else []
@@ -429,10 +449,16 @@ def score_labelled(labels_path, sensitivity=5, processor_file=None, tol_fwhm=0.5
                 r_tp += 1
             else:
                 r_fn += 1
-        r_fp = len(calls) - len(used)
+        # a call on a spot the labeller marked unsure counts neither way
+        unsure = run_.get('unsure', [])
+        ignored = {i for i, r in enumerate(calls) if i not in used
+                   and any(abs(r.rt - u) <= tol_at(u) for u in unsure)}
+        r_fp = len(calls) - len(used) - len(ignored)
         tp, fp, fn = tp + r_tp, fp + r_fp, fn + r_fn
         per_run.append(dict(run=run_['name'], labels=len(labels), calls=len(calls), tp=r_tp, fp=r_fp, fn=r_fn,
-                            false_calls=[round(r.rt, 4) for i, r in enumerate(calls) if i not in used]))
+                            false_calls=[round(r.rt, 4) for i, r in enumerate(calls) if i not in used | ignored],
+                            missed=[lab['rt'] for lab in labels if not any(abs(r.rt - lab['rt']) <= tol_at(lab['rt'])
+                                                                        for r in reps)]))
     return dict(**_pr(tp, fp, fn), kind_agreement=kind_ok, runs=per_run)
 
 

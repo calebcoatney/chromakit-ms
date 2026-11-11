@@ -85,3 +85,15 @@ def test_label_sheet_finds_the_d_inside_a_c_folder(tmp_path):
     d.mkdir(parents=True)
     assert resolve_d(str(tmp_path / 'run.C')) == str(d)
     assert resolve_d(str(d)) == str(d)
+
+
+def test_label_sheet_cuts_a_crowded_stretch_into_panels_at_low_points():
+    x = np.arange(0, 3, DT_MIN)
+    mus = np.arange(0.2, 2.8, 0.03)                     # one long merged cluster
+    y = sum(1e5 * np.exp(-0.5 * ((x - mu) / 0.006) ** 2) for mu in mus)
+    y = y + np.random.default_rng(2).normal(0, 10, len(x))
+    spans, _ = panels_for_run(x, y, max_fwhm=40)
+    assert len(spans) > 3
+    for (a, b), (c, _) in zip(spans, spans[1:]):
+        assert b == c                                    # contiguous, no gaps
+        assert y[b] < 0.5 * y.max()                      # cut in a valley, not on a peak
