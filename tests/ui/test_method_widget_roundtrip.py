@@ -104,3 +104,59 @@ def test_apply_method_does_not_rewrite_params(qtbot):
     qtbot.addWidget(frame)
     frame.apply_method(method)
     assert frame.current_params == method.to_gui_params()
+
+
+# ── RT table frame: enable checkbox and weight sliders ────────────────────────
+
+def _rt_method(**matching):
+    from logic.method import RTMatchingParams, RTTableEntry
+    m = ChromaMethod(name="rt", signal_type="gc")
+    m.rt_table = [RTTableEntry(compound="Methane", start=1.0, apex=1.1, end=1.2)]
+    m.rt_matching = RTMatchingParams(**matching)
+    return m
+
+
+def test_rt_enable_survives_save_and_load(qtbot, tmp_path, monkeypatch):
+    first = _app(qtbot)
+    first.current_method = _rt_method()
+    first._apply_method_to_frames()
+    first.rt_table_frame.enable_checkbox.setChecked(False)
+    first.rt_table_frame.enable_checkbox.setChecked(True)
+    assert first.current_method.rt_matching.enabled is True
+    path = tmp_path / "rt.chromethod"
+    first.current_method.to_file(path)
+
+    second = _app(qtbot)
+    monkeypatch.setattr(
+        "ui.app.QFileDialog.getOpenFileName", lambda *_a, **_k: (str(path), ""))
+    second.load_method()
+    assert second.rt_table_frame.is_enabled()
+
+
+@pytest.mark.parametrize("enabled, expected", [(None, True), (True, True), (False, False)],
+                         ids=["legacy-file-with-table", "on", "off"])
+def test_apply_method_sets_rt_enable(qtbot, enabled, expected):
+    app = _app(qtbot)
+    app.current_method = _rt_method(enabled=enabled)
+    app._apply_method_to_frames()
+    assert app.rt_table_frame.is_enabled() is expected
+    status = app.rt_table_frame.status_label.text()
+    assert status.startswith("RT matching enabled" if expected else "RT matching disabled")
+
+
+def test_apply_method_restores_rt_weight_sliders(qtbot):
+    from logic.method import RTMatchingWeights
+    app = _app(qtbot)
+    app.current_method = _rt_method(matching_mode=2,
+                                    weights=RTMatchingWeights(start=0.1, apex=0.7, end=0.2))
+    app._apply_method_to_frames()
+    f = app.rt_table_frame
+    assert (f.start_weight_slider.value(), f.apex_weight_slider.value(),
+            f.end_weight_slider.value()) == (10, 70, 20)
+    w = f.get_matching_params().weights
+    assert (w.start, w.apex, w.end) == pytest.approx((0.1, 0.7, 0.2))
+
+    # A later drag starts from the loaded weights, not the 25/50/25 defaults.
+    f.apex_weight_slider.setValue(60)
+    w = app.current_method.rt_matching.weights
+    assert (w.start, w.apex, w.end) == pytest.approx((10 / 90, 60 / 90, 20 / 90))

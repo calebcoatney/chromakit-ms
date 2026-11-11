@@ -156,6 +156,11 @@ class RTMatchingWeights(BaseModel):
 
 
 class RTMatchingParams(BaseModel):
+    enabled: Optional[bool] = Field(
+        default=None,
+        description="Apply RT matching. None (files saved before this field) "
+                    "= on when the method has an RT table.",
+    )
     matching_mode: int = Field(
         default=0, ge=0, le=2,
         description="0=Simple Window, 1=Closest Apex, 2=Weighted Distance",

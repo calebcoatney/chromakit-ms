@@ -180,3 +180,23 @@ def test_rf_normalize_defaults_true_and_round_trips(tmp_path):
     p = tmp_path / "m.chromethod"
     m.to_file(str(p))
     assert ChromaMethod.from_file(str(p)).rf_normalize is False
+
+
+def test_run_skips_rt_matching_when_method_disables_it(client, tmp_path):
+    from logic.method import RTMatchingParams
+    m = ChromaMethod(name="off", signal_type="gc")
+    m.rt_table = [RTTableEntry(compound="Hydrogen", start=1.0, apex=1.1, end=1.2)]
+    m.rt_matching = RTMatchingParams(enabled=False)
+    path = tmp_path / "off.chromethod"
+    m.to_file(str(path))
+    with patch("api.main.data_handler.load_data_directory", return_value=_fake_data()), \
+         patch("api.main.data_handler.current_detector", "FID1A", create=True), \
+         patch("api.main.processor.process", return_value={}), \
+         patch("api.main.processor.integrate_peaks",
+               return_value={"peaks": _fake_peaks()}), \
+         patch("api.main.apply_rt_matching") as rt:
+        resp = client.post("/api/run", json={
+            "data_path": "/fake.D", "method_path": str(path), "write_output": False,
+        })
+    assert resp.status_code == 200, resp.text
+    rt.assert_not_called()
