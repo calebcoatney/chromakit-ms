@@ -483,3 +483,28 @@ def test_save_keeps_method_detector_when_channel_unknown(qtbot, tmp_path):
     app.current_method_path = out
     app.save_method()
     assert ChromaMethod.from_file(out).detector == "TCD3C"
+
+
+@pytest.mark.parametrize("save", ["save_method", "save_method_as"])
+def test_failed_save_leaves_method_unstamped(qtbot, tmp_path, monkeypatch, save):
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    app.current_method.detector = "TCD3C"
+    app.current_method_path = tmp_path / "m.chromethod"
+    app._mark_dirty(True)
+    app.data_handler.current_detector = "FID2B"
+    _stub_save_as(monkeypatch, tmp_path / "other.chromethod")
+
+    def disk_full(self, path):
+        raise OSError("disk full")
+    monkeypatch.setattr(ChromaMethod, "to_file", disk_full)
+    errors = []
+    monkeypatch.setattr("ui.app.QMessageBox.critical", lambda *a, **k: errors.append(a[2]))
+
+    getattr(app, save)()
+
+    assert errors == ["disk full"]
+    assert app.current_method.detector == "TCD3C"
+    assert app.current_method.name == "Untitled"
+    assert app.current_method_path == tmp_path / "m.chromethod"
+    assert app._method_dirty is True

@@ -375,24 +375,28 @@ class ChromaKitApp(QMainWindow):
         detector = getattr(self.data_handler, "current_detector", None)
         return detector if detector and detector != "Unknown" else None
 
-    def _stamp_method_detector(self):
-        """Record the open channel in the method so batch runs can prefill it.
+    def _stamped_method_copy(self):
+        """A copy of the current method recording the open channel, for saving.
 
-        Read from data_handler at save time (not from a batch-swapped method).
-        Leaves the method's detector alone when no file is open or the channel
-        is unknown.
+        Batch runs prefill the channel from it. Read from data_handler at save time
+        (not from a batch-swapped method). Keeps the method's detector when no file
+        is open or the channel is unknown. The caller adopts the copy as
+        current_method only after it is written, so a failed save changes nothing.
         """
+        method = self.current_method.model_copy(deep=True)
         detector = self._open_channel()
-        if detector and self.current_method is not None:
-            self.current_method.detector = detector
+        if detector:
+            method.detector = detector
+        return method
 
     def save_method(self):
         from pathlib import Path
         if self.current_method_path is None:
             return self.save_method_as()
         try:
-            self._stamp_method_detector()
-            self.current_method.to_file(self.current_method_path)
+            method = self._stamped_method_copy()
+            method.to_file(self.current_method_path)
+            self.current_method = method
             self._mark_dirty(False)
             self.status_bar.showMessage(f"Saved method '{self.current_method.name}'; it is now the current method")
         except Exception as e:
@@ -407,9 +411,10 @@ class ChromaKitApp(QMainWindow):
         if not path:
             return
         try:
-            self.current_method.name = Path(path).stem
-            self._stamp_method_detector()
-            self.current_method.to_file(path)
+            method = self._stamped_method_copy()
+            method.name = Path(path).stem
+            method.to_file(path)
+            self.current_method = method
             self.current_method_path = Path(path)
             self._mark_dirty(False)
             self._update_window_title()
