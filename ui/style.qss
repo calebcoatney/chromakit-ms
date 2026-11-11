@@ -93,6 +93,36 @@ QCheckBox, QLabel {
     color: #222;
 }
 
+/* Checkbox box: dark outline so unchecked boxes stand out on the light background.
+   @ICONS@ is replaced with the ui/icons folder path when the stylesheet is loaded. */
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 2px solid #5a6270;
+    border-radius: 3px;
+    background: #fff;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #0078d7;
+}
+
+QCheckBox::indicator:checked {
+    background: #0078d7;
+    border-color: #0078d7;
+    image: url("@ICONS@/check_light.svg");
+}
+
+QCheckBox::indicator:disabled {
+    border-color: #b0b6c0;
+    background: #eceef2;
+}
+
+QCheckBox::indicator:checked:disabled {
+    background: #9cb9d6;
+    border-color: #9cb9d6;
+}
+
 /* Add styles for Tab Widgets */
 QTabWidget::pane {
     border: 1px solid #d1d5db;
@@ -210,6 +240,31 @@ QDialog[theme="dark"] {
 
 QCheckBox[theme="dark"], QLabel[theme="dark"] {
     color: #f3f3f3;
+}
+
+QCheckBox[theme="dark"]::indicator {
+    border: 2px solid #a3acb9;
+    background: #23272e;
+}
+
+QCheckBox[theme="dark"]::indicator:hover {
+    border-color: #4cc2ff;
+}
+
+QCheckBox[theme="dark"]::indicator:checked {
+    background: #4cc2ff;
+    border-color: #4cc2ff;
+    image: url("@ICONS@/check_dark.svg");
+}
+
+QCheckBox[theme="dark"]::indicator:disabled {
+    border-color: #4a505b;
+    background: #2a2f37;
+}
+
+QCheckBox[theme="dark"]::indicator:checked:disabled {
+    background: #3b6a85;
+    border-color: #3b6a85;
 }
 
 /* Add dark theme styles for Tab Widgets */

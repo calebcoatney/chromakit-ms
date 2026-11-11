@@ -131,6 +131,42 @@ def test_load_repopulates_and_clears_dirty(qtbot, tmp_path, monkeypatch):
     assert any(e.compound == "Hydrogen" for e in app.current_method.rf_table)
 
 
+def test_load_and_resave_peak_ranges_and_grouping(qtbot, tmp_path, monkeypatch):
+    from logic.method import ChromaMethod, IntegrationSubParams, PeakParams
+
+    src = tmp_path / "ranges.chromethod"
+    ChromaMethod(
+        name="ranges",
+        signal_type="gc",
+        peaks=PeakParams(range_filters=[[1.25, 2.5], [3.5, 4.75]]),
+        integration=IntegrationSubParams(peak_groups=[[5.0, 6.0]]),
+    ).to_file(src)
+
+    app = _make(qtbot)
+    monkeypatch.setattr(
+        "ui.app.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(src), "ChromaKit Method (*.chromethod)"),
+    )
+    monkeypatch.setattr(app, "_maybe_prompt_save", lambda: True)
+    app.load_method()
+
+    parameters = app.parameters_frame
+    assert parameters.range_filter_table.rowCount() == 2
+    assert parameters.peak_group_table.rowCount() == 1
+    assert parameters.range_filter_table.cellWidget(1, 0).value() == 3.5
+    assert parameters.range_filter_table.cellWidget(1, 1).value() == 4.75
+    assert parameters.peak_group_table.cellWidget(0, 0).value() == 5.0
+    assert parameters.peak_group_table.cellWidget(0, 1).value() == 6.0
+
+    app._on_params_writeback(parameters.current_params)
+    saved_path = tmp_path / "resaved.chromethod"
+    app.current_method_path = saved_path
+    app.save_method()
+    saved = ChromaMethod.from_file(saved_path)
+    assert saved.peaks.range_filters == [[1.25, 2.5], [3.5, 4.75]]
+    assert saved.integration.peak_groups == [[5.0, 6.0]]
+
+
 def test_manual_assign_gate_uses_frame_is_enabled(qtbot, monkeypatch):
     """Manual RT-assign must gate on rt_table_frame.is_enabled(), not rt_settings.
 
@@ -306,3 +342,14 @@ def test_params_writeback_preserves_rf_unit_and_normalize(qtbot):
     app._on_params_writeback(app.parameters_frame.current_params)
     assert app.current_method.rf_unit == "area_per_wt_pct"
     assert app.current_method.rf_normalize is False
+
+
+def test_apply_batch_method_none_restores_users_method(qtbot):
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    app.current_method = ChromaMethod(name="mine", signal_type="gc")
+    app._save_method_state_for_batch()
+    app.apply_batch_method(ChromaMethod(name="front", signal_type="gc"))
+    assert app.current_method.name == "front"
+    app.apply_batch_method(None)
+    assert app.current_method.name == "mine"

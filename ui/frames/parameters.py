@@ -2,14 +2,73 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QGroupBox, QFormLayout,
     QCheckBox, QSlider, QDoubleSpinBox, QSpinBox, QComboBox, QHBoxLayout,
     QLineEdit, QFrame, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QRadioButton, QButtonGroup
+    QAbstractItemView, QRadioButton, QButtonGroup, QStyle, QStyleOptionGroupBox
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QRect
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtCore import QRegularExpression
+import html
 import numpy as np
 
 from logic.method import GCxGCParams
+from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
+
+INFO_ICON = "\u24d8"
+INFO_COLOR = "#1a73e8"
+
+
+def _fix_table_height(table, rows=3):
+    """Size a table to show exactly `rows` rows so the panel scrolls instead of squashing it."""
+    table.verticalHeader().setDefaultSectionSize(30)
+    height = (table.horizontalHeader().sizeHint().height()
+              + rows * table.verticalHeader().defaultSectionSize()
+              + 2 * table.frameWidth())
+    table.setFixedHeight(height)
+
+
+class _TitleHelpIcon(QLabel):
+    """Info icon overlaid on a QGroupBox, just after its title text.
+
+    QGroupBox titles are plain text drawn by the style, so the icon is a child
+    label positioned from the style's title rect and kept there on resize.
+    """
+
+    def __init__(self, group: QGroupBox, tip: str):
+        super().__init__(INFO_ICON, group)
+        self._group = group
+        self.setStyleSheet(f"color: {INFO_COLOR}; font-weight: bold; padding: 0 3px 0 4px;")
+        # Opaque background so the group box frame line doesn't strike through the icon.
+        self.setAutoFillBackground(True)
+        self.setToolTip(tip)
+        self.setCursor(Qt.WhatsThisCursor)
+        self.adjustSize()
+        group.installEventFilter(self)
+        self._reposition()
+        self.raise_()
+
+    def _reposition(self):
+        group = self._group
+        opt = QStyleOptionGroupBox()
+        opt.initFrom(group)
+        opt.text = group.title()
+        opt.textAlignment = group.alignment()
+        opt.subControls = QStyle.SC_GroupBoxLabel | QStyle.SC_GroupBoxFrame
+        opt.lineWidth = 1
+        rect = group.style().subControlRect(
+            QStyle.CC_GroupBox, opt, QStyle.SC_GroupBoxLabel, group
+        )
+        if not rect.isValid():
+            fm = group.fontMetrics()
+            rect = QRect(8, 0, fm.horizontalAdvance(group.title()), fm.height())
+        self.move(rect.right() - 1, rect.center().y() - self.height() // 2)
+
+    def eventFilter(self, obj, event):
+        if obj is self._group and event.type() in (
+            QEvent.Resize, QEvent.Show, QEvent.FontChange, QEvent.StyleChange
+        ):
+            self._reposition()
+        return False
+
 
 class ParametersFrame(QWidget):
     """Frame containing integration parameters for chromatogram processing."""
@@ -137,6 +196,8 @@ class ParametersFrame(QWidget):
 
         # Add GCxGC controls
         self._init_gcxgc_controls()
+
+        self._apply_help_icons()
         
         # Add stretch at the end to push everything to the top
         self.params_layout.addStretch()
@@ -158,6 +219,43 @@ class ParametersFrame(QWidget):
         # Add scroll area to main layout
         self.layout.addWidget(self.params_scroll)
     
+    def _apply_help_icons(self):
+        """Append an info icon with hover help to every documented label/checkbox.
+
+        Help text lives in ui/frames/parameter_help.py, keyed by section and by
+        the visible label text, so it survives _reinitialize_controls().
+        """
+        icon_html = f"<span style='color:{INFO_COLOR}; font-weight:bold;'>{INFO_ICON}</span>"
+        for key, group in self.section_groups.items():
+            if not isinstance(group, QGroupBox):
+                continue
+            help_map = PARAMETER_HELP.get(key)
+            if not help_map:
+                continue
+
+            for label in group.findChildren(QLabel):
+                text = label.text().strip()
+                tip = help_map.get(text)
+                if tip is None or label.property("_has_help"):
+                    continue
+                label.setTextFormat(Qt.RichText)
+                label.setText(f"{html.escape(text)} {icon_html}")
+                label.setToolTip(tip)
+                label.setProperty("_has_help", True)
+
+            for checkbox in group.findChildren(QCheckBox):
+                text = checkbox.text().strip()
+                tip = help_map.get(text)
+                if tip is None or checkbox.property("_has_help"):
+                    continue
+                checkbox.setText(f"{text}  {INFO_ICON}")
+                checkbox.setToolTip(tip)
+                checkbox.setProperty("_has_help", True)
+
+            section_tip = help_map.get(SECTION_KEY)
+            if section_tip:
+                _TitleHelpIcon(group, section_tip)
+
     def _init_smoothing_controls(self):
         """Initialize smoothing controls"""
         smoothing_group = QGroupBox("Signal Smoothing")
@@ -464,13 +562,13 @@ class ParametersFrame(QWidget):
         self.break_point_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.break_point_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.break_point_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.break_point_table.setMaximumHeight(120)
+        _fix_table_height(self.break_point_table)
         bp_layout.addWidget(self.break_point_table)
         
         bp_add_btn = QPushButton("+ Add Break Point")
         bp_add_btn.clicked.connect(lambda: self._add_break_point_row())
         for bp in self.current_params['baseline'].get('break_points') or []:
-            self._add_break_point_row(bp['time'], bp.get('tolerance', 0.1), emit=False)
+            self._add_break_point_row(bp['time'], bp.get('tolerance', 0.1), notify=False)
         bp_layout.addWidget(bp_add_btn)
         
         advanced_layout.addWidget(bp_frame)
@@ -567,13 +665,13 @@ class ParametersFrame(QWidget):
         self.peak_splitting_windows_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.peak_splitting_windows_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.peak_splitting_windows_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.peak_splitting_windows_table.setMaximumHeight(120)
+        _fix_table_height(self.peak_splitting_windows_table)
         peak_splitting_layout.addRow(self.peak_splitting_windows_table)
 
         add_window_btn = QPushButton("+ Add Window")
         add_window_btn.clicked.connect(lambda: self._add_peak_splitting_window_row())
         for start, end in self.current_params['peak_splitting'].get('windows') or []:
-            self._add_peak_splitting_window_row(start, end, emit=False)
+            self._add_peak_splitting_window_row(start, end, notify=False)
         peak_splitting_layout.addRow(add_window_btn)
 
         # Advanced toggle
@@ -935,19 +1033,19 @@ class ParametersFrame(QWidget):
         self.range_filter_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.range_filter_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.range_filter_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.range_filter_table.setMaximumHeight(150)
+        _fix_table_height(self.range_filter_table)
         layout.addWidget(self.range_filter_table)
 
         add_btn = QPushButton("+ Add Range")
         add_btn.clicked.connect(lambda: self._add_range_filter_row())
-        for start, end in self.current_params['peaks'].get('range_filters') or []:
-            self._add_range_filter_row(start, end, emit=False)
         layout.addWidget(add_btn)
 
         self.section_groups['range_filters'] = group
         self.params_layout.addWidget(group)
+        for start, end in self.current_params.get('peaks', {}).get('range_filters') or []:
+            self._add_range_filter_row(start, end, notify=False)
 
-    def _add_range_filter_row(self, start=0.0, end=60.0, emit=True):
+    def _add_range_filter_row(self, start=0.0, end=60.0, notify=True):
         """Add a new row to the range filter table."""
         row = self.range_filter_table.rowCount()
         self.range_filter_table.insertRow(row)
@@ -970,8 +1068,7 @@ class ParametersFrame(QWidget):
         del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda checked, r=row: self._remove_range_filter_row(r))
         self.range_filter_table.setCellWidget(row, 2, del_btn)
-        # A row left at its defaults is still part of the method.
-        if emit:
+        if notify:
             self._on_range_filters_changed()
 
     def _remove_range_filter_row(self, row):
@@ -1011,19 +1108,19 @@ class ParametersFrame(QWidget):
         self.peak_group_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.peak_group_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.peak_group_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.peak_group_table.setMaximumHeight(150)
+        _fix_table_height(self.peak_group_table)
         layout.addWidget(self.peak_group_table)
 
         add_btn = QPushButton("+ Add Group")
         add_btn.clicked.connect(lambda: self._add_peak_group_row())
-        for start, end in self.current_params['integration'].get('peak_groups') or []:
-            self._add_peak_group_row(start, end, emit=False)
         layout.addWidget(add_btn)
 
         self.section_groups['peak_grouping'] = group
         self.params_layout.addWidget(group)
+        for start, end in self.current_params.get('integration', {}).get('peak_groups') or []:
+            self._add_peak_group_row(start, end, notify=False)
 
-    def _add_peak_group_row(self, start=0.0, end=60.0, emit=True):
+    def _add_peak_group_row(self, start=0.0, end=60.0, notify=True):
         """Add a new row to the peak grouping table."""
         row = self.peak_group_table.rowCount()
         self.peak_group_table.insertRow(row)
@@ -1046,8 +1143,7 @@ class ParametersFrame(QWidget):
         del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda checked, r=row: self._remove_peak_group_row(r))
         self.peak_group_table.setCellWidget(row, 2, del_btn)
-        # A row left at its defaults is still part of the method.
-        if emit:
+        if notify:
             self._on_peak_groups_changed()
 
     def _remove_peak_group_row(self, row):
@@ -1071,7 +1167,7 @@ class ParametersFrame(QWidget):
         self.current_params['integration']['peak_groups'] = groups
         self.parameters_changed.emit(self.current_params)
 
-    def _add_break_point_row(self, time=0.0, tolerance=0.1, emit=True):
+    def _add_break_point_row(self, time=0.0, tolerance=0.1, notify=True):
         """Add a new row to the break point table."""
         row = self.break_point_table.rowCount()
         self.break_point_table.insertRow(row)
@@ -1095,7 +1191,7 @@ class ParametersFrame(QWidget):
         del_btn.clicked.connect(lambda checked, r=row: self._remove_break_point_row(r))
         self.break_point_table.setCellWidget(row, 2, del_btn)
         # A row left at its defaults is still part of the method.
-        if emit:
+        if notify:
             self._on_break_points_changed()
 
     def _remove_break_point_row(self, row):
@@ -1376,7 +1472,6 @@ class ParametersFrame(QWidget):
             # Keep prominence at its classical default — it now controls
             # classical peak detection in hybrid mode (outside peak splitting windows).
             # The peak splitting pipeline internally uses min_prominence=0.
-            self.prominence_label.setText("Min Prominence:")
             self.prominence_entry.setToolTip(
                 'Prominence threshold for classical peak detection.\n'
                 'In hybrid mode (with peak splitting windows), this controls\n'
@@ -1386,7 +1481,6 @@ class ParametersFrame(QWidget):
         else:
             self.current_params['peaks']['min_prominence'] = 1e5
             self.prominence_entry.setText('100000.0')
-            self.prominence_label.setText("Min Prominence:")
             self.prominence_entry.setToolTip(
                 'Absolute prominence threshold for scipy find_peaks.'
             )
@@ -1421,7 +1515,7 @@ class ParametersFrame(QWidget):
             self.pre_fit_signal_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
             QTimer.singleShot(800, lambda: self.pre_fit_signal_entry.setStyleSheet(""))
 
-    def _add_peak_splitting_window_row(self, start=0.0, end=60.0, emit=True):
+    def _add_peak_splitting_window_row(self, start=0.0, end=60.0, notify=True):
         """Add a new row to the peak splitting windows table."""
         row = self.peak_splitting_windows_table.rowCount()
         self.peak_splitting_windows_table.insertRow(row)
@@ -1445,7 +1539,7 @@ class ParametersFrame(QWidget):
         del_btn.clicked.connect(lambda checked, r=row: self._remove_peak_splitting_window_row(r))
         self.peak_splitting_windows_table.setCellWidget(row, 2, del_btn)
         # A row left at its defaults is still part of the method.
-        if emit:
+        if notify:
             self._on_peak_splitting_windows_changed()
 
     def _remove_peak_splitting_window_row(self, row):
@@ -1919,6 +2013,7 @@ class ParametersFrame(QWidget):
         self._init_range_filter_controls()
         self._init_peak_grouping_controls()
         self._init_gcxgc_controls()
+        self._apply_help_icons()
         self.params_layout.addStretch()
         if getattr(self, '_ui_mode', None):
             self.set_mode(self._ui_mode)
