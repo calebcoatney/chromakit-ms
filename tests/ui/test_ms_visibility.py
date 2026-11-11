@@ -81,3 +81,23 @@ def test_corrected_ms_checkbox_follows_the_gate(app):
 
     _load(window, tmp_path, "gcms_b.D")
     assert not pf.use_corrected_ms_data_check.isHidden()
+
+
+def _load_method(window, tmp_path, monkeypatch, name="m", **kw):
+    from logic.method import ChromaMethod
+    p = tmp_path / f"{name}.chromethod"
+    ChromaMethod(name=name, signal_type="gc", **kw).to_file(p)
+    monkeypatch.setattr("ui.app.QFileDialog.getOpenFileName", lambda *a, **k: (str(p), ""))
+    window.load_method()
+
+
+def test_method_load_keeps_ms_baseline_button_hidden_for_gc_only(app, monkeypatch):
+    # apply_method rebuilds the parameter widgets, including a fresh (visible)
+    # ms_baseline_button; the MS gate must run again afterwards.
+    window, tmp_path = app
+    _load(window, tmp_path, "gconly.D")
+    assert window.parameters_frame.ms_baseline_button.isHidden()
+
+    _load_method(window, tmp_path, monkeypatch)      # same signal factor: reprocess path
+    assert window.parameters_frame.ms_baseline_button.isHidden()
+

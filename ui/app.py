@@ -347,6 +347,8 @@ class ChromaKitApp(QMainWindow):
             if self.rf_table_frame is not None:
                 self.rf_table_frame.apply_method(self.current_method)
             self.quantitation_frame.apply_method(self.current_method)
+            # apply_method rebuilt the MS-only widgets visible: gate them for the open file
+            self._apply_ms_visibility(self._has_ms_data)
         finally:
             self._loading_method = False
 
