@@ -15,7 +15,7 @@ class UpdateDialog(QDialog):
     """
 
     def __init__(self, version: str, url: str, kind: str, source_dir: str | None = None,
-                 parent=None, executable: str | None = None):
+                 parent=None, executable: str | None = None, platform: str | None = None):
         super().__init__(parent)
         self.kind, self.url, self.version = kind, url, version
         self.setWindowTitle(f"ChromaKit {version} is available")
@@ -51,6 +51,11 @@ class UpdateDialog(QDialog):
             copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.command))
             row.addWidget(copy)
             layout.addLayout(row)
+            if kind == "git" and (platform or sys.platform) == "win32":
+                # PowerShell rejects a line starting with a quoted exe path unless it begins with &
+                hint = QLabel("In PowerShell, type & and a space before the command.")
+                hint.setWordWrap(True)
+                layout.addWidget(hint)
             notes = QPushButton("Open release notes")
         else:
             notes = QPushButton("Open release page")

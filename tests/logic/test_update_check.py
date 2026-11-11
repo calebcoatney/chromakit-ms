@@ -1,6 +1,9 @@
 import io
 import json
+import pathlib
+import re
 import ssl
+import urllib.request
 
 import pytest
 
@@ -52,14 +55,9 @@ def test_malformed_json_gives_none():
 
 
 # ---- install type and update instructions -------------------------------------------------------
-import json as _json
-import sys as _sys
-
-from logic import update_check as uc
-
 
 def _reader(payload):
-    text = payload if isinstance(payload, str) or payload is None else _json.dumps(payload)
+    text = payload if isinstance(payload, str) or payload is None else json.dumps(payload)
     return lambda: text
 
 
@@ -80,21 +78,11 @@ def test_editable_install_keeps_posix_source_path():
 
 
 def test_editable_install_windows_drive_path(monkeypatch):
-    import urllib.request
-    import ntpath
-    monkeypatch.setattr(urllib.request, "url2pathname", lambda p: ntpath_unquote(p))
+    import nturl2path
+    monkeypatch.setattr(urllib.request, "url2pathname", nturl2path.url2pathname)
     payload = {"url": "file:///C:/Users/me/chromakit-qt", "dir_info": {"editable": True}}
     kind, path = uc.detect_install(frozen=False, read_direct_url=_reader(payload))
     assert kind == "editable" and path == "C:\\Users\\me\\chromakit-qt"
-
-
-def ntpath_unquote(p):
-    # what url2pathname does on Windows, for the one shape we need
-    import urllib.parse
-    p = urllib.parse.unquote(p)
-    if p.startswith("/") and len(p) > 2 and p[2] == ":":
-        p = p[1:]
-    return p.replace("/", "\\")
 
 
 @pytest.mark.parametrize("payload", [
@@ -129,7 +117,6 @@ def test_pip_command_text_is_exact():
 
 
 def test_ms_is_a_real_extra():
-    import pathlib, re
     setup_py = (pathlib.Path(__file__).resolve().parents[2] / "setup.py").read_text(encoding="utf-8")
     assert re.search(r'"ms"\s*:', setup_py)
 

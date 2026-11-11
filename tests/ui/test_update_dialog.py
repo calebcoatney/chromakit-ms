@@ -52,3 +52,22 @@ def test_release_notes_button_opens_url(qtbot, monkeypatch):
     qtbot.addWidget(dlg)
     _button(dlg, "Open release notes").click()
     assert opened == [URL]
+
+
+from PySide6.QtWidgets import QLabel
+
+HINT = "In PowerShell, type & and a space before the command."
+
+
+def _has_hint(dlg):
+    return any(l.text() == HINT for l in dlg.findChildren(QLabel))
+
+
+def test_powershell_hint_only_on_windows_git(qtbot):
+    win = UpdateDialog("9.9.9", URL, "git", None, platform="win32")
+    mac = UpdateDialog("9.9.9", URL, "git", None, platform="darwin")
+    ed = UpdateDialog("9.9.9", URL, "editable", "C:\\src", platform="win32")
+    for d in (win, mac, ed):
+        qtbot.addWidget(d)
+    assert _has_hint(win) and not _has_hint(mac) and not _has_hint(ed)
+    assert win.findChild(QLineEdit).text() == pip_upgrade_command(__import__("sys").executable)

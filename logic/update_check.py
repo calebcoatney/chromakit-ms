@@ -69,6 +69,7 @@ def detect_install(frozen: bool | None = None, read_direct_url=None) -> tuple[st
         if isinstance(dir_info, dict) and dir_info.get("editable") is True:
             url = data.get("url")
             if isinstance(url, str) and url.startswith("file:"):
+                # shortcut: a UNC editable URL (file://server/share/...) loses its host; handle netloc if anyone installs from a share
                 # url2pathname, not slicing: turns file:///C:/x into C:\x on Windows
                 return "editable", urllib.request.url2pathname(urllib.parse.urlparse(url).path)
             return "unknown", None
