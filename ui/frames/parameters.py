@@ -173,7 +173,7 @@ class ParametersFrame(QWidget):
         self.smooth_method_combo = QComboBox()
         self.smooth_method_combo.addItem("Whittaker", "whittaker")
         self.smooth_method_combo.addItem("Savitzky-Golay", "savgol")
-        self.smooth_method_combo.setCurrentIndex(0)
+        self.smooth_method_combo.setCurrentIndex(max(0, self.smooth_method_combo.findData(self.current_params['smoothing']['method'])))
         self.smooth_method_combo.currentIndexChanged.connect(self._on_smooth_method_changed)
         form_layout.addRow("Method:", self.smooth_method_combo)
 
@@ -247,7 +247,7 @@ class ParametersFrame(QWidget):
         self.smooth_diff_order_combo = QComboBox()
         self.smooth_diff_order_combo.addItem("d=1 (slope)", 1)
         self.smooth_diff_order_combo.addItem("d=2 (curvature)", 2)
-        self.smooth_diff_order_combo.setCurrentIndex(0)
+        self.smooth_diff_order_combo.setCurrentIndex(max(0, self.smooth_diff_order_combo.findData(self.current_params['smoothing']['diff_order'])))
         self.smooth_diff_order_combo.currentIndexChanged.connect(self._on_smooth_diff_order_changed)
         self.smooth_diff_order_row_label = QLabel("Penalty order:")
         form_layout.addRow(self.smooth_diff_order_row_label, self.smooth_diff_order_combo)
@@ -387,7 +387,7 @@ class ParametersFrame(QWidget):
         form_layout.addRow("", self.lam_label)
         
         # Baseline offset - shifts baseline down (positive) to increase peak areas
-        self.baseline_offset_input = QLineEdit("0.0")
+        self.baseline_offset_input = QLineEdit(str(self.current_params['baseline'].get('baseline_offset', 0.0)))
         self.baseline_offset_input.setToolTip(
             "Offset subtracted from the computed baseline (in signal units).\n"
             "Positive values lower the baseline, increasing peak areas.\n"
@@ -405,7 +405,8 @@ class ParametersFrame(QWidget):
         self.fc_half_window.setMinimum(0)
         self.fc_half_window.setMaximum(500)
         self.fc_half_window.setSpecialValueText("Auto")
-        self.fc_half_window.setValue(0)
+        fastchrom = self.current_params['baseline'].get('fastchrom') or {}
+        self.fc_half_window.setValue(fastchrom.get('half_window') or 0)
         self.fc_half_window.setToolTip("Half-window for rolling std dev (~FWHM of peaks). 0 = Auto.")
         self.fc_half_window.valueChanged.connect(self._on_fastchrom_param_changed)
         fc_layout.addRow("Half Window:", self.fc_half_window)
@@ -414,7 +415,7 @@ class ParametersFrame(QWidget):
         self.fc_smooth_half_window.setMinimum(0)
         self.fc_smooth_half_window.setMaximum(500)
         self.fc_smooth_half_window.setSpecialValueText("Auto")
-        self.fc_smooth_half_window.setValue(0)
+        self.fc_smooth_half_window.setValue(fastchrom.get('smooth_half_window') or 0)
         self.fc_smooth_half_window.setToolTip("Half-window for smoothing the interpolated baseline. 0 = Auto.")
         self.fc_smooth_half_window.valueChanged.connect(self._on_fastchrom_param_changed)
         fc_layout.addRow("Smooth Half Window:", self.fc_smooth_half_window)
@@ -467,7 +468,9 @@ class ParametersFrame(QWidget):
         bp_layout.addWidget(self.break_point_table)
         
         bp_add_btn = QPushButton("+ Add Break Point")
-        bp_add_btn.clicked.connect(self._add_break_point_row)
+        bp_add_btn.clicked.connect(lambda: self._add_break_point_row())
+        for bp in self.current_params['baseline'].get('break_points') or []:
+            self._add_break_point_row(bp['time'], bp.get('tolerance', 0.1), emit=False)
         bp_layout.addWidget(bp_add_btn)
         
         advanced_layout.addWidget(bp_frame)
@@ -503,6 +506,7 @@ class ParametersFrame(QWidget):
             item.setEnabled(False)
             item.setToolTip("Requires PyTorch and model weights in cache/gc_heatmap_unet.pth")
 
+        self.peak_mode_combo.setCurrentIndex(max(0, self.peak_mode_combo.findData(self.current_params['peaks'].get('mode', 'classical'))))
         self.peak_mode_combo.currentIndexChanged.connect(self._on_peak_mode_changed)
         form_layout.addRow("Detection Mode:", self.peak_mode_combo)
 
@@ -547,6 +551,7 @@ class ParametersFrame(QWidget):
             "Geometric: fast, accurate RT & area, best for large peaks.\n"
             "EMG: better at detecting small peaks, recovers peak shape parameters."
         )
+        self.splitting_method_combo.setCurrentIndex(max(0, self.splitting_method_combo.findData(self.current_params['peak_splitting'].get('splitting_method', 'geometric'))))
         self.splitting_method_combo.currentIndexChanged.connect(self._on_splitting_method_changed)
         peak_splitting_layout.addRow("Splitting Method:", self.splitting_method_combo)
 
@@ -566,7 +571,9 @@ class ParametersFrame(QWidget):
         peak_splitting_layout.addRow(self.peak_splitting_windows_table)
 
         add_window_btn = QPushButton("+ Add Window")
-        add_window_btn.clicked.connect(self._add_peak_splitting_window_row)
+        add_window_btn.clicked.connect(lambda: self._add_peak_splitting_window_row())
+        for start, end in self.current_params['peak_splitting'].get('windows') or []:
+            self._add_peak_splitting_window_row(start, end, emit=False)
         peak_splitting_layout.addRow(add_window_btn)
 
         # Advanced toggle
@@ -932,13 +939,15 @@ class ParametersFrame(QWidget):
         layout.addWidget(self.range_filter_table)
 
         add_btn = QPushButton("+ Add Range")
-        add_btn.clicked.connect(self._add_range_filter_row)
+        add_btn.clicked.connect(lambda: self._add_range_filter_row())
+        for start, end in self.current_params['peaks'].get('range_filters') or []:
+            self._add_range_filter_row(start, end, emit=False)
         layout.addWidget(add_btn)
 
         self.section_groups['range_filters'] = group
         self.params_layout.addWidget(group)
 
-    def _add_range_filter_row(self):
+    def _add_range_filter_row(self, start=0.0, end=60.0, emit=True):
         """Add a new row to the range filter table."""
         row = self.range_filter_table.rowCount()
         self.range_filter_table.insertRow(row)
@@ -946,13 +955,14 @@ class ParametersFrame(QWidget):
         start_spin = QDoubleSpinBox()
         start_spin.setDecimals(3)
         start_spin.setRange(0, 9999)
+        start_spin.setValue(start)
         start_spin.valueChanged.connect(self._on_range_filters_changed)
         self.range_filter_table.setCellWidget(row, 0, start_spin)
 
         end_spin = QDoubleSpinBox()
         end_spin.setDecimals(3)
         end_spin.setRange(0, 9999)
-        end_spin.setValue(60.0)
+        end_spin.setValue(end)
         end_spin.valueChanged.connect(self._on_range_filters_changed)
         self.range_filter_table.setCellWidget(row, 1, end_spin)
 
@@ -960,6 +970,9 @@ class ParametersFrame(QWidget):
         del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda checked, r=row: self._remove_range_filter_row(r))
         self.range_filter_table.setCellWidget(row, 2, del_btn)
+        # A row left at its defaults is still part of the method.
+        if emit:
+            self._on_range_filters_changed()
 
     def _remove_range_filter_row(self, row):
         """Remove a row from the range filter table."""
@@ -1002,13 +1015,15 @@ class ParametersFrame(QWidget):
         layout.addWidget(self.peak_group_table)
 
         add_btn = QPushButton("+ Add Group")
-        add_btn.clicked.connect(self._add_peak_group_row)
+        add_btn.clicked.connect(lambda: self._add_peak_group_row())
+        for start, end in self.current_params['integration'].get('peak_groups') or []:
+            self._add_peak_group_row(start, end, emit=False)
         layout.addWidget(add_btn)
 
         self.section_groups['peak_grouping'] = group
         self.params_layout.addWidget(group)
 
-    def _add_peak_group_row(self):
+    def _add_peak_group_row(self, start=0.0, end=60.0, emit=True):
         """Add a new row to the peak grouping table."""
         row = self.peak_group_table.rowCount()
         self.peak_group_table.insertRow(row)
@@ -1016,13 +1031,14 @@ class ParametersFrame(QWidget):
         start_spin = QDoubleSpinBox()
         start_spin.setDecimals(3)
         start_spin.setRange(0, 9999)
+        start_spin.setValue(start)
         start_spin.valueChanged.connect(self._on_peak_groups_changed)
         self.peak_group_table.setCellWidget(row, 0, start_spin)
 
         end_spin = QDoubleSpinBox()
         end_spin.setDecimals(3)
         end_spin.setRange(0, 9999)
-        end_spin.setValue(60.0)
+        end_spin.setValue(end)
         end_spin.valueChanged.connect(self._on_peak_groups_changed)
         self.peak_group_table.setCellWidget(row, 1, end_spin)
 
@@ -1030,6 +1046,9 @@ class ParametersFrame(QWidget):
         del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda checked, r=row: self._remove_peak_group_row(r))
         self.peak_group_table.setCellWidget(row, 2, del_btn)
+        # A row left at its defaults is still part of the method.
+        if emit:
+            self._on_peak_groups_changed()
 
     def _remove_peak_group_row(self, row):
         """Remove a row from the peak grouping table."""
@@ -1052,7 +1071,7 @@ class ParametersFrame(QWidget):
         self.current_params['integration']['peak_groups'] = groups
         self.parameters_changed.emit(self.current_params)
 
-    def _add_break_point_row(self):
+    def _add_break_point_row(self, time=0.0, tolerance=0.1, emit=True):
         """Add a new row to the break point table."""
         row = self.break_point_table.rowCount()
         self.break_point_table.insertRow(row)
@@ -1060,13 +1079,14 @@ class ParametersFrame(QWidget):
         time_spin = QDoubleSpinBox()
         time_spin.setDecimals(3)
         time_spin.setRange(0, 9999)
+        time_spin.setValue(time)
         time_spin.valueChanged.connect(self._on_break_points_changed)
         self.break_point_table.setCellWidget(row, 0, time_spin)
 
         tol_spin = QDoubleSpinBox()
         tol_spin.setDecimals(3)
         tol_spin.setRange(0, 10)
-        tol_spin.setValue(0.1)
+        tol_spin.setValue(tolerance)
         tol_spin.valueChanged.connect(self._on_break_points_changed)
         self.break_point_table.setCellWidget(row, 1, tol_spin)
 
@@ -1074,6 +1094,9 @@ class ParametersFrame(QWidget):
         del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda checked, r=row: self._remove_break_point_row(r))
         self.break_point_table.setCellWidget(row, 2, del_btn)
+        # A row left at its defaults is still part of the method.
+        if emit:
+            self._on_break_points_changed()
 
     def _remove_break_point_row(self, row):
         """Remove a row from the break point table."""
@@ -1398,7 +1421,7 @@ class ParametersFrame(QWidget):
             self.pre_fit_signal_entry.setStyleSheet("background-color: #ffcccc; border: 1px solid #ff9999;")
             QTimer.singleShot(800, lambda: self.pre_fit_signal_entry.setStyleSheet(""))
 
-    def _add_peak_splitting_window_row(self):
+    def _add_peak_splitting_window_row(self, start=0.0, end=60.0, emit=True):
         """Add a new row to the peak splitting windows table."""
         row = self.peak_splitting_windows_table.rowCount()
         self.peak_splitting_windows_table.insertRow(row)
@@ -1406,13 +1429,14 @@ class ParametersFrame(QWidget):
         start_spin = QDoubleSpinBox()
         start_spin.setDecimals(3)
         start_spin.setRange(0, 9999)
+        start_spin.setValue(start)
         start_spin.valueChanged.connect(self._on_peak_splitting_windows_changed)
         self.peak_splitting_windows_table.setCellWidget(row, 0, start_spin)
 
         end_spin = QDoubleSpinBox()
         end_spin.setDecimals(3)
         end_spin.setRange(0, 9999)
-        end_spin.setValue(60.0)
+        end_spin.setValue(end)
         end_spin.valueChanged.connect(self._on_peak_splitting_windows_changed)
         self.peak_splitting_windows_table.setCellWidget(row, 1, end_spin)
 
@@ -1420,6 +1444,9 @@ class ParametersFrame(QWidget):
         del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda checked, r=row: self._remove_peak_splitting_window_row(r))
         self.peak_splitting_windows_table.setCellWidget(row, 2, del_btn)
+        # A row left at its defaults is still part of the method.
+        if emit:
+            self._on_peak_splitting_windows_changed()
 
     def _remove_peak_splitting_window_row(self, row):
         """Remove a row from the peak splitting windows table."""
