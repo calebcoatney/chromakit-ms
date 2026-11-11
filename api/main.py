@@ -917,7 +917,7 @@ async def run_pipeline(request: RunRequest):
             peaks = integrated.get("peaks", [])
 
             # 4b. RT-assign — populate compound_id from the method's embedded RT table.
-            if method.rt_table:
+            if method.rt_table and method.rt_matching.enabled is not False:
                 rt_df = method.rt_table_as_dataframe()
                 apply_rt_matching(peaks, rt_df, method.rt_matching)
 

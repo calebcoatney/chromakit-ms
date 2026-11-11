@@ -740,6 +740,25 @@ class RTTableFrame(QWidget):
         """Handle changes to RT matching settings."""
         if getattr(self, "_applying", False):
             return
+        enabled = self._refresh_settings_state()
+
+        # Emit settings change signal
+        settings = {
+            'enabled': enabled,
+            'high_priority': self.high_priority_checkbox.isChecked(),
+            'allow_duplicates': self.allow_duplicates_checkbox.isChecked(),
+            'matching_mode': self.matching_mode_combo.currentIndex(),
+            'tolerance': self.tolerance_spin.value(),
+            'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),
+            'window_expansion': self.window_expansion_spin.value(),
+            'rt_table': self.rt_table_data,
+        }
+        
+        self.rt_table_changed.emit(settings)
+
+    def _refresh_settings_state(self):
+        """Enable the dependent controls and set the status line from the
+        checkbox. Emits nothing, so apply_method can call it during a load."""
         enabled = self.enable_checkbox.isChecked() and self.rt_table_data is not None
         
         # Update dependent controls
@@ -761,20 +780,7 @@ class RTTableFrame(QWidget):
             self.status_label.setText(f"RT matching enabled ({mode}, {priority} priority, {count} compounds)")
         else:
             self.status_label.setText("RT matching disabled")
-        
-        # Emit settings change signal
-        settings = {
-            'enabled': enabled,
-            'high_priority': self.high_priority_checkbox.isChecked(),
-            'allow_duplicates': self.allow_duplicates_checkbox.isChecked(),
-            'matching_mode': self.matching_mode_combo.currentIndex(),
-            'tolerance': self.tolerance_spin.value(),
-            'weights': getattr(self, 'normalized_weights', {'start': 0.25, 'apex': 0.50, 'end': 0.25}),
-            'window_expansion': self.window_expansion_spin.value(),
-            'rt_table': self.rt_table_data,
-        }
-        
-        self.rt_table_changed.emit(settings)
+        return enabled
     
     def _resolve_library_compounds_for_dialog(self):
         """Return the NIST library compound names for the Add-to-RT-Table dialog.
@@ -931,11 +937,18 @@ class RTTableFrame(QWidget):
             self.rt_table.set_rows(rows)          # guarded — no emit
             self.rt_table_data = self.rt_table.get_dataframe()
             p = method.rt_matching
+            self.enable_checkbox.setChecked(
+                p.enabled if p.enabled is not None else bool(method.rt_table))
             self.matching_mode_combo.setCurrentIndex(p.matching_mode)
             self.tolerance_spin.setValue(p.tolerance)
             self.window_expansion_spin.setValue(p.window_expansion)
             self.high_priority_checkbox.setChecked(p.high_priority)
             self.allow_duplicates_checkbox.setChecked(p.allow_duplicates)
+            # Sliders first (they also refresh their labels), then the exact
+            # weights: the sliders hold whole percent and would round them.
+            self.start_weight_slider.setValue(round(p.weights.start * 100))
+            self.apex_weight_slider.setValue(round(p.weights.apex * 100))
+            self.end_weight_slider.setValue(round(p.weights.end * 100))
             self.normalized_weights = {
                 "start": p.weights.start, "apex": p.weights.apex, "end": p.weights.end,
             }
@@ -945,6 +958,7 @@ class RTTableFrame(QWidget):
             # pure setEnabled() calls (no signals), so no rt_table_changed is emitted.
             has_data = self.rt_table_data is not None and len(self.rt_table_data) > 0
             self._set_settings_enabled(has_data)
+            self._refresh_settings_state()
             self.clear_button.setEnabled(has_data)
             self.export_button.setEnabled(has_data)
             self._update_file_info()
@@ -970,6 +984,7 @@ class RTTableFrame(QWidget):
         """Read the matching widgets back as an RTMatchingParams model."""
         w = getattr(self, "normalized_weights", {"start": 0.25, "apex": 0.50, "end": 0.25})
         return RTMatchingParams(
+            enabled=self.enable_checkbox.isChecked(),
             matching_mode=self.matching_mode_combo.currentIndex(),
             tolerance=self.tolerance_spin.value(),
             window_expansion=self.window_expansion_spin.value(),
