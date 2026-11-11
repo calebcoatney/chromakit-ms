@@ -135,6 +135,9 @@ class AutomationWorker(QRunnable):
                 self.signals.log_message.emit(f"Could not set up detector runs: {e}")
                 self.signals.error.emit(str(e))
                 return
+            # Per-detector runs set the method for every run, so a run with no
+            # method file gets the user's own method, not the previous run's.
+            self._per_detector_runs = runs[0]['explicit']
             selected_detector = getattr(getattr(self.app, 'data_handler', None), 'current_detector', None)
             if selected_detector in (None, '', 'Unknown'):
                 selected_detector = None
@@ -442,7 +445,7 @@ class AutomationWorker(QRunnable):
                     # so we can restore it after the file load
                     status_text = self.app.status_bar.currentMessage()
                     
-                    if method is not None:
+                    if method is not None or getattr(self, '_per_detector_runs', False):
                         self.app.apply_batch_method(method)
 
                     # Load the file (which will update the status bar directly)

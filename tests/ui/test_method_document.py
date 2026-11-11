@@ -342,3 +342,14 @@ def test_params_writeback_preserves_rf_unit_and_normalize(qtbot):
     app._on_params_writeback(app.parameters_frame.current_params)
     assert app.current_method.rf_unit == "area_per_wt_pct"
     assert app.current_method.rf_normalize is False
+
+
+def test_apply_batch_method_none_restores_users_method(qtbot):
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    app.current_method = ChromaMethod(name="mine", signal_type="gc")
+    app._save_method_state_for_batch()
+    app.apply_batch_method(ChromaMethod(name="front", signal_type="gc"))
+    assert app.current_method.name == "front"
+    app.apply_batch_method(None)
+    assert app.current_method.name == "mine"

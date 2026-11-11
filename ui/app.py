@@ -407,8 +407,14 @@ class ChromaKitApp(QMainWindow):
 
         Main thread only. Applies the method's scaling and parameters without
         touching the method file path or the unsaved-changes flag; the user's
-        own method is restored when the batch ends.
+        own method is restored when the batch ends. ``None`` (a run with no
+        method file) means the user's own method, not the previous run's.
         """
+        if method is None:
+            state = getattr(self, '_batch_saved_method_state', None)
+            if state is None:
+                raise RuntimeError("apply_batch_method(None) outside a per-detector batch")
+            method = state[0]
         self.current_method = method.model_copy(deep=True)
         self._sync_scaling_from_method()
         self._apply_method_to_frames()

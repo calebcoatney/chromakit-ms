@@ -153,3 +153,28 @@ def test_load_file_applies_method_then_loads_requested_detector(monkeypatch):
     method = ChromaMethod(name="back", signal_type="gc")
     assert worker._load_file("X.C", detector="FID2B", method=method) is True
     assert events == [('method', 'back'), ('load', 'X.C', True, 'FID2B')]
+
+
+def test_detector_run_without_method_gets_users_method_back(tmp_path, monkeypatch):
+    """A run with a blank method field must not inherit the previous run's method."""
+    methods = tmp_path / "methods"
+    methods.mkdir()
+    m1 = _method_file(methods, "front")
+    _make_c_folders(tmp_path, ["S1"])
+    monkeypatch.setattr(aw.CFolder, "get_available_detectors", lambda self: ['FID1A', 'FID2B'])
+    monkeypatch.setattr(aw.main_thread_dispatcher, "run_on_main_thread", lambda fn: fn())
+    applied = []
+    app = SimpleNamespace(
+        batch_options={'detector_runs': [{'detector': 'FID1A', 'method_path': m1},
+                                         {'detector': 'FID2B', 'method_path': None}]},
+        data_handler=SimpleNamespace(current_detector='FID1A'),
+        status_bar=SimpleNamespace(currentMessage=lambda: ""),
+        on_file_selected=lambda *a, **k: None,
+        apply_batch_method=lambda m: applied.append(m.name if m else None),
+        parameters_frame=SimpleNamespace(get_parameters=lambda: {'peaks': {}}),
+    )
+    worker = AutomationWorker(app, str(tmp_path))
+    monkeypatch.setattr(worker, "_process_and_integrate", lambda: False)  # stop after load
+    worker.run()
+    # None asks the app for the user's own method back.
+    assert applied == ['front', None]
