@@ -9,6 +9,20 @@ from logic.feature import Feature
 
 logger = logging.getLogger(__name__)
 
+
+def _valley_index(values, offset, fallback):
+    """Index of the minimum of ``values``, shifted by ``offset``, ignoring NaN.
+
+    corrected_y and baseline_y are NaN where MS-gated baseline correction
+    masked the signal. A plain argmin returns the first NaN, which drops the
+    valley bound into the masked region and makes the area NaN. Returns
+    ``fallback`` when ``values`` is empty or holds no finite sample.
+    """
+    values = np.asarray(values, dtype=float)
+    if values.size == 0 or not np.any(np.isfinite(values)):
+        return fallback
+    return offset + int(np.nanargmin(values))
+
 class ChromatographicPeak(Feature):
     """Chromatographic peak. Subclass of Feature with RT, MS, and quantitation fields.
 
@@ -756,30 +770,24 @@ class Integrator:
                     # Find the index of the previous peak's x value in the x array
                     start_idx = np.where(x == prev_apex_x)[0][0] if np.any(x == prev_apex_x) else None
                     if start_idx is not None:
+                        # The neighbour may be a range-excluded apex inside the
+                        # MS-gated NaN region, so the valley search skips NaN.
                         if is_negative:
                             # For negative peaks, find the point closest to the baseline
                             # between the previous peak and this one (baseline crossing)
                             segment = bounds_detection_signal[start_idx:peak_idx]
                             baseline_segment = baseline_y[start_idx:peak_idx]
-                            min_left = start_idx + np.argmin(np.abs(segment - baseline_segment))
+                            min_left = _valley_index(np.abs(segment - baseline_segment), start_idx, peak_idx)
                         else:
                             # Use the corrected signal so the valley is found in baseline-corrected
                             # space. On a rising raw baseline argmin would always land at start_idx.
-                            min_left = start_idx + np.argmin(integration_signal[start_idx:peak_idx])
+                            min_left = _valley_index(integration_signal[start_idx:peak_idx], start_idx, peak_idx)
                     else:
                         min_left = 0
                 else:
                     # First peak: slice may include NaN from the MS-gated masked region.
-                    # Use nanargmin and fall back to 0 if the entire slice is NaN or empty.
-                    try:
-                        slice_ = integration_signal[0:peak_idx]
-                        if len(slice_) > 0 and np.any(np.isfinite(slice_)):
-                            min_left = int(np.nanargmin(slice_))
-                        else:
-                            min_left = 0
-                    except (ValueError, TypeError):
-                        # nanargmin raises ValueError on all-NaN slice
-                        min_left = 0
+                    # An all-NaN or empty slice falls back to 0, as before.
+                    min_left = _valley_index(integration_signal[0:peak_idx], 0, 0)
 
                 if next_apex_x is not None:  # If not the last peak
                     # Find the index of the next peak's x value in the x array
@@ -789,9 +797,9 @@ class Integrator:
                             # For negative peaks, find the point closest to the baseline
                             segment = bounds_detection_signal[peak_idx:end_idx]
                             baseline_segment = baseline_y[peak_idx:end_idx]
-                            min_right = peak_idx + np.argmin(np.abs(segment - baseline_segment))
+                            min_right = _valley_index(np.abs(segment - baseline_segment), peak_idx, peak_idx)
                         else:
-                            min_right = peak_idx + np.argmin(integration_signal[peak_idx:end_idx])
+                            min_right = _valley_index(integration_signal[peak_idx:end_idx], peak_idx, peak_idx)
                     else:
                         min_right = len(bounds_detection_signal) - 1
                 else:
