@@ -170,3 +170,30 @@ def test_gate_skips_a_deleted_or_unparented_checkbox(app, capsys):
     window._apply_ms_visibility(True)
     assert not stray.isVisible()                      # never shown as its own window
     assert capsys.readouterr().out.count("WARNING: MS gate skipped") == 2
+
+
+def test_gc_only_file_does_not_inherit_previous_ms_range(app, monkeypatch):
+    # plot_frame.tic_data outlived clear_tic/set_tic_visible(False), and both
+    # process_and_display and the automation fast path read it as the MS range.
+    window, tmp_path = app
+    seen = []
+    orig = window.processor.process
+
+    def spy(x, y, params=None, ms_range=None, profile=None):
+        seen.append(ms_range)
+        return orig(x, y, params, ms_range, profile=profile)
+
+    monkeypatch.setattr(window.processor, "process", spy)
+
+    _load(window, tmp_path, "gcms_a.D")
+    assert seen[-1] is not None          # the final render uses this file's TIC range
+
+    seen.clear()
+    _load(window, tmp_path, "gconly.D")
+    assert seen and all(r is None for r in seen)
+    assert window.plot_frame.tic_data is None      # what the automation fast path reads
+
+    seen.clear()
+    window.process_and_display(window.current_x, window.current_y, new_file=False,
+                               profile=window.current_profile)
+    assert seen == [None]

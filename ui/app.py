@@ -1070,6 +1070,10 @@ class ChromaKitApp(QMainWindow):
             self.data_handler.current_directory_path = folder_path
             self.data_handler.has_ms_data = has_ms_data
             self._apply_ms_visibility(has_ms_data)
+            if not has_ms_data:
+                # The previous file's TIC outlives clear_tic(); process_and_display and the
+                # automation fast path would read it as this file's MS range.
+                self.plot_frame.tic_data = None
             # Load any previously-saved MS time offset from the per-file sidecar.
             # (For .D paths this was already done inside load_data_directory; for
             # .C paths this is the only place it happens. Call is idempotent.)
