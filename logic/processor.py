@@ -564,18 +564,21 @@ class ChromatogramProcessor:
                 peak_metadata = [merged_meta[i] for i in sort_order]
 
         # STEP 5: Range filtering — keep only peaks within user-specified time ranges
-        range_filters = params.get('peaks', {}).get('range_filters', [])
+        # The excluded apexes and the windows are passed on to integration:
+        # an excluded neighbour still marks the valley that bounds a kept
+        # peak, and a kept peak's bounds are clamped to its window.
+        range_filters = [list(rf) for rf in (params.get('peaks', {}).get('range_filters') or []) if len(rf) == 2]
+        range_excluded_x = np.array([])
         if range_filters and len(peaks_x) > 0:
             range_mask = np.zeros(len(peaks_x), dtype=bool)
-            for rf in range_filters:
-                if len(rf) == 2:
-                    rf_start, rf_end = rf
-                    range_mask |= (peaks_x >= rf_start) & (peaks_x <= rf_end)
-            
+            for rf_start, rf_end in range_filters:
+                range_mask |= (peaks_x >= rf_start) & (peaks_x <= rf_end)
+
             filtered_count = len(peaks_x) - np.sum(range_mask)
             if filtered_count > 0:
                 print(f"Range filtering: Removing {filtered_count} peaks outside specified ranges")
-            
+
+            range_excluded_x = peaks_x[~range_mask]
             peaks_x = peaks_x[range_mask]
             peaks_y = peaks_y[range_mask]
             if peak_metadata and len(peak_metadata) > 0:
@@ -590,7 +593,9 @@ class ChromatogramProcessor:
             'corrected_y': baseline_corrected_y,
             'peaks_x': peaks_x,
             'peaks_y': peaks_y,
-            'peak_metadata': peak_metadata
+            'peak_metadata': peak_metadata,
+            'range_filters': range_filters,
+            'range_excluded_peaks_x': range_excluded_x,
         }
     
     def _apply_smoothing(self, y, smoothing_params):

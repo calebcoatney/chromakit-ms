@@ -704,10 +704,26 @@ class Integrator:
                 "Use 1.0 to leave areas unaltered."
             )
 
+        # Neighbouring apexes bound each peak's valley search and overlap
+        # clamp. Peaks dropped by a range filter still count as neighbours:
+        # the valley between a kept peak and an excluded one is a real bound.
+        # Ordered by array index, not value, so descending x-axes (FTIR) work.
+        range_excluded = processed_data.get('range_excluded_peaks_x', [])
+        neighbour_idx = np.unique([
+            int(np.flatnonzero(x == v)[0])
+            for v in np.concatenate([np.asarray(peaks_x), np.asarray(range_excluded)])
+            if np.any(x == v)
+        ]).astype(int)
+        range_filters = processed_data.get('range_filters') or []
+
         # Iterate through each peak for integration
         for i, (apex_x, detected_apex_y) in enumerate(zip(peaks_x, peaks_y)):
             # Find the index of the apex in x and y arrays
             peak_idx = np.where(x == apex_x)[0][0]
+            pos = np.searchsorted(neighbour_idx, peak_idx)
+            prev_apex_x = x[neighbour_idx[pos - 1]] if pos > 0 else None
+            nxt = np.searchsorted(neighbour_idx, peak_idx, side='right')
+            next_apex_x = x[neighbour_idx[nxt]] if nxt < len(neighbour_idx) else None
             baseline_at_apex = baseline_y[peak_idx]
             
             # IMPORTANT: Use the bounds detection signal value at apex for threshold calculation
@@ -736,9 +752,9 @@ class Integrator:
                 right_bound = peak_idx
                 
                 # Define the range for min_left and min_right calculations
-                if i > 0:  # If not the first peak
+                if prev_apex_x is not None:  # If not the first peak
                     # Find the index of the previous peak's x value in the x array
-                    start_idx = np.where(x == peaks_x[i - 1])[0][0] if np.any(x == peaks_x[i - 1]) else None
+                    start_idx = np.where(x == prev_apex_x)[0][0] if np.any(x == prev_apex_x) else None
                     if start_idx is not None:
                         if is_negative:
                             # For negative peaks, find the point closest to the baseline
@@ -765,9 +781,9 @@ class Integrator:
                         # nanargmin raises ValueError on all-NaN slice
                         min_left = 0
 
-                if i < len(peaks_x) - 1:  # If not the last peak
+                if next_apex_x is not None:  # If not the last peak
                     # Find the index of the next peak's x value in the x array
-                    end_idx = np.where(x == peaks_x[i + 1])[0][0] if np.any(x == peaks_x[i + 1]) else None
+                    end_idx = np.where(x == next_apex_x)[0][0] if np.any(x == next_apex_x) else None
                     if end_idx is not None:
                         if is_negative:
                             # For negative peaks, find the point closest to the baseline
@@ -895,16 +911,26 @@ class Integrator:
                     previous_slope = slope
             
             # Clamp bounds to prevent overlap with adjacent peaks
-            if i > 0:
-                prev_peak_idx = np.where(x == peaks_x[i - 1])[0][0] if np.any(x == peaks_x[i - 1]) else None
+            if prev_apex_x is not None:
+                prev_peak_idx = np.where(x == prev_apex_x)[0][0] if np.any(x == prev_apex_x) else None
                 if prev_peak_idx is not None and left_bound <= prev_peak_idx:
                     # Don't extend past the previous peak's apex; use midpoint as boundary
                     left_bound = (prev_peak_idx + peak_idx) // 2
-            if i < len(peaks_x) - 1:
-                next_peak_idx = np.where(x == peaks_x[i + 1])[0][0] if np.any(x == peaks_x[i + 1]) else None
+            if next_apex_x is not None:
+                next_peak_idx = np.where(x == next_apex_x)[0][0] if np.any(x == next_apex_x) else None
                 if next_peak_idx is not None and right_bound >= next_peak_idx:
                     # Don't extend past the next peak's apex; use midpoint as boundary
                     right_bound = (peak_idx + next_peak_idx) // 2
+
+            # Clamp bounds to the range-filter window holding this apex.
+            # Windows may overlap; use their union around the apex.
+            windows = [(s, e) for s, e in range_filters if s <= apex_x <= e]
+            if windows:
+                lo = min(s for s, _ in windows)
+                hi = max(e for _, e in windows)
+                in_window = np.flatnonzero((x >= lo) & (x <= hi))
+                left_bound = max(left_bound, int(in_window.min()))
+                right_bound = min(right_bound, int(in_window.max()))
 
             # Check for problematic case: bounds too close to apex (indicating premature stop)
             if left_bound == peak_idx and right_bound == peak_idx:
