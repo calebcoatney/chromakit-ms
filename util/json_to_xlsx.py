@@ -14,13 +14,11 @@ Updated on Aug  6, 2025 - Added bidirectional functionality for updating JSON fr
 """
 
 import os
-import re
 import sys
 import json
 import copy
 import datetime
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment
 from PySide6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QWidget,
     QPushButton, QLabel, QFileDialog, QTextEdit, QProgressBar,
@@ -32,59 +30,21 @@ from PySide6.QtCore import Qt, QThread, Signal, QSettings, QSize
 from PySide6.QtGui import QFont
 
 
-# ---------------------------------------------------------------------------
-# Default format configuration
-# ---------------------------------------------------------------------------
+from logic.paste_blocks import (
+    DEFAULT_FORMAT_CONFIG,
+    channel_width,
+    get_peak_value,
+    is_unidentified as _is_unidentified,
+    is_unquantitated as _is_unquantitated,
+    parse_timestamp as _parse_timestamp,
+    write_channel_block,
+    write_timestamp_cell,
+)
 
-DEFAULT_FORMAT_CONFIG = {
-    'header_fields': [
-        {'key': 'signal',     'label': 'Signal:',     'enabled': True,  'custom_label': '', 'show_label': False},
-        {'key': 'sample_id',  'label': 'Sample ID:',  'enabled': True,  'custom_label': '', 'show_label': False},
-        {'key': 'timestamp',  'label': 'Timestamp:',  'enabled': True,  'custom_label': '', 'show_label': False},
-        {'key': 'method',     'label': 'Method:',     'enabled': False, 'custom_label': '', 'show_label': False},
-        {'key': 'detector',   'label': 'Detector:',   'enabled': False, 'custom_label': '', 'show_label': False},
-        {'key': 'notebook',   'label': 'Notebook:',   'enabled': False, 'custom_label': '', 'show_label': False},
-    ],
-    'timestamp_format': 'as_stored',
-    'columns': [
-        {'key': 'Compound ID',    'display': 'Compound ID',   'enabled': False, 'custom_name': ''},
-        {'key': 'peak_number',    'display': 'Peak #',        'enabled': True,  'custom_name': ''},
-        {'key': 'retention_time', 'display': 'Ret Time',      'enabled': True,  'custom_name': ''},
-        {'key': 'integrator',     'display': 'Integrator',    'enabled': True,  'custom_name': ''},
-        {'key': 'width',          'display': 'Width',         'enabled': True,  'custom_name': ''},
-        {'key': 'area',           'display': 'Area',          'enabled': True,  'custom_name': ''},
-        {'key': 'start_time',     'display': 'Start Time',    'enabled': True,  'custom_name': ''},
-        {'key': 'end_time',       'display': 'End Time',      'enabled': True,  'custom_name': ''},
-        {'key': 'Qual',           'display': 'Match Score',   'enabled': False, 'custom_name': ''},
-        {'key': 'casno',          'display': 'CAS No',        'enabled': False, 'custom_name': ''},
-        {'key': 'quality_issues', 'display': 'Quality Issues','enabled': False, 'custom_name': ''},
-        {'key': 'mol_C',          'display': 'mol C',         'enabled': False, 'custom_name': ''},
-        {'key': 'mol_C_percent',  'display': 'mol C %',       'enabled': False, 'custom_name': ''},
-        {'key': 'num_carbons',    'display': '# Carbons',     'enabled': False, 'custom_name': ''},
-        {'key': 'mol',            'display': 'mol',           'enabled': False, 'custom_name': ''},
-        {'key': 'mass_mg',        'display': 'mass (mg)',     'enabled': False, 'custom_name': ''},
-        {'key': 'mol_percent',    'display': 'mol %',         'enabled': False, 'custom_name': ''},
-        {'key': 'wt_percent',     'display': 'wt %',          'enabled': False, 'custom_name': ''},
-    ],
-}
 
-# Timestamp parse patterns to try when reformatting
-_TS_PARSE_FMTS = [
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%d %H:%M",
-    "%Y-%m-%dT%H:%M:%S",
-    "%Y-%m-%dT%H:%M:%S.%f",
-    "%d %b %y  %I:%M %p",
-    "%d %b %y %I:%M %p",
-    "%d %b %Y %I:%M %p",
-    "%d-%b-%y %H:%M:%S",
-    "%m/%d/%Y %H:%M:%S",
-    "%d %b %y  %H:%M",
-    "%d %b %y %H:%M",
-    "%d/%m/%Y %H:%M:%S",
-    "%d/%m/%Y %H:%M",
-    "%Y-%m-%d",
-]
+# ---------------------------------------------------------------------------
+# Timestamp format options (the format config itself lives in logic.paste_blocks)
+# ---------------------------------------------------------------------------
 
 # Human-readable label → Excel number-format string (or special token "as_stored").
 # Excel format strings are used directly as cell.number_format, giving native date cells.
@@ -98,11 +58,6 @@ TIMESTAMP_FORMAT_OPTIONS = [
     ("D-MMM-YYYY",          "d-mmm-yyyy"),
     ("DD/MM/YYYY HH:MM",    "dd/mm/yyyy hh:mm"),
 ]
-
-
-# Pattern for auto-generated placeholder compound IDs written by the integrator
-# when no MS assignment is available (e.g. "Unknown (5.234)").
-_UNKNOWN_RT_PATTERN = re.compile(r"Unknown \(\d+\.\d+\)")
 
 
 def _is_inside_c_data_subtree(root_path: str) -> bool:
@@ -123,60 +78,6 @@ def _is_inside_c_data_subtree(root_path: str) -> bool:
     return False
 
 
-def _is_unidentified(peak: dict) -> bool:
-    """Return True when the peak has no real compound assignment.
-
-    A peak is unidentified when its compound_id (or "Compound ID") is None,
-    empty, "unknown" (any case), or matches the "Unknown (RT)" placeholder.
-    """
-    cid = peak.get('compound_id') or peak.get('Compound ID')
-    if not cid:
-        return True
-    cid_str = str(cid).strip()
-    if not cid_str or cid_str.lower() == "unknown":
-        return True
-    if _UNKNOWN_RT_PATTERN.fullmatch(cid_str):
-        return True
-    return False
-
-
-def _is_unquantitated(peak: dict, all_peaks: list) -> bool:
-    """Return True when this peak is missing quantitation results.
-
-    Only meaningful when quantitation was attempted on the file at all.
-    If no peak in *all_peaks* has wt_percent set, we treat the file as
-    not having been quantitated and return False (don't filter).
-    """
-    any_quantitated = any(
-        p.get('wt_percent') is not None
-        for p in all_peaks
-    )
-    if not any_quantitated:
-        return False
-    return peak.get('wt_percent') is None
-
-
-def _parse_timestamp(ts_string: str):
-    """Try to parse *ts_string* using known Agilent patterns and common ISO patterns.
-    Returns a :class:`datetime.datetime` on success, or ``None``."""
-    ts_string = ts_string.strip()
-    if not ts_string:
-        return None
-
-    # Try standard ISO first
-    try:
-        return datetime.datetime.fromisoformat(ts_string)
-    except (ValueError, AttributeError):
-        pass
-
-    for pattern in _TS_PARSE_FMTS:
-        try:
-            return datetime.datetime.strptime(ts_string, pattern)
-        except ValueError:
-            continue
-    return None
-
-
 def format_timestamp(ts_string: str, fmt: str) -> str:
     """Legacy helper: format *ts_string* as a plain string using a strftime *fmt*.
     Falls back to the original string on failure."""
@@ -186,37 +87,6 @@ def format_timestamp(ts_string: str, fmt: str) -> str:
     if dt is not None:
         return dt.strftime(fmt)
     return ts_string
-
-
-def write_timestamp_cell(ws, row: int, col: int, ts_string: str, fmt: str, font):
-    """Write a timestamp to *ws* at (*row*, *col*).
-
-    * ``fmt == 'as_stored'``   → plain string, no number format.
-    * ``fmt`` starts with '%'  → strftime text cell (backward-compat).
-    * anything else            → parse to datetime, write as Excel native date
-                                 with ``cell.number_format = fmt``.
-    """
-    cell = ws.cell(row=row, column=col)
-    cell.font = font
-
-    if fmt == 'as_stored' or not fmt:
-        cell.value = ts_string
-        return cell
-
-    dt = _parse_timestamp(ts_string)
-
-    if fmt.startswith('%'):
-        # strftime string → text cell
-        cell.value = dt.strftime(fmt) if dt else ts_string
-    else:
-        # Excel number-format string → native datetime cell
-        if dt is not None:
-            cell.value = dt
-            cell.number_format = fmt
-        else:
-            cell.value = ts_string  # couldn't parse; write raw
-
-    return cell
 
 
 class ProcessingThread(QThread):
@@ -254,44 +124,6 @@ class ProcessingThread(QThread):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _get_peak_value(self, peak: dict, key: str):
-        """Return the cell value for *key* from a peak dict, with type coercion."""
-        if key == 'quality_issues':
-            # Derived: combine is_saturated / is_convoluted / quality_issues list
-            issues = []
-            if peak.get("is_saturated"):
-                issues.append("Saturated")
-            if peak.get("is_convoluted"):
-                issues.append("Convoluted")
-            raw = peak.get("quality_issues")
-            if raw:
-                if isinstance(raw, list):
-                    issues.extend(raw)
-                else:
-                    issues.append(str(raw))
-            return ", ".join(issues) if issues else ""
-
-        _float_keys = {'retention_time', 'width', 'area', 'start_time', 'end_time',
-                       'Qual', 'mol_C', 'mol_C_percent', 'mol', 'mass_mg',
-                       'mol_percent', 'wt_percent'}
-        _int_keys = {'peak_number', 'num_carbons'}
-
-        # 'Compound ID' in the config maps to 'compound_id' in serialized peak dicts
-        if key == 'Compound ID':
-            raw = peak.get('Compound ID') or peak.get('compound_id')
-        else:
-            raw = peak.get(key)
-        if raw is None:
-            return ""
-        try:
-            if key in _int_keys:
-                return int(raw)
-            if key in _float_keys:
-                return round(float(raw), 4)
-        except (ValueError, TypeError):
-            pass
-        return raw
-
     # ------------------------------------------------------------------
     # Main conversion
     # ------------------------------------------------------------------
@@ -308,21 +140,8 @@ class ProcessingThread(QThread):
         ws = wb.active
         ws.title = "Chromatograms"
 
-        header_font = Font(bold=True, size=12)
-        subheader_font = Font(bold=True, size=10)
-        quality_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-
         cfg = self.format_config
-        enabled_headers = [h for h in cfg['header_fields'] if h['enabled']]
-        enabled_columns = [c for c in cfg['columns'] if c['enabled']]
-        ts_fmt = cfg.get('timestamp_format', 'as_stored')
-        n_cols = len(enabled_columns)
-
-        # Width of a single channel block in columns.
-        # Header rows that show labels occupy 2 cols; peak table occupies n_cols.
-        # We use whichever is wider so nothing overlaps.
-        any_label = any(hf.get('show_label', True) for hf in enabled_headers)
-        channel_width = max(n_cols, 2 if any_label else 1)
+        width = channel_width(cfg)
 
         starting_row = 1
         files_processed = 0
@@ -378,59 +197,15 @@ class ProcessingThread(QThread):
                     with open(json_path, 'r', encoding='utf-8') as f:
                         json_data = json.load(f)
 
-                    current_row = starting_row
-                    col_offset = current_col
+                    next_row, skipped = write_channel_block(
+                        ws, starting_row, current_col, json_data, cfg,
+                        skip_unidentified=self._skip_unidentified,
+                        skip_unquantitated=self._skip_unquantitated)
+                    self._skipped_count += skipped
 
-                    # --- Header fields ---
-                    for hf in enabled_headers:
-                        if hf.get('key') == 'blank_line':
-                            current_row += 1
-                            continue
-                        label = hf['custom_label'].strip() or hf['label']
-                        raw_value = json_data.get(hf['key'], "")
-                        if hf.get('show_label', True):
-                            cell = ws.cell(row=current_row, column=col_offset, value=label)
-                            cell.font = header_font
-                            val_col = col_offset + 1
-                        else:
-                            val_col = col_offset
-
-                        if hf['key'] == 'timestamp' and raw_value:
-                            write_timestamp_cell(ws, current_row, val_col, str(raw_value), ts_fmt, header_font)
-                        else:
-                            cell = ws.cell(row=current_row, column=val_col, value=raw_value)
-                            cell.font = header_font
-                        current_row += 1
-
-                    # --- Peak table column headers (no blank spacer row) ---
-                    for i, col_cfg in enumerate(enabled_columns):
-                        col_name = col_cfg['custom_name'].strip() or col_cfg['display']
-                        cell = ws.cell(row=current_row, column=col_offset + i, value=col_name)
-                        cell.font = subheader_font
-                        cell.alignment = Alignment(horizontal='center')
-                    current_row += 1
-
-                    # --- Peak rows ---
-                    all_peaks = json_data.get("peaks", [])
-                    for peak in all_peaks:
-                        if self._skip_unidentified and _is_unidentified(peak):
-                            self._skipped_count += 1
-                            continue
-                        if self._skip_unquantitated and _is_unquantitated(peak, all_peaks):
-                            self._skipped_count += 1
-                            continue
-                        has_quality_issue = bool(self._get_peak_value(peak, 'quality_issues'))
-                        for i, col_cfg in enumerate(enabled_columns):
-                            value = self._get_peak_value(peak, col_cfg['key'])
-                            ws.cell(row=current_row, column=col_offset + i, value=value)
-                        if has_quality_issue:
-                            for i in range(n_cols):
-                                ws.cell(row=current_row, column=col_offset + i).fill = quality_fill
-                        current_row += 1
-
-                    max_row_in_group = max(max_row_in_group, current_row)
+                    max_row_in_group = max(max_row_in_group, next_row)
                     # Advance to next channel column (+1 for spacer)
-                    current_col += channel_width + 1
+                    current_col += width + 1
                     files_processed += 1
 
                 except Exception as e:
@@ -582,6 +357,11 @@ class JsonToExcelConverter(QDialog):
         # Initialize variables for JSON to Excel
         self.input_directory = initial_directory or ""
         self.output_file = ""
+        # True once the user changes the preset combo (or saves a preset) by hand;
+        # automatic detector matching then leaves the selection alone.
+        self._preset_chosen_by_user = False
+        # Set below, once the UI exists and the last-used format is restored
+        self._format_snapshot = None
 
         # Initialize variables for Excel to JSON
         self.excel_input_file = ""
@@ -591,12 +371,15 @@ class JsonToExcelConverter(QDialog):
 
         # Load last-used format config
         self._load_last_format_config()
+        # Format as restored/applied by code; a later difference means the user edited it
+        self._format_snapshot = self.get_current_format_config()
 
         # Pre-populate directory labels if initial_directory was provided
         if initial_directory:
             self.input_label.setText(initial_directory)
             self.json_dir_label.setText(initial_directory)
             self.log_text.append(f"Pre-loaded directory: {initial_directory}")
+            self._auto_select_preset_for_directory(initial_directory)
             self.update_process_button()
             self.update_json_update_button()
 
@@ -808,6 +591,7 @@ class JsonToExcelConverter(QDialog):
             self.input_label.setText(directory)
             self.log_text.append(f"Selected input directory: {directory}")
             self.update_process_button()
+            self._auto_select_preset_for_directory(directory)
     
     def select_output_file(self):
         """Select output Excel file location."""
@@ -991,6 +775,8 @@ class JsonToExcelConverter(QDialog):
         self.preset_combo = QComboBox()
         self.preset_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         preset_layout.addWidget(self.preset_combo, 1)
+        # `activated` fires only for user picks, not programmatic setCurrentIndex
+        self.preset_combo.activated.connect(self._mark_preset_chosen_by_user)
         load_btn = QPushButton("Load")
         load_btn.clicked.connect(self._load_selected_preset)
         preset_layout.addWidget(load_btn)
@@ -1194,6 +980,72 @@ class JsonToExcelConverter(QDialog):
         for name in sorted(self._get_all_presets().keys()):
             self.preset_combo.addItem(name)
 
+    def _mark_preset_chosen_by_user(self, _index=None):
+        self._preset_chosen_by_user = True
+
+    @staticmethod
+    def _detectors_in_directory(directory: str, max_files: int = 20) -> set:
+        """Detector names found in the first result JSONs under directory.
+
+        Reads the 'detector' key, falling back to the name in 'signal'
+        ("Signal: <sample>\\FID1A.ch"). shortcut: stops after max_files JSONs,
+        so a detector that first appears later in a huge tree is not seen.
+        """
+        found, seen = set(), 0
+        for root, _, files in os.walk(directory):
+            if _is_inside_c_data_subtree(root):
+                continue
+            for name in sorted(files):
+                if not name.endswith('.json') or name.startswith('._') or name == 'manifest.json':
+                    continue
+                if seen >= max_files:
+                    return found
+                seen += 1
+                try:
+                    with open(os.path.join(root, name), 'r', encoding='utf-8') as fh:
+                        data = json.load(fh)
+                except Exception:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                detector = data.get('detector')
+                if not detector:
+                    signal = str(data.get('signal') or '')
+                    base = signal.replace('/', '\\').rsplit('\\', 1)[-1]
+                    detector = base[:-3] if base.lower().endswith('.ch') else ''
+                if detector and detector != 'Unknown':
+                    found.add(str(detector))
+        return found
+
+    def _auto_select_preset_for_directory(self, directory: str):
+        """Select (and apply) the saved preset whose name contains the JSONs' detector.
+
+        Rule: exactly one distinct detector in the directory, and a preset name
+        containing it case-insensitively (first in alphabetical order wins).
+        Presets store only a format config, so the name is the only link.
+        Skipped once the user picked a preset or edited the Format tab by hand
+        (current config differs from the last code-applied snapshot).
+        """
+        if self._preset_chosen_by_user:
+            return
+        if self.get_current_format_config() != self._format_snapshot:
+            return  # Format-tab edits count as a manual choice
+        detectors = self._detectors_in_directory(directory)
+        if len(detectors) != 1:
+            return
+        detector = next(iter(detectors)).lower()
+        presets = self._get_all_presets()
+        for name in sorted(presets):
+            if detector in name.lower():
+                idx = self.preset_combo.findText(name)
+                if idx < 0:
+                    return
+                self.preset_combo.setCurrentIndex(idx)  # programmatic: does not set the flag
+                self._apply_format_config(presets[name])
+                self._format_snapshot = self.get_current_format_config()
+                self.log_text.append(f"Preset '{name}' selected for detector {next(iter(detectors))}.")
+                return
+
     def _save_preset_as(self):
         name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:")
         if not ok or not name.strip():
@@ -1204,6 +1056,7 @@ class JsonToExcelConverter(QDialog):
         self._save_all_presets(presets)
         self._refresh_preset_combo()
         # Select the just-saved preset
+        self._preset_chosen_by_user = True
         idx = self.preset_combo.findText(name)
         if idx >= 0:
             self.preset_combo.setCurrentIndex(idx)

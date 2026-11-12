@@ -3,7 +3,7 @@
 Mirrors the processing parameters from ui/frames/parameters.py and
 the data structures from logic/.
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 # ── Processing param models — canonical definitions live in logic/method.py ──
@@ -17,6 +17,8 @@ from logic.method import (
     NegativePeakParams,
     ShoulderParams,
     IntegrationSubParams,
+    PeakWindow,
+    RiderParams,
 )
 
 
@@ -37,6 +39,10 @@ class ProcessingParams(BaseModel):
     negative_peaks: NegativePeakParams = Field(default_factory=NegativePeakParams)
     shoulders: ShoulderParams = Field(default_factory=ShoulderParams)
     integration: IntegrationSubParams = Field(default_factory=IntegrationSubParams)
+    peak_windows: List[PeakWindow] = Field(default_factory=list)
+    outside_windows: Literal["ignore", "global"] = "ignore"
+    # API callers that omit rider settings keep the old split behaviour.
+    rider: RiderParams = Field(default_factory=lambda: RiderParams(rider_integration='split'))
 
 
 class ProcessRequest(BaseModel):
@@ -208,6 +214,8 @@ class ProcessResponse(BaseModel):
     peaks_x: List[float]
     peaks_y: List[float]
     peak_metadata: List[Dict[str, Any]]
+    # Rider (tail skim) settings, passed back to /api/integrate inside processed_data
+    rider: Optional[Dict[str, Any]] = None
 
 
 class IntegrateResponse(BaseModel):

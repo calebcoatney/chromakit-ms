@@ -8,9 +8,11 @@ from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QRect
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtCore import QRegularExpression
 import html
+import logging
 import numpy as np
 
-from logic.method import GCxGCParams
+from logic.method import GCxGCParams, RiderParams
+from logic.windows import _EDGE_TOL, resolve_break_points, validate_windows
 from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
 
 INFO_ICON = "\u24d8"
@@ -24,6 +26,28 @@ def _fix_table_height(table, rows=3):
               + rows * table.verticalHeader().defaultSectionSize()
               + 2 * table.frameWidth())
     table.setFixedHeight(height)
+
+
+logger = logging.getLogger(__name__)
+
+OVERRIDES_NOTE = "λ etc. set per section in the method file"
+
+
+def _has_override(value):
+    """True if any leaf of an overrides structure is set (not None / empty)."""
+    if isinstance(value, dict):
+        return any(_has_override(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return bool(value)
+    return value is not None
+
+
+def _is_dead(widget):
+    try:
+        widget.isVisible()
+        return False
+    except RuntimeError:  # underlying C++ object deleted by a controls rebuild
+        return True
 
 
 class _TitleHelpIcon(QLabel):
@@ -104,6 +128,7 @@ class ParametersFrame(QWidget):
                 'savgol_polyorder': 1
             },
             'baseline': {
+                'enabled': True,
                 'show_corrected': False,
                 'method': 'arpls',  # Changed from 'asls' to 'arpls'
                 'lambda': 1e4,      # Changed from 1e6 to 1e4
@@ -121,7 +146,7 @@ class ParametersFrame(QWidget):
                 'min_prominence': 1e5,  # Changed from 0.5 to 1e5
                 'min_height': 0.0,
                 'min_width': 0.0,
-                'range_filters': []  # List of [start, end] time ranges
+                'range_filters': []  # Mirror of peak_windows spans (kept for older code paths)
             },
             'peak_splitting': {
                 'splitting_method': 'geometric',
@@ -146,11 +171,16 @@ class ParametersFrame(QWidget):
                 'enabled': False,
                 'sensitivity': 5,
             },
+            'rider': RiderParams().model_dump(),
             'integration': {
                 'peak_groups': []  # List of [start, end] time windows for grouping
             }
         }
         self.current_params['gcxgc'] = GCxGCParams().model_dump()
+        # Per-RT-window parameters. The Peak Range Filters table edits these in place.
+        self.current_params['peak_windows'] = []
+        self.current_params['outside_windows'] = 'ignore'
+        self._overrides_notes = []
         self._ui_mode = None
         
         # Create main layout
@@ -190,6 +220,9 @@ class ParametersFrame(QWidget):
 
         # Add peak grouping controls
         self._init_peak_grouping_controls()
+
+        # Add tail skim controls
+        self._init_tail_skim_controls()
 
         # Add GCxGC controls
         self._init_gcxgc_controls()
@@ -419,6 +452,12 @@ class ParametersFrame(QWidget):
         baseline_group = QGroupBox("Baseline Correction")
         form_layout = QFormLayout(baseline_group)
         
+        # Master switch: off integrates the smoothed signal without baseline subtraction
+        self.baseline_enabled = QCheckBox("Enable Baseline Correction")
+        self.baseline_enabled.setChecked(self.current_params['baseline'].get('enabled', True))
+        self.baseline_enabled.stateChanged.connect(self._on_baseline_toggled)
+        form_layout.addRow(self.baseline_enabled)
+
         # Change the checkbox label and meaning
         self.baseline_show_corrected = QCheckBox("Show Corrected Signal")
         self.baseline_show_corrected.setChecked(self.current_params['baseline']['show_corrected'])
@@ -542,6 +581,7 @@ class ParametersFrame(QWidget):
         
         # Break point controls for segmented baseline fitting
         bp_frame = QFrame()
+        self.break_point_frame = bp_frame
         bp_frame.setFrameStyle(QFrame.Box)
         bp_layout = QVBoxLayout(bp_frame)
         
@@ -565,14 +605,17 @@ class ParametersFrame(QWidget):
         bp_add_btn = QPushButton("+ Add Break Point")
         bp_add_btn.clicked.connect(lambda: self._add_break_point_row())
         for bp in self.current_params['baseline'].get('break_points') or []:
-            self._add_break_point_row(bp['time'], bp.get('tolerance', 0.1), notify=False)
+            self._add_break_point_row(bp['time'], bp.get('tolerance', 0.1), notify=False,
+                                      anchor=bp.get('anchor'))
         bp_layout.addWidget(bp_add_btn)
+        bp_layout.addWidget(self._make_overrides_note())
         
         advanced_layout.addWidget(bp_frame)
 
         form_layout.addRow(self.baseline_advanced_container)
         
         # Add to parameters layout
+        self._update_baseline_controls_state()
         self.section_groups['baseline'] = baseline_group
         self.section_groups['baseline_advanced'] = self.baseline_advanced_container
         self.params_layout.addWidget(baseline_group)
@@ -934,13 +977,60 @@ class ParametersFrame(QWidget):
         add_btn.clicked.connect(lambda: self._add_range_filter_row())
         layout.addWidget(add_btn)
 
+        self.windows_status = QLabel("")
+        self.windows_status.setStyleSheet("color: #b36b00; font-size: 10px;")
+        self.windows_status.setWordWrap(True)
+        self.windows_status.hide()
+        layout.addWidget(self.windows_status)
+        layout.addWidget(self._make_overrides_note())
+
         self.section_groups['range_filters'] = group
         self.params_layout.addWidget(group)
-        for start, end in self.current_params.get('peaks', {}).get('range_filters') or []:
+        params = self.current_params
+        windows = params.get('peak_windows') or []
+        # shortcut: a range_filters-only params dict (no windows) shows its spans as rows; the first
+        # edit turns them into windows. ChromaMethod does this on load and merges overlaps; this does not.
+        spans = ([[w['start'], w['end']] for w in windows] if windows
+                 else params.get('peaks', {}).get('range_filters') or [])
+        for start, end in spans:
             self._add_range_filter_row(start, end, notify=False)
 
-    def _add_range_filter_row(self, start=0.0, end=60.0, notify=True):
-        """Add a new row to the range filter table."""
+    @staticmethod
+    def _new_window(wid, start, end):
+        # Keys left out inherit; ChromaMethod fills the override groups with defaults.
+        return {'id': wid, 'label': '', 'start': start, 'end': end, 'events': []}
+
+    def _make_overrides_note(self):
+        note = QLabel(OVERRIDES_NOTE)
+        note.setStyleSheet("color: #666666; font-size: 10px;")
+        note.setVisible(self._params_have_overrides())
+        self._overrides_notes = [n for n in self._overrides_notes if not _is_dead(n)]
+        self._overrides_notes.append(note)
+        return note
+
+    def _params_have_overrides(self):
+        windows = self.current_params.get('peak_windows') or []
+        breaks = self.current_params.get('baseline', {}).get('break_points') or []
+        return (any(_has_override({k: v for k, v in w.items()
+                                   if k not in ('id', 'label', 'start', 'end')})
+                    for w in windows)
+                or any(_has_override(b.get('overrides')) for b in breaks))
+
+    def _update_overrides_note(self):
+        visible = self._params_have_overrides()
+        self._overrides_notes = [n for n in self._overrides_notes if not _is_dead(n)]
+        for n in self._overrides_notes:
+            n.setVisible(visible)
+
+    def _add_range_filter_row(self, start=None, end=None, notify=True):
+        """Add a new row to the range filter table.
+
+        Defaults to a 1-min span after the last window, or 0-60 when there is none.
+        """
+        if start is None:
+            windows = self.current_params.get('peak_windows') or []
+            last_end = max((w['end'] for w in windows), default=None)
+            start, end = (0.0, 60.0) if last_end is None else (last_end, last_end + 1.0)
         row = self.range_filter_table.rowCount()
         self.range_filter_table.insertRow(row)
 
@@ -966,7 +1056,16 @@ class ParametersFrame(QWidget):
             self._on_range_filters_changed()
 
     def _remove_range_filter_row(self, row):
-        """Remove a row from the range filter table."""
+        """Remove a row (and its window) from the range filter table."""
+        windows = self.current_params['peak_windows']
+        cleared = []
+        if row < len(windows):
+            gone = windows.pop(row)
+            for bp in self.current_params['baseline'].get('break_points') or []:
+                anchor = bp.get('anchor')
+                if anchor and anchor.get('window_id') == gone['id']:
+                    bp['anchor'] = None
+                    cleared.append(bp['time'])
         self.range_filter_table.removeRow(row)
         # Reconnect delete buttons with correct row indices
         for r in range(self.range_filter_table.rowCount()):
@@ -974,18 +1073,101 @@ class ParametersFrame(QWidget):
             if del_btn:
                 del_btn.clicked.disconnect()
                 del_btn.clicked.connect(lambda checked, r=r: self._remove_range_filter_row(r))
+        if cleared:
+            msg = (f"Window '{gone['label'] or gone['id']}' removed; "
+                   f"{len(cleared)} break point(s) detached, kept at "
+                   + ", ".join(f"{t:g}" for t in cleared) + " min")
+            logger.warning(msg)
+            self.windows_status.setText(msg)
+            self.windows_status.show()
+            self._rebuild_break_point_rows()
+        else:
+            self.windows_status.hide()
         self._on_range_filters_changed()
 
     def _on_range_filters_changed(self, _=None):
-        """Collect range filter values and emit parameters_changed."""
-        ranges = []
-        for r in range(self.range_filter_table.rowCount()):
-            start_w = self.range_filter_table.cellWidget(r, 0)
-            end_w = self.range_filter_table.cellWidget(r, 1)
-            if start_w and end_w:
-                ranges.append([start_w.value(), end_w.value()])
-        self.current_params['peaks']['range_filters'] = ranges
+        """Apply the table's spans to peak_windows, or flag an overlap and keep the last valid set."""
+        table = self.range_filter_table
+        old = self.current_params['peak_windows']
+        used = {w['id'] for w in old}
+        proposed = []
+        for r in range(table.rowCount()):
+            start_w, end_w = table.cellWidget(r, 0), table.cellWidget(r, 1)
+            if not (start_w and end_w):
+                continue
+            if r < len(old):
+                w = dict(old[r])
+            else:
+                n = 1
+                while f"w{n}" in used:
+                    n += 1
+                used.add(f"w{n}")
+                w = self._new_window(f"w{n}", 0.0, 0.0)
+            w['start'], w['end'] = start_w.value(), end_w.value()
+            proposed.append(w)
+        for r in range(table.rowCount()):
+            for c in (0, 1):
+                spin = table.cellWidget(r, c)
+                if spin:
+                    spin.setStyleSheet("")
+                    spin.setToolTip("")
+        try:
+            validate_windows(proposed)
+        except ValueError as exc:
+            msg = str(exc)
+            logger.warning("Range edit not applied: %s", msg)
+            for r, w in enumerate(proposed):
+                if f"'{w['id']}'" in msg:
+                    for c in (0, 1):
+                        spin = table.cellWidget(r, c)
+                        spin.setStyleSheet("border: 1px solid red;")
+                        spin.setToolTip(msg)
+            return
+        # Anchored breaks follow their window edge; that move must not land on another break.
+        moved = [dict(bp, time=self._anchored_time(bp, proposed))
+                 for bp in self.current_params['baseline'].get('break_points') or []]
+        try:
+            resolve_break_points(proposed, moved)
+        except ValueError as exc:
+            msg = str(exc)
+            logger.warning("Range edit not applied: %s", msg)
+            for r in range(table.rowCount()):
+                for c in (0, 1):
+                    spin = table.cellWidget(r, c)
+                    spin.setStyleSheet("border: 1px solid red;")
+                    spin.setToolTip(msg)
+            return
+        self.current_params['peak_windows'] = proposed
+        self.current_params['baseline']['break_points'] = moved
+        self._sync_anchored_break_spinboxes()
+        self._sync_range_filter_mirror()
         self.parameters_changed.emit(self.current_params)
+
+    @staticmethod
+    def _anchored_time(bp, windows):
+        """The break's time: its window edge if anchored (as resolve_break_points does), else its own."""
+        anchor = bp.get('anchor')
+        if anchor:
+            for w in windows:
+                if w['id'] == anchor['window_id']:
+                    return float(w['start'] if anchor['edge'] == 'start' else w['end'])
+        return bp['time']
+
+    def _sync_anchored_break_spinboxes(self):
+        table = self.break_point_table
+        for r, bp in enumerate(self.current_params['baseline'].get('break_points') or []):
+            spin = table.cellWidget(r, 0)
+            if spin is not None and bp.get('anchor'):
+                spin.blockSignals(True)
+                spin.setValue(bp['time'])
+                spin.blockSignals(False)
+
+    def _sync_range_filter_mirror(self):
+        """peaks.range_filters mirrors the window spans under 'ignore' and is empty under 'global'."""
+        windows = self.current_params['peak_windows']
+        self.current_params['peaks']['range_filters'] = (
+            [[w['start'], w['end']] for w in windows]
+            if self.current_params.get('outside_windows', 'ignore') == 'ignore' else [])
 
     def _init_peak_grouping_controls(self):
         """Initialize peak grouping table UI."""
@@ -1013,6 +1195,89 @@ class ParametersFrame(QWidget):
         self.params_layout.addWidget(group)
         for start, end in self.current_params.get('integration', {}).get('peak_groups') or []:
             self._add_peak_group_row(start, end, notify=False)
+
+    _RIDER_MODES = [("Automatic", "auto"), ("Always skim", "skim"), ("Always split", "split")]
+    _RIDER_MODELS = [("Exponential", "exponential"), ("Tangent", "tangent")]
+    # (attribute, rider key, label, min, max, step, decimals)
+    # Ranges follow logic.method.RiderParams' validation, so a loaded method shows its real value
+    _RIDER_SPINS = [
+        ("skim_height_ratio_spin", "skim_height_ratio", "Height ratio:", 1.0, 100.0, 0.1, 1),
+        ("skim_max_valley_frac_spin", "skim_max_valley_frac", "Max valley fraction:", 0.01, 1.0, 0.05, 2),
+        ("skim_valley_ratio_spin", "skim_valley_ratio", "Valley ratio:", 1.0, 1000.0, 1.0, 1),
+        ("skim_tail_bend_spin", "skim_tail_bend", "Tail bend:", 0.01, 10.0, 0.01, 2),
+    ]
+
+    def _init_tail_skim_controls(self):
+        """Initialize tail skim controls (small peak riding on a larger peak's tail)."""
+        rider = self.current_params['rider']
+        group = QGroupBox("Tail Skim")
+        form = QFormLayout(group)
+
+        info = QLabel("Integrates a small peak on a larger peak's tail above a skim\nbaseline instead of splitting it off the tail.")
+        info.setStyleSheet("color: #666666; font-size: 10px;")
+        form.addRow("", info)
+
+        self.rider_mode_combo = QComboBox()
+        for text, value in self._RIDER_MODES:
+            self.rider_mode_combo.addItem(text, value)
+        self.rider_mode_combo.setCurrentIndex(self.rider_mode_combo.findData(rider['rider_integration']))
+        self.rider_mode_combo.currentIndexChanged.connect(self._on_rider_mode_changed)
+        form.addRow("Mode:", self.rider_mode_combo)
+
+        self.rider_model_combo = QComboBox()
+        for text, value in self._RIDER_MODELS:
+            self.rider_model_combo.addItem(text, value)
+        self.rider_model_combo.setCurrentIndex(self.rider_model_combo.findData(rider['skim_model']))
+        self.rider_model_combo.currentIndexChanged.connect(self._on_rider_model_changed)
+        form.addRow("Skim model:", self.rider_model_combo)
+
+        self.skim_advanced_toggle = QPushButton("\u25b6 Advanced")
+        self.skim_advanced_toggle.setFlat(True)
+        self.skim_advanced_toggle.setStyleSheet("text-align: left; font-weight: bold;")
+        self.skim_advanced_toggle.clicked.connect(self._toggle_skim_advanced)
+        form.addRow(self.skim_advanced_toggle)
+
+        self.skim_advanced_frame = QFrame()
+        self.skim_advanced_frame.setFrameStyle(QFrame.Box)
+        adv = QFormLayout(self.skim_advanced_frame)
+        for attr, key, label, lo, hi, step, decimals in self._RIDER_SPINS:
+            spin = QDoubleSpinBox()
+            spin.setDecimals(decimals)
+            spin.setRange(lo, hi)
+            spin.setSingleStep(step)
+            spin.setValue(rider[key])
+            spin.valueChanged.connect(lambda v, k=key: self._on_rider_value_changed(k, v))
+            setattr(self, attr, spin)
+            adv.addRow(label, spin)
+        self.skim_advanced_frame.setToolTip("Applies in Automatic mode only")
+        self.skim_advanced_frame.setVisible(False)
+        form.addRow(self.skim_advanced_frame)
+
+        self._update_skim_controls_state()
+        self.section_groups['tail_skim'] = group
+        self.params_layout.addWidget(group)
+
+    def _update_skim_controls_state(self):
+        # Thresholds only matter when the rule decides split vs skim.
+        self.skim_advanced_frame.setEnabled(self.current_params['rider']['rider_integration'] == 'auto')
+
+    def _on_rider_mode_changed(self, _index):
+        self.current_params['rider']['rider_integration'] = self.rider_mode_combo.currentData()
+        self._update_skim_controls_state()
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_rider_model_changed(self, _index):
+        self.current_params['rider']['skim_model'] = self.rider_model_combo.currentData()
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_rider_value_changed(self, key, value):
+        self.current_params['rider'][key] = value
+        self.parameters_changed.emit(self.current_params)
+
+    def _toggle_skim_advanced(self):
+        visible = not self.skim_advanced_frame.isVisible()
+        self.skim_advanced_frame.setVisible(visible)
+        self.skim_advanced_toggle.setText("\u25bc Advanced" if visible else "\u25b6 Advanced")
 
     def _add_peak_group_row(self, start=0.0, end=60.0, notify=True):
         """Add a new row to the peak grouping table."""
@@ -1061,7 +1326,7 @@ class ParametersFrame(QWidget):
         self.current_params['integration']['peak_groups'] = groups
         self.parameters_changed.emit(self.current_params)
 
-    def _add_break_point_row(self, time=0.0, tolerance=0.1, notify=True):
+    def _add_break_point_row(self, time=0.0, tolerance=0.1, notify=True, anchor=None):
         """Add a new row to the break point table."""
         row = self.break_point_table.rowCount()
         self.break_point_table.insertRow(row)
@@ -1071,6 +1336,12 @@ class ParametersFrame(QWidget):
         time_spin.setRange(0, 9999)
         time_spin.setValue(time)
         time_spin.valueChanged.connect(self._on_break_points_changed)
+        if anchor:
+            by_id = {w['id']: w for w in self.current_params.get('peak_windows') or []}
+            win = by_id.get(anchor['window_id'], {})
+            label = win.get('label') or anchor['window_id']
+            time_spin.setEnabled(False)
+            time_spin.setToolTip(f"Follows window '{label}' {anchor['edge']}")
         self.break_point_table.setCellWidget(row, 0, time_spin)
 
         tol_spin = QDoubleSpinBox()
@@ -1089,7 +1360,10 @@ class ParametersFrame(QWidget):
             self._on_break_points_changed()
 
     def _remove_break_point_row(self, row):
-        """Remove a row from the break point table."""
+        """Remove a row (and its break point) from the break point table."""
+        bps = self.current_params['baseline'].get('break_points') or []
+        if row < len(bps):
+            del bps[row]
         self.break_point_table.removeRow(row)
         for r in range(self.break_point_table.rowCount()):
             del_btn = self.break_point_table.cellWidget(r, 2)
@@ -1099,15 +1373,45 @@ class ParametersFrame(QWidget):
         self._on_break_points_changed()
 
     def _on_break_points_changed(self, _=None):
-        """Collect break point values and emit parameters_changed."""
+        """Update break point times and tolerances; overrides and anchors stay as loaded."""
+        old = self.current_params['baseline'].get('break_points') or []
         bps = []
         for r in range(self.break_point_table.rowCount()):
             time_w = self.break_point_table.cellWidget(r, 0)
             tol_w = self.break_point_table.cellWidget(r, 1)
             if time_w and tol_w:
-                bps.append({'time': time_w.value(), 'tolerance': tol_w.value()})
+                bp = dict(old[r]) if r < len(old) else {}
+                bp['time'], bp['tolerance'] = time_w.value(), tol_w.value()
+                bps.append(bp)
+        table = self.break_point_table
+        for r in range(table.rowCount()):
+            for c in (0, 1):
+                spin = table.cellWidget(r, c)
+                if spin:
+                    spin.setStyleSheet("")
+                    if not (c == 0 and not spin.isEnabled()):  # keep the anchor tooltip
+                        spin.setToolTip("")
+        try:
+            resolve_break_points(self.current_params['peak_windows'], bps)
+        except ValueError as exc:
+            msg = str(exc)
+            logger.warning("Break point edit not applied: %s", msg)
+            times = [self._anchored_time(bp, self.current_params['peak_windows']) for bp in bps]
+            for r, t in enumerate(times):
+                if any(abs(t - o) < _EDGE_TOL for i, o in enumerate(times) if i != r):
+                    for c in (0, 1):
+                        table.cellWidget(r, c).setStyleSheet("border: 1px solid red;")
+                        table.cellWidget(r, c).setToolTip(msg)
+            return
         self.current_params['baseline']['break_points'] = bps
         self.parameters_changed.emit(self.current_params)
+
+    def _rebuild_break_point_rows(self):
+        """Redraw the break point table from current_params (after an anchor changed)."""
+        self.break_point_table.setRowCount(0)
+        for bp in self.current_params['baseline'].get('break_points') or []:
+            self._add_break_point_row(bp['time'], bp.get('tolerance', 0.1), notify=False,
+                                      anchor=bp.get('anchor'))
 
     def update_lam_visibility(self):
         """Show/hide lambda and fastchrom controls based on the current algorithm"""
@@ -1265,6 +1569,23 @@ class ParametersFrame(QWidget):
             self.savgol_polyorder_spinbox.setValue(value)
             self.savgol_polyorder_spinbox.blockSignals(False)
         self.current_params['smoothing']['savgol_polyorder'] = value
+        self.parameters_changed.emit(self.current_params)
+
+    def _update_baseline_controls_state(self):
+        """Grey out the fit settings while baseline correction is off.
+
+        Show Corrected Signal and the MS baseline button stay live: the first is
+        display-only and the second works on the m/z traces, not this fit.
+        """
+        enabled = self.baseline_enabled.isChecked()
+        for w in (self.baseline_algorithm, self.lam_container, self.fastchrom_container,
+                  self.baseline_offset_input, self.break_point_frame):
+            w.setEnabled(enabled)
+
+    def _on_baseline_toggled(self, state):
+        """Handle baseline correction enable/disable toggle"""
+        self.current_params['baseline']['enabled'] = bool(state)
+        self._update_baseline_controls_state()
         self.parameters_changed.emit(self.current_params)
 
     def _on_baseline_display_toggled(self, state):
@@ -1854,6 +2175,9 @@ class ParametersFrame(QWidget):
             if item.widget():
                 item.widget().hide()
                 item.widget().deleteLater()
+        # The app adds this checkbox to the baseline section after an MS baseline
+        # correction; it goes with the old section, and the app recreates it on the next one.
+        self.use_corrected_ms_data_check = None
 
         # Rebuild title
         parameters_label = QLabel("Integration Parameters")
@@ -1869,6 +2193,7 @@ class ParametersFrame(QWidget):
         self._init_shoulder_controls()
         self._init_range_filter_controls()
         self._init_peak_grouping_controls()
+        self._init_tail_skim_controls()
         self._init_gcxgc_controls()
         self._apply_help_icons()
         self.params_layout.addStretch()

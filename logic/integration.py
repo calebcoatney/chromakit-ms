@@ -6,8 +6,23 @@ from scipy.stats import skew
 import pandas as pd
 
 from logic.feature import Feature
+from logic.tail_skim import classify_riders, demote, plan_skims
 
 logger = logging.getLogger(__name__)
+
+
+def _valley_index(values, offset, fallback):
+    """Index of the minimum of ``values``, shifted by ``offset``, ignoring NaN.
+
+    corrected_y and baseline_y are NaN where MS-gated baseline correction
+    masked the signal. A plain argmin returns the first NaN, which drops the
+    valley bound into the masked region and makes the area NaN. Returns
+    ``fallback`` when ``values`` is empty or holds no finite sample.
+    """
+    values = np.asarray(values, dtype=float)
+    if values.size == 0 or not np.any(np.isfinite(values)):
+        return fallback
+    return offset + int(np.nanargmin(values))
 
 class ChromatographicPeak(Feature):
     """Chromatographic peak. Subclass of Feature with RT, MS, and quantitation fields.
@@ -83,6 +98,16 @@ class ChromatographicPeak(Feature):
         self.wt_percent = None  # Weight percentage
         self.raw_amount = None  # Pre-normalization amount (area / RF); RF-table strategy
         self.composition_percent = None  # normalized % in the method's rf_unit basis
+
+        # Tail-skim fields (None = peak was not skimmed / not evaluated)
+        self.skim_model = None  # str: tail model used
+        self.skim_parent = None  # int: peak_number of the parent peak
+        self.skim_source = None  # str: 'auto' or 'forced'
+        self.area_before_skim = None  # float: area before skim correction
+        self.skimmed_area = None  # float: area removed/added by the skim
+        self.skim_children = None  # list[int]: peak_numbers skimmed off this peak
+        self.skim_decision = None  # dict: decision, parent, hp_hc, hv_hp, hc_hv, tail_bend, failed
+        self.skim_near_threshold = None  # bool: decision was close to a threshold
     
     @property
     def position(self) -> float:
@@ -167,6 +192,24 @@ class ChromatographicPeak(Feature):
         if self.composition_percent is not None:
             d['composition_percent'] = self.composition_percent
 
+        # Tail-skim fields
+        if self.skim_model is not None:
+            d['skim_model'] = self.skim_model
+        if self.skim_parent is not None:
+            d['skim_parent'] = self.skim_parent
+        if self.skim_source is not None:
+            d['skim_source'] = self.skim_source
+        if self.area_before_skim is not None:
+            d['area_before_skim'] = self.area_before_skim
+        if self.skimmed_area is not None:
+            d['skimmed_area'] = self.skimmed_area
+        if self.skim_children is not None:
+            d['skim_children'] = self.skim_children
+        if self.skim_decision is not None:
+            d['skim_decision'] = self.skim_decision
+        if self.skim_near_threshold is not None:
+            d['skim_near_threshold'] = self.skim_near_threshold
+
         return d
 
     @classmethod
@@ -235,6 +278,23 @@ class ChromatographicPeak(Feature):
             peak.raw_amount = d['raw_amount']
         if 'composition_percent' in d:
             peak.composition_percent = d['composition_percent']
+        # Tail-skim fields
+        if 'skim_model' in d:
+            peak.skim_model = d['skim_model']
+        if 'skim_parent' in d:
+            peak.skim_parent = d['skim_parent']
+        if 'skim_source' in d:
+            peak.skim_source = d['skim_source']
+        if 'area_before_skim' in d:
+            peak.area_before_skim = d['area_before_skim']
+        if 'skimmed_area' in d:
+            peak.skimmed_area = d['skimmed_area']
+        if 'skim_children' in d:
+            peak.skim_children = d['skim_children']
+        if 'skim_decision' in d:
+            peak.skim_decision = d['skim_decision']
+        if 'skim_near_threshold' in d:
+            peak.skim_near_threshold = d['skim_near_threshold']
         # Deconvolved spectrum (not emitted by as_dict but may be in API payloads)
         if 'deconvolved_spectrum' in d and d['deconvolved_spectrum'] is not None:
             spec = d['deconvolved_spectrum']
@@ -460,6 +520,13 @@ class Integrator:
         return left_bound, right_bound
     
     @staticmethod
+    def _group_index_span(x, g_start, g_end):
+        """Index span ``(start, end)`` of the peak-group window ``[g_start, g_end]`` on ascending ``x``."""
+        start_idx = max(0, int(np.searchsorted(x, g_start, side='left')))
+        end_idx = min(len(x) - 1, int(np.searchsorted(x, g_end, side='right')) - 1)
+        return start_idx, end_idx
+
+    @staticmethod
     def _apply_peak_grouping(peaks_list, peak_groups, x, y, baseline_y,
                               x_peaks, y_peaks, baseline_peaks,
                               ret_times, integrated_areas, integration_bounds, profile=None):
@@ -524,10 +591,7 @@ class Integrator:
                 apex_rt = peaks_list[best_i].retention_time
             
             # Build start/end indices from the chromatogram arrays
-            start_idx = np.searchsorted(x, g_start, side='left')
-            end_idx = np.searchsorted(x, g_end, side='right') - 1
-            start_idx = max(0, start_idx)
-            end_idx = min(len(x) - 1, end_idx)
+            start_idx, end_idx = Integrator._group_index_span(x, g_start, g_end)
             
             # Create composite Peak
             width = g_end - g_start
@@ -606,6 +670,124 @@ class Integrator:
         return final_peaks, new_x_peaks, new_y_peaks, new_baseline_peaks, new_ret_times, new_areas, new_bounds
     
     @staticmethod
+    def _plan_riders(x, signal, apexes, peaks_x, peak_metadata, processed_data, group_spans):
+        """Split-or-skim calls for every child apex and the skims they resolve to (logic.tail_skim).
+
+        ``apexes`` are the sorted indices of kept and range-excluded apexes; an excluded apex has no
+        metadata. Returns ``(calls, skims)``, both keyed by the child's apex index.
+        """
+        meta_at = {int(np.flatnonzero(x == v)[0]): (peak_metadata[i] if i < len(peak_metadata) else None) or {}
+                   for i, v in enumerate(peaks_x)}
+        negative = {k for k, m in meta_at.items() if m.get('is_negative')}
+        calls = classify_riders(x, signal, apexes, [meta_at.get(int(k), {}) for k in apexes],
+                                processed_data.get('rider'), processed_data.get('peak_windows') or [],
+                                negative, group_spans)
+        return plan_skims(x, signal, calls)
+
+    @staticmethod
+    def _skim_area(x, signal, skim, lo, hi, area_factor):
+        """Area of a rider above its skim curve over ``[lo, hi]`` (inside its span), scaled like every
+        peak. A rider with nothing left above the curve gets 0, with a logged warning."""
+        a = skim.call.a
+        area = simpson(signal[lo:hi + 1] - skim.curve.s[lo - a:hi - a + 1], x=x[lo:hi + 1])
+        if area <= 0:
+            logger.warning("tail skim: peak at %.3f min has no area above its parent's tail; area set to 0",
+                           x[skim.call.child])
+            return 0.0
+        if area_factor:
+            area *= area_factor
+        return abs(area)
+
+    @staticmethod
+    def _net_parent_areas(peaks_list, peak_at, integrated_areas, skims, riders_of, x, signal, area_factor):
+        """Take each reported parent's riders' skim areas off its area, keeping ``integrated_areas`` in step.
+
+        A parent is charged only the part of each rider's skim area (signal above the skim curve) that
+        lies inside its own integrated span, so a parent clamped at a window edge short of its rider
+        is charged less, or nothing. A rider outside every window is not reported but is still skimmed
+        and subtracted (spec, Interface with piecewise methods). Returns
+        ``{parent apex: (area before skim, skimmed area)}``.
+        """
+        totals = {}
+        for parent, riders in riders_of.items():
+            peak = peak_at.get(parent)
+            if peak is None:
+                continue  # parent outside every window: nothing to subtract from
+            skimmed = 0.0
+            for c in riders:
+                lo, hi = max(skims[c].call.a, peak.start_index), min(skims[c].b, peak.end_index)
+                if hi > lo:  # no overlap (or a single sample) holds no area
+                    skimmed += Integrator._skim_area(x, signal, skims[c], lo, hi, area_factor)
+            totals[parent] = (peak.area, skimmed)
+            peak.area = peak.area - skimmed
+            integrated_areas[next(k for k, p in enumerate(peaks_list) if p is peak)] = peak.area
+        return totals
+
+    @staticmethod
+    def _set_skim_fields(peaks_list, calls, skims, riders_of, peak_at, totals):
+        """Tail-skim fields on the reported peaks, with their final peak numbers."""
+        reported = {id(p) for p in peaks_list}
+
+        def number(apex):
+            peak = peak_at.get(apex)
+            return peak.peak_number if peak is not None and id(peak) in reported else None
+
+        for c, call in calls.items():
+            peak = peak_at.get(c)
+            if peak is None:
+                continue
+            ratios = {k: float(v) if np.isfinite(v) else None for k, v in call.ratios.items()}
+            peak.skim_decision = {'decision': call.decision, 'parent': number(call.parent), **ratios,
+                                  'failed': list(call.failed)}
+            peak.skim_near_threshold = bool(call.near_threshold)
+            if c in skims:
+                peak.skim_model = skims[c].curve.model
+                peak.skim_parent = number(call.parent)
+                peak.skim_source = call.source
+        for parent, (before, skimmed) in totals.items():
+            peak = peak_at[parent]
+            peak.area_before_skim = before
+            peak.skimmed_area = skimmed
+            peak.skim_children = [number(c) for c in riders_of[parent] if number(c) is not None]
+
+    @staticmethod
+    def _shade_arrays(peaks_list, y_peaks, baseline_peaks, corrected, skims, riders_of, peak_at, signal):
+        """Top and floor of each peak's shaded area, in corrected space and aligned with ``x_peaks``.
+
+        A rider's floor is its skim curve; a parent's top is the signal with its riders' skim curves
+        put in under them. Every other peak is its integrated signal over a zero floor.
+        """
+        tops = [yp if corrected else yp - bp for yp, bp in zip(y_peaks, baseline_peaks)]
+        floors = [np.zeros(len(yp)) for yp in y_peaks]
+        slot = {id(p): k for k, p in enumerate(peaks_list)}
+
+        def under(skim, lo, hi):
+            """The skim curve over ``[lo, hi]`` clipped to its span, as (offset from lo, values)."""
+            a, b = skim.call.a, skim.b
+            s_lo, s_hi = max(a, lo), min(b, hi)
+            if s_hi < s_lo:  # the peak's (clamped) bounds end before the rider starts
+                return 0, skim.curve.s[:0]
+            return s_lo - lo, skim.curve.s[s_lo - a:s_hi - a + 1]
+
+        for c, skim in skims.items():
+            k = slot.get(id(peak_at.get(c)))
+            if k is not None:
+                peak = peaks_list[k]
+                off, s = under(skim, peak.start_index, peak.end_index)
+                floors[k][off:off + len(s)] = s
+        for parent, riders in riders_of.items():
+            k = slot.get(id(peak_at.get(parent)))
+            if k is None:
+                continue
+            peak = peaks_list[k]
+            top = signal[peak.start_index:peak.end_index + 1].copy()
+            for c in riders:
+                off, s = under(skims[c], peak.start_index, peak.end_index)
+                top[off:off + len(s)] = s
+            tops[k] = top
+        return tops, floors
+
+    @staticmethod
     def integrate(processed_data, rt_table=None, area_factor=None, verbose=True, ms_data=None, quality_options=None, peak_groups=None, profile=None):
         """Integrate peaks in a chromatogram.
         
@@ -646,7 +828,9 @@ class Integrator:
                     'retention_times': [],
                     'integrated_areas': [],
                     'integration_bounds': [],
-                    'peaks_list': []
+                    'peaks_list': [],
+                    'shade_top_peaks': [],
+                    'shade_floor_peaks': [],
                 }
         
         # Check if we have peak metadata with shoulder information
@@ -716,30 +900,55 @@ class Integrator:
         ]).astype(int)
         range_filters = processed_data.get('range_filters') or []
 
-        # Iterate through each peak for integration
-        for i, (apex_x, detected_apex_y) in enumerate(zip(peaks_x, peaks_y)):
-            # Find the index of the apex in x and y arrays
-            peak_idx = np.where(x == apex_x)[0][0]
-            pos = np.searchsorted(neighbour_idx, peak_idx)
-            prev_apex_x = x[neighbour_idx[pos - 1]] if pos > 0 else None
-            nxt = np.searchsorted(neighbour_idx, peak_idx, side='right')
-            next_apex_x = x[neighbour_idx[nxt]] if nxt < len(neighbour_idx) else None
-            baseline_at_apex = baseline_y[peak_idx]
-            
-            # IMPORTANT: Use the bounds detection signal value at apex for threshold calculation
-            # This ensures consistency between apex height calculation and integration bounds
-            apex_y = bounds_detection_signal[peak_idx]
-            
-            # Define peak number early for use in verbose output
-            peak_number = i + 1
-            
-            # Check if this peak is a shoulder
-            is_shoulder = peak_idx in shoulder_indices
+        # Tail skim, for chromatographic profiles only (spectral x-axes descend). Riders are worked
+        # out before any bounds: a rider's span is set by its skim, and its parent's bounds ignore it.
+        skim_signal = (integration_signal if integration_signal is processed_data.get('corrected_y')
+                       else integration_signal - baseline_y)
+        group_spans = [Integrator._group_index_span(x, float(g[0]), float(g[1]))
+                       for g in (peak_groups or []) if len(g) == 2]
+        calls, skims = {}, {}
+        if issubclass(feature_cls, ChromatographicPeak):
+            calls, skims = Integrator._plan_riders(x, skim_signal, neighbour_idx, peaks_x, peak_metadata,
+                                                   processed_data, group_spans)
+        riders_of = {}  # parent apex index -> apex indices of its skimmed riders, in RT order
+        for c in sorted(skims):
+            riders_of.setdefault(skims[c].call.parent, []).append(c)
 
-            # Check if this peak is a negative peak
-            is_negative = False
-            if has_shoulder_info and i < len(peak_metadata):
-                is_negative = peak_metadata[i].get('is_negative', False)
+        def clamp_to_window(i, apex_x, left_bound, right_bound):
+            # Clamp bounds to the span allowed for this apex. The processor puts
+            # a per-peak 'clamp' in the metadata (a None side is unbounded).
+            # Processed dicts without one (older API clients) fall back to the
+            # range filters holding the apex; these may overlap, so use their
+            # union. By value, so descending x-axes work.
+            clamp = peak_metadata[i].get('clamp') if i < len(peak_metadata) else None
+            if clamp is None:
+                windows = [(s, e) for s, e in range_filters if s <= apex_x <= e]
+                clamp = ((min(s for s, _ in windows), max(e for _, e in windows))
+                         if windows else (None, None))
+            lo, hi = clamp
+            if lo is not None or hi is not None:
+                lo = -np.inf if lo is None else lo
+                hi = np.inf if hi is None else hi
+                in_window = np.flatnonzero((x >= lo) & (x <= hi))
+                left_bound = max(left_bound, int(in_window.min()))
+                right_bound = min(right_bound, int(in_window.max()))
+            return left_bound, right_bound
+
+        def walk_bounds(i, apex_x, peak_idx, is_shoulder, is_negative, riders):
+            """Bounds of kept peak ``i``: the bound walk, the overlap clamp and the window clamp.
+
+            ``riders`` are the apex indices of this peak's skimmed riders. They are not neighbours for
+            the valley search and the overlap clamp, they do not limit the right bound as shoulders,
+            and the right bound reaches at least the last one's end (spec section 2).
+            """
+            nbrs = np.setdiff1d(neighbour_idx, riders) if riders else neighbour_idx
+            pos = np.searchsorted(nbrs, peak_idx)
+            prev_apex_x = x[nbrs[pos - 1]] if pos > 0 else None
+            nxt = np.searchsorted(nbrs, peak_idx, side='right')
+            next_apex_x = x[nbrs[nxt]] if nxt < len(nbrs) else None
+            # For the narrow-bounds warnings; a shoulder keeps its detected bounds
+            left_stop_reason = right_stop_reason = "shoulder bounds"
+            threshold = apex_vertical_distance = np.nan
 
             # Get bounds based on peak type
             if is_shoulder and peak_idx in shoulder_bounds:
@@ -756,30 +965,24 @@ class Integrator:
                     # Find the index of the previous peak's x value in the x array
                     start_idx = np.where(x == prev_apex_x)[0][0] if np.any(x == prev_apex_x) else None
                     if start_idx is not None:
+                        # The neighbour may be a range-excluded apex inside the
+                        # MS-gated NaN region, so the valley search skips NaN.
                         if is_negative:
                             # For negative peaks, find the point closest to the baseline
                             # between the previous peak and this one (baseline crossing)
                             segment = bounds_detection_signal[start_idx:peak_idx]
                             baseline_segment = baseline_y[start_idx:peak_idx]
-                            min_left = start_idx + np.argmin(np.abs(segment - baseline_segment))
+                            min_left = _valley_index(np.abs(segment - baseline_segment), start_idx, peak_idx)
                         else:
                             # Use the corrected signal so the valley is found in baseline-corrected
                             # space. On a rising raw baseline argmin would always land at start_idx.
-                            min_left = start_idx + np.argmin(integration_signal[start_idx:peak_idx])
+                            min_left = _valley_index(integration_signal[start_idx:peak_idx], start_idx, peak_idx)
                     else:
                         min_left = 0
                 else:
                     # First peak: slice may include NaN from the MS-gated masked region.
-                    # Use nanargmin and fall back to 0 if the entire slice is NaN or empty.
-                    try:
-                        slice_ = integration_signal[0:peak_idx]
-                        if len(slice_) > 0 and np.any(np.isfinite(slice_)):
-                            min_left = int(np.nanargmin(slice_))
-                        else:
-                            min_left = 0
-                    except (ValueError, TypeError):
-                        # nanargmin raises ValueError on all-NaN slice
-                        min_left = 0
+                    # An all-NaN or empty slice falls back to 0, as before.
+                    min_left = _valley_index(integration_signal[0:peak_idx], 0, 0)
 
                 if next_apex_x is not None:  # If not the last peak
                     # Find the index of the next peak's x value in the x array
@@ -789,9 +992,9 @@ class Integrator:
                             # For negative peaks, find the point closest to the baseline
                             segment = bounds_detection_signal[peak_idx:end_idx]
                             baseline_segment = baseline_y[peak_idx:end_idx]
-                            min_right = peak_idx + np.argmin(np.abs(segment - baseline_segment))
+                            min_right = _valley_index(np.abs(segment - baseline_segment), peak_idx, peak_idx)
                         else:
-                            min_right = peak_idx + np.argmin(integration_signal[peak_idx:end_idx])
+                            min_right = _valley_index(integration_signal[peak_idx:end_idx], peak_idx, peak_idx)
                     else:
                         min_right = len(bounds_detection_signal) - 1
                 else:
@@ -867,7 +1070,7 @@ class Integrator:
                 if not is_negative:
                     for s_idx, s_bounds in shoulder_bounds.items():
                         # If shoulder apex is to the right of this peak and its left bound is before this peak's min_right
-                        if s_idx > peak_idx and s_bounds[0] < min_right:
+                        if s_idx > peak_idx and s_bounds[0] < min_right and s_idx not in riders:
                             right_limit_by_shoulder = s_bounds[0]
                 
                 # Calculate the right bound similarly
@@ -922,15 +1125,51 @@ class Integrator:
                     # Don't extend past the next peak's apex; use midpoint as boundary
                     right_bound = (peak_idx + next_peak_idx) // 2
 
-            # Clamp bounds to the range-filter window holding this apex.
-            # Windows may overlap; use their union around the apex.
-            windows = [(s, e) for s, e in range_filters if s <= apex_x <= e]
-            if windows:
-                lo = min(s for s, _ in windows)
-                hi = max(e for _, e in windows)
-                in_window = np.flatnonzero((x >= lo) & (x <= hi))
-                left_bound = max(left_bound, int(in_window.min()))
-                right_bound = min(right_bound, int(in_window.max()))
+            if riders:
+                right_bound = max(right_bound, max(skims[c].b for c in riders))
+            left_bound, right_bound = clamp_to_window(i, apex_x, left_bound, right_bound)
+            return left_bound, right_bound, (left_stop_reason, right_stop_reason, threshold,
+                                             apex_vertical_distance)
+
+        # Iterate through each peak for integration
+        peak_at = {}  # apex index -> its peak, for the skim fields and shading
+        for i, (apex_x, detected_apex_y) in enumerate(zip(peaks_x, peaks_y)):
+            # Find the index of the apex in x and y arrays
+            peak_idx = np.where(x == apex_x)[0][0]
+            baseline_at_apex = baseline_y[peak_idx]
+            
+            # IMPORTANT: Use the bounds detection signal value at apex for threshold calculation
+            # This ensures consistency between apex height calculation and integration bounds
+            apex_y = bounds_detection_signal[peak_idx]
+            
+            # Define peak number early for use in verbose output
+            peak_number = i + 1
+            
+            # Check if this peak is a shoulder
+            is_shoulder = peak_idx in shoulder_indices
+
+            # Check if this peak is a negative peak
+            is_negative = False
+            if has_shoulder_info and i < len(peak_metadata):
+                is_negative = peak_metadata[i].get('is_negative', False)
+
+            skim = skims.get(int(peak_idx))
+            if skim is not None:
+                # A rider: its span is the skim's (spec section 3); no bound walk, no overlap clamp
+                left_bound, right_bound = clamp_to_window(i, apex_x, skim.call.a, skim.b)
+                stop_info = ("tail skim", "tail skim", np.nan, np.nan)
+            else:
+                riders = riders_of.get(int(peak_idx), [])
+                left_bound, right_bound, stop_info = walk_bounds(i, apex_x, peak_idx, is_shoulder,
+                                                                 is_negative, riders)
+                if riders and any(s <= right_bound and e >= left_bound for s, e in group_spans):
+                    # A peak-group window overlaps the parent: it and its riders fall back to split
+                    for c in riders_of.pop(int(peak_idx)):
+                        calls[c] = demote(calls[c], x[c], "a peak-group window overlaps its parent")
+                        del skims[c]
+                    left_bound, right_bound, stop_info = walk_bounds(i, apex_x, peak_idx, is_shoulder,
+                                                                     is_negative, [])
+            left_stop_reason, right_stop_reason, threshold, apex_vertical_distance = stop_info
 
             # Check for problematic case: bounds too close to apex (indicating premature stop)
             if left_bound == peak_idx and right_bound == peak_idx:
@@ -991,6 +1230,10 @@ class Integrator:
             # even for non-negative peaks due to integration direction
             area = abs(area)
 
+            if skim is not None:
+                # A rider's area is what lies above its skim curve (spec section 5)
+                area = Integrator._skim_area(x, skim_signal, skim, left_bound, right_bound, area_factor)
+
             # Store integrated area and bounds
             integrated_areas.append(area)
             integration_bounds.append((x[left_bound], x[right_bound]))
@@ -1029,6 +1272,11 @@ class Integrator:
             # Add negative peak flag
             if is_negative:
                 peak.is_negative = True
+
+            # Record which RT window the peak belongs to (not exported yet)
+            peak.window_id = None
+            if has_shoulder_info and i < len(peak_metadata):
+                peak.window_id = peak_metadata[i].get('window_id')
             
             # Assess peak quality if MS data is available and quality checks are enabled
             if ms_data is not None and quality_options and quality_options.get('quality_checks_enabled', False):
@@ -1045,9 +1293,21 @@ class Integrator:
                 
                 if quality['spectral_coherence'] is not None and quality_options.get('coherence_check', False) and quality['spectral_coherence'] < quality_options.get('coherence_threshold', 0.7):
                     peak.quality_issues.append(f"Low coherence ({quality['spectral_coherence']:.2f})")
-            
+
+            if skim is not None and area == 0:
+                peak.quality_issues.append("Skim: no area above parent tail")
+            peak_at[int(peak_idx)] = peak
             peaks_list.append(peak)
+
+        # Parents are integrated whole, then their riders' areas are taken off
+        skim_totals = Integrator._net_parent_areas(peaks_list, peak_at, integrated_areas, skims, riders_of,
+                                                   x, skim_signal, area_factor)
         
+        # Per-window events (registry is empty in phase 1; handlers must keep
+        # the peak count so the parallel lists below stay aligned)
+        from logic.window_events import apply_window_events
+        peaks_list = apply_window_events(peaks_list, processed_data)
+
         # Apply peak grouping if specified
         if peak_groups and len(peak_groups) > 0 and len(peaks_list) > 0:
             peaks_list, x_peaks, y_peaks, baseline_peaks, ret_times, integrated_areas, integration_bounds = \
@@ -1058,6 +1318,12 @@ class Integrator:
                     ret_times, integrated_areas, integration_bounds,
                     profile=profile
                 )
+
+        # Skim fields carry the final peak numbers, so they are set after grouping
+        Integrator._set_skim_fields(peaks_list, calls, skims, riders_of, peak_at, skim_totals)
+        shade_top_peaks, shade_floor_peaks = Integrator._shade_arrays(
+            peaks_list, y_peaks, baseline_peaks, integration_signal is processed_data.get('corrected_y'),
+            skims, riders_of, peak_at, skim_signal)
 
         if verbose:
             # Use the feature class's own headers/rows so the summary works for
@@ -1087,7 +1353,9 @@ class Integrator:
             'retention_times': ret_times,
             'integrated_areas': integrated_areas,
             'integration_bounds': integration_bounds,
-            'peaks_list': peaks_list
+            'peaks_list': peaks_list,
+            'shade_top_peaks': shade_top_peaks,
+            'shade_floor_peaks': shade_floor_peaks,
         }
 
 def assess_peak_quality(peak, x, y, ms_data=None, options=None):

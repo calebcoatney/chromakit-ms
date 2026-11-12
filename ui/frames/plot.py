@@ -70,6 +70,9 @@ class PlotFrame(QWidget):
         self.chromatogram_data = None
         self.tic_data = None
         self.ms_time_offset: float = 0.0
+        # Signal mode of the last chromatogram plot. Switching it changes the y extent
+        # (raw ~ baseline height vs corrected ~ 0), so the old view limits no longer fit.
+        self._show_corrected = False
         
         # Replace existing mouse click connection with new connections
         self.canvas.mpl_connect('button_press_event', self._on_plot_click)
@@ -225,7 +228,7 @@ class PlotFrame(QWidget):
             
             # Restore chromatogram data if available
             if hasattr(self, 'chromatogram_data') and self.chromatogram_data is not None:
-                self.plot_chromatogram(self.chromatogram_data, new_file=False)
+                self.plot_chromatogram(self.chromatogram_data, show_corrected=self._show_corrected, new_file=False)
             
             self.figure.tight_layout()
             self.canvas.draw_idle()
@@ -272,6 +275,12 @@ class PlotFrame(QWidget):
         previous_xlim = self.chromatogram_ax.get_xlim() if not x_was_autoscaled else None
         previous_ylim = self.chromatogram_ax.get_ylim() if not y_was_autoscaled else None
         
+        # set_ylim() turns autoscale off, so a replot cannot tell "user
+        # zoomed" from "we fitted it last time". Compare the signal mode explicitly: a
+        # switch between raw and corrected needs a fresh full view, not the old limits.
+        mode_changed = show_corrected != self._show_corrected
+        self._show_corrected = show_corrected
+
         # Clear any existing peak highlights
         self._clear_peak_highlights()
         
@@ -411,7 +420,8 @@ class PlotFrame(QWidget):
         
         # Only calculate and apply new view limits for new files
         # or if previous limits weren't set
-        if new_file or previous_xlim is None or previous_ylim is None:
+        refit_view = new_file or mode_changed or previous_xlim is None or previous_ylim is None
+        if refit_view:
             if len(x) > 0 and len(main_y) > 0:
                 x_min, x_max = np.min(x), np.max(x)
                 x_padding = (x_max - x_min) * 0.02  # 2% padding
@@ -462,6 +472,9 @@ class PlotFrame(QWidget):
                 # If TIC plot exists, sync x limits for new files
                 if new_file and hasattr(self, 'tic_ax') and self.tic_ax is not None:
                     self.tic_ax.set_xlim(x_full_range)
+            # The toolbar's view stack still holds the previous extent; Home would
+            # restore it. Drop it so the fitted view above becomes Home.
+            self.toolbar.update()
         else:
             # Restore previous view limits for parameter changes
             self.chromatogram_ax.set_xlim(previous_xlim)
@@ -873,12 +886,11 @@ class PlotFrame(QWidget):
                     
                     showing_corrected = self.chromatogram_ax.get_title() == 'Baseline-Corrected Chromatogram'
                     
-                    if showing_corrected:
-                        shade_y = self.y_peaks[i]
-                        shade_baseline = np.zeros_like(self.baseline_peaks[i])
-                    else:
-                        shade_y = self.y_peaks[i] + self.baseline_peaks[i] 
-                        shade_baseline = self.baseline_peaks[i]
+                    offset = 0.0 if showing_corrected else self.baseline_peaks[i]
+                    top = getattr(self, 'shade_top_peaks', self.y_peaks)
+                    floor = getattr(self, 'shade_floor_peaks', None)
+                    shade_y = top[i] + offset
+                    shade_baseline = (floor[i] if floor is not None else 0.0) + offset
                     
                     collection = self.chromatogram_ax.fill_between(
                         self.x_peaks[i],
@@ -919,6 +931,10 @@ class PlotFrame(QWidget):
         self.x_peaks = integration_results.get('x_peaks', [])
         self.y_peaks = integration_results.get('y_peaks', [])
         self.baseline_peaks = integration_results.get('baseline_peaks', [])
+        # Older results (deconvolution, cached) lack the skim shading arrays
+        self.shade_top_peaks = integration_results.get('shade_top_peaks', self.y_peaks)
+        self.shade_floor_peaks = integration_results.get(
+            'shade_floor_peaks', [np.zeros_like(y) for y in self.y_peaks])
         
         # Store current limits before clearing
         xlim = self.chromatogram_ax.get_xlim() if not self.chromatogram_ax.get_autoscalex_on() else None
@@ -966,16 +982,16 @@ class PlotFrame(QWidget):
                 linewidth = 0
                 edgecolor = None
             
-            # Shade the peak area - adjust shading based on view mode
-            if showing_corrected:
-                # For corrected view: Use the stored y_peaks and zero baseline 
-                shade_y = self.y_peaks[i]
-                shade_baseline = np.zeros_like(self.baseline_peaks[i])
-            else:
-                # For uncorrected view: Adjust y_peaks back to raw signal
-                shade_y = self.y_peaks[i] + self.baseline_peaks[i] 
-                shade_baseline = self.baseline_peaks[i]
-            
+            # Shade the peak area: top/floor are in corrected space; raw view adds the baseline back
+            offset = 0.0 if showing_corrected else self.baseline_peaks[i]
+            shade_y = self.shade_top_peaks[i] + offset
+            shade_baseline = self.shade_floor_peaks[i] + offset
+
+            if getattr(peak, 'skim_model', None) is not None:  # a rider, its parent reported or not
+                line, = self.chromatogram_ax.plot(
+                    self.x_peaks[i], shade_baseline, linestyle='--', color='crimson', linewidth=1.4)
+                line.is_skim_line = True
+
             collection = self.chromatogram_ax.fill_between(
                 self.x_peaks[i],
                 shade_y,
@@ -1044,6 +1060,9 @@ class PlotFrame(QWidget):
             delattr(self, 'y_peaks')
         if hasattr(self, 'baseline_peaks'):
             delattr(self, 'baseline_peaks')
+        for name in ('shade_top_peaks', 'shade_floor_peaks'):
+            if hasattr(self, name):
+                delattr(self, name)
     
     def set_tic_data(self, x, y):
         """Store the TIC data without plotting it."""
@@ -1052,7 +1071,8 @@ class PlotFrame(QWidget):
     def set_ms_time_offset(self, offset_min: float) -> None:
         """Store the active MS time offset and refresh the TIC legend."""
         self.ms_time_offset = float(offset_min)
-        if self.tic_data is not None and len(self.tic_data.get('x', [])) > 0:
+        # tic_ax is None while a GC-only file hides the TIC; the previous file's tic_data lingers
+        if self.tic_ax is not None and self.tic_data is not None and len(self.tic_data.get('x', [])) > 0:
             self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
 
     def set_tic_visible(self, visible: bool):
@@ -1075,7 +1095,7 @@ class PlotFrame(QWidget):
                     self.chromatogram_ax = self.figure.add_subplot(212, sharex=self.tic_ax)
 
                     if self.chromatogram_data is not None:
-                        self.plot_chromatogram(self.chromatogram_data, new_file=False)
+                        self.plot_chromatogram(self.chromatogram_data, show_corrected=self._show_corrected, new_file=False)
                     if self.tic_data is not None and len(self.tic_data['x']) > 0:
                         self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
 
@@ -1104,7 +1124,7 @@ class PlotFrame(QWidget):
                 
                 # Restore the original data
                 if self.chromatogram_data is not None:
-                    self.plot_chromatogram(self.chromatogram_data, new_file=False)
+                    self.plot_chromatogram(self.chromatogram_data, show_corrected=self._show_corrected, new_file=False)
                 
                 # Restore original view limits
                 self.chromatogram_ax.set_xlim(chromatogram_xlim)
@@ -1132,7 +1152,7 @@ class PlotFrame(QWidget):
                     
                     # Restore the plots
                     if self.chromatogram_data is not None:
-                        self.plot_chromatogram(self.chromatogram_data, new_file=False)
+                        self.plot_chromatogram(self.chromatogram_data, show_corrected=self._show_corrected, new_file=False)
                     if self.tic_data is not None and len(self.tic_data['x']) > 0:
                         self.plot_tic(self.tic_data['x'], self.tic_data['y'], new_file=False)
             

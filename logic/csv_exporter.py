@@ -39,12 +39,14 @@ def export_results_to_csv(features: List[Any], filepath: str) -> bool:
             if isinstance(area, Real) and not isinstance(area, bool):
                 row["area"] = int(round(area))
             rows.append(row)
-        headers = list(rows[0].keys())
+        # Optional fields (the tail-skim ones) appear only on some rows: the
+        # header is every row's keys, in first-seen order.
+        headers = list(dict.fromkeys(key for row in rows for key in row))
 
         os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
 
         with open(filepath, mode="w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(fh, fieldnames=headers, extrasaction="ignore")
+            writer = csv.DictWriter(fh, fieldnames=headers)
             writer.writeheader()
             writer.writerows(rows)
 

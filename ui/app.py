@@ -5,8 +5,8 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QLabel, QComboBox, QDialogButtonBox,
     QTabWidget  # Add QTabWidget to imports
 )
-from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer, QSettings, QThread, Signal, QUrl
-from PySide6.QtGui import QIcon, QBrush, QColor, QDesktopServices
+from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer, QSettings, QThread, Signal
+from PySide6.QtGui import QIcon, QBrush, QColor
 from ui.frames.tree import FileTreeFrame
 from ui.frames.plot import PlotFrame
 from ui.frames.parameters import ParametersFrame
@@ -18,6 +18,7 @@ from ui.frames.buttons import ButtonFrame
 from ui.dialogs.automation_dialog import AutomationDialog
 from ui.dialogs.export_settings_dialog import ExportSettingsDialog
 from ui.dialogs.scaling_factors_dialog import ScalingFactorsDialog
+from ui.dialogs.update_dialog import UpdateDialog
 from logic.automation_worker import AutomationWorker
 from logic.processor import ChromatogramProcessor
 from logic.batch_search import BatchSearchWorker
@@ -41,6 +42,37 @@ from logic.data_handler import DataHandler
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resources", "file.ico")
 
 
+def _quality_text(peak):
+    """Peak-table quality text and colour: saturated, then check, then skim, then OK.
+
+    A skim whose other side is outside every window still shows: a rider without a reported parent,
+    a parent whose riders are all unreported.
+    """
+    if getattr(peak, 'is_saturated', False):
+        return "⚠️ SATURATED", QColor(128, 0, 128)
+    if getattr(peak, 'is_convoluted', False):
+        return "⚠️ Check", QColor(255, 0, 0)
+    skim_parent = getattr(peak, 'skim_parent', None)
+    skim_children = getattr(peak, 'skim_children', None)
+    decision = getattr(peak, 'skim_decision', None)
+    text = None
+    if decision is not None and decision.get('decision') == 'split':
+        text = "Split (rule)"
+    elif skim_parent is not None:
+        text = f"Skimmed from #{skim_parent}"
+    elif getattr(peak, 'skim_model', None) is not None:
+        text = "Skimmed (parent not reported)"
+    elif skim_children:
+        text = "Riders: " + ", ".join(f"#{n}" for n in skim_children)
+    elif getattr(peak, 'area_before_skim', None) is not None:
+        text = "Riders: not reported"
+    if text is None:
+        return "OK", QColor(0, 128, 0)
+    if getattr(peak, 'skim_near_threshold', False):
+        text += " · near threshold"
+    return text, QColor(0, 90, 160)
+
+
 class _UpdateCheckThread(QThread):
     """Asks GitHub for the latest release once; emits only when there is a usable answer."""
     found = Signal(str, str)
@@ -61,6 +93,10 @@ class ChromaKitApp(QMainWindow):
         self.resize(1600, 800)
         self.setWindowIcon(QIcon(ICON_PATH))
         
+        # Batch state (set per job by start_batch_processing)
+        self._gc12_records = {}
+        self._batch_cancelled = False
+
         # Initialize processor
         self.processor = ChromatogramProcessor()
         
@@ -75,6 +111,8 @@ class ChromaKitApp(QMainWindow):
         
         # GCxGC mode flags
         self._gcxgc_mode: bool = False
+        self._has_ms_data: bool = True          # set per load by _apply_ms_visibility
+        self._ui_mode: str = "chromatography"   # set per load by set_mode
         self._gcxgc_metadata: dict = {}
         self._gcxgc_proc = None
         self._gcxgc_peaks: list = []
@@ -153,14 +191,20 @@ class ChromaKitApp(QMainWindow):
         # Create status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        # Permanent indicator of the applied method (kept in sync by _update_window_title).
+        self.method_label = QLabel()
+        self.method_label.setAccessibleName("Current method")
+        self.status_bar.addPermanentWidget(self.method_label)
 
         self._last_ms_peak_index = None
         self._deconvolve_ms_run = False
         self._deconv_inspector = None
 
         # ── Document model: current_method is the always-present atom ──────────
-        from logic.method import ChromaMethod
-        self.current_method = ChromaMethod(name="Untitled", signal_type="gc")
+        from logic.method import ChromaMethod, RiderParams
+        # rider passed explicitly: a dict without 'rider' migrates to split (old files),
+        # but a new session defaults to automatic tail skim.
+        self.current_method = ChromaMethod(name="Untitled", signal_type="gc", rider=RiderParams())
         # Seed the freshly-created method's scaling from session defaults (QSettings)
         # so the method is the single source of truth from the start. Store 1.0 as
         # None ("no scaling").
@@ -313,15 +357,19 @@ class ChromaKitApp(QMainWindow):
         from logic.update_check import is_newer
         if not is_newer(version, __version__):
             return
-        self._update_url = url
+        self._update_url, self._update_version = url, version
         if self.update_button is None:
             self.update_button = QPushButton()
-            self.update_button.clicked.connect(
-                lambda: QDesktopServices.openUrl(QUrl(self._update_url)))
+            self.update_button.clicked.connect(self._show_update_dialog)
             self.statusBar().addPermanentWidget(self.update_button)
         self.update_button.setText(f"Update available: v{version}")
-        self.update_button.setToolTip(f"Open the ChromaKit {version} release page")
+        self.update_button.setToolTip(f"How to update to ChromaKit {version}")
         self.update_button.setVisible(True)
+
+    def _show_update_dialog(self) -> None:
+        from logic.update_check import detect_install
+        kind, source_dir = detect_install()
+        UpdateDialog(self._update_version, self._update_url, kind, source_dir, self).exec()
 
     def _apply_method_to_frames(self):
         """Push current_method into each frame, guarded so frame change
@@ -336,6 +384,8 @@ class ChromaKitApp(QMainWindow):
             if self.rf_table_frame is not None:
                 self.rf_table_frame.apply_method(self.current_method)
             self.quantitation_frame.apply_method(self.current_method)
+            # apply_method rebuilt the MS-only widgets visible: gate them for the open file
+            self._apply_ms_visibility(self._has_ms_data)
         finally:
             self._loading_method = False
 
@@ -352,14 +402,40 @@ class ChromaKitApp(QMainWindow):
         if getattr(self, "current_profile", None) is not None:
             title += f"  \u2014  {self.current_profile.display_name}"
         self.setWindowTitle(title)
+        if getattr(self, "method_label", None) is not None:
+            self.method_label.setText(f"Method: {name}{star}")
+            path = getattr(self, "current_method_path", None)
+            self.method_label.setToolTip(str(path) if path else "Not saved")
+
+    def _open_channel(self):
+        """The open file's detector channel, or None when no file is open or it is unknown."""
+        detector = getattr(self.data_handler, "current_detector", None)
+        return detector if detector and detector != "Unknown" else None
+
+    def _stamped_method_copy(self):
+        """A copy of the current method recording the open channel, for saving.
+
+        Batch runs prefill the channel from it. Read from data_handler at save time
+        (not from a batch-swapped method). Keeps the method's detector when no file
+        is open or the channel is unknown. The caller adopts the copy as
+        current_method only after it is written, so a failed save changes nothing.
+        """
+        method = self.current_method.model_copy(deep=True)
+        detector = self._open_channel()
+        if detector:
+            method.detector = detector
+        return method
 
     def save_method(self):
         from pathlib import Path
         if self.current_method_path is None:
             return self.save_method_as()
         try:
-            self.current_method.to_file(self.current_method_path)
+            method = self._stamped_method_copy()
+            method.to_file(self.current_method_path)
+            self.current_method = method
             self._mark_dirty(False)
+            self.status_bar.showMessage(f"Saved method '{self.current_method.name}'; it is now the current method")
         except Exception as e:
             QMessageBox.critical(self, "Save Method Failed", str(e))
 
@@ -372,11 +448,14 @@ class ChromaKitApp(QMainWindow):
         if not path:
             return
         try:
-            self.current_method.name = Path(path).stem
-            self.current_method.to_file(path)
+            method = self._stamped_method_copy()
+            method.name = Path(path).stem
+            method.to_file(path)
+            self.current_method = method
             self.current_method_path = Path(path)
             self._mark_dirty(False)
             self._update_window_title()
+            self.status_bar.showMessage(f"Saved method '{self.current_method.name}'; it is now the current method")
         except Exception as e:
             QMessageBox.critical(self, "Save Method Failed", str(e))
 
@@ -395,12 +474,55 @@ class ChromaKitApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Load Method Failed", str(e))
             return
+        previous_signal_factor = self.signal_factor
         self.current_method = method
         self._sync_scaling_from_method()
         self.current_method_path = Path(path)
         self._apply_method_to_frames()
         self._mark_dirty(False)
         self._update_window_title()
+        self._reapply_method_to_open_file(previous_signal_factor)
+
+    def _reapply_method_to_open_file(self, previous_signal_factor):
+        """After a user-driven method load, bring the open file in line with the method.
+
+        Reloads when the signal factor (applied at load time) changed or the method names
+        another detector present in the file; otherwise reprocesses the loaded data the way
+        a parameter edit does. No-op without an open file. Not used by the batch swaps.
+        """
+        folder = getattr(self, 'current_directory_path', None)
+        if not folder:
+            return
+        method = self.current_method
+        sample = os.path.basename(folder)
+        note = ""
+        detector = None
+        wanted = method.detector
+        if wanted and wanted != self.data_handler.current_detector:
+            available = (self.current_cf.get_available_detectors() if getattr(self, 'current_cf', None) is not None
+                         else self.data_handler.get_available_detectors())
+            if wanted in available:
+                detector = wanted
+            else:
+                note = f"Method detector {wanted} not in this file; showing {self.data_handler.current_detector}. "
+        load_message = ""
+        if detector is not None or self.signal_factor != previous_signal_factor:
+            # A .C load with no detector auto-detects the default channel: name the open one.
+            self.on_file_selected(folder, detector=detector or self._open_channel())   # reloads and reprocesses once
+            if self.current_x is None and not self._gcxgc_mode:
+                return      # the reload failed or was cancelled; keep its message in the status bar
+            # keep the load's own warnings (MS offset active, GCxGC layout ignored)
+            load_message = self.status_bar.currentMessage() + "; "
+        elif self._gcxgc_mode:
+            if self._gcxgc_run is not None:
+                try:
+                    self._apply_gcxgc_layout_from_ui()
+                except ValueError as e:
+                    note += f"GCxGC layout from the method ignored: {e}. "
+                self._render_gcxgc_frames()
+        elif self.current_x is not None and self.current_y is not None:
+            self.process_and_display(self.current_x, self.current_y, new_file=False, profile=self.current_profile)
+        self.status_bar.showMessage(f"{load_message}{note}Applied method '{method.name}' to {sample}")
 
     def apply_batch_method(self, method):
         """Make *method* the active method for one batch detector run.
@@ -812,7 +934,7 @@ class ChromaKitApp(QMainWindow):
         rt_idx = self.right_tabs.indexOf(self.rt_table_frame)
         rf_idx = self.right_tabs.indexOf(self.rf_table_frame)
 
-        self.right_tabs.setTabVisible(ms_idx, is_chrom or is_gcxgc)
+        self._ui_mode = ui_mode
         self.right_tabs.setTabVisible(quant_idx, is_chrom)
         self.right_tabs.setTabVisible(rt_idx, is_chrom)
         self.right_tabs.setTabVisible(rf_idx, is_chrom)
@@ -820,8 +942,10 @@ class ChromaKitApp(QMainWindow):
         if is_gcxgc:
             self.right_tabs.setCurrentIndex(ms_idx)
 
+        # MS tab and MS buttons: one gate decides (GCxGC rules included)
+        self._apply_ms_visibility(self._has_ms_data)
+
         # Hide GCxGC-irrelevant buttons
-        self.button_frame.deconvolve_ms_button.setVisible(not is_gcxgc)
         if hasattr(self.ms_frame, 'inspect_btn'):
             self.ms_frame.inspect_btn.setVisible(not is_gcxgc)
         if hasattr(self.ms_frame, 'spectrum_toggle_btn'):
@@ -835,6 +959,33 @@ class ChromaKitApp(QMainWindow):
         # 5. Forward ui_mode to ParametersFrame for widget visibility
         if hasattr(self.parameters_frame, 'set_mode'):
             self.parameters_frame.set_mode(profile.ui_mode)
+
+    def _apply_ms_visibility(self, has_ms_data: bool) -> None:
+        """The single gate for MS-only UI: hidden (not just disabled) when the file has no MS data.
+
+        GCxGC always has MS, so it keeps the MS tab and MS Search All, but not Deconvolve MS.
+        Enable/disable state (e.g. waiting for integrated peaks) is managed elsewhere.
+        """
+        self._has_ms_data = has_ms_data
+        is_gcxgc = self._ui_mode == "gcxgc"
+        ms_ui = (self._ui_mode in ("chromatography", "gcxgc")) and (has_ms_data or is_gcxgc)
+
+        self.right_tabs.setTabVisible(self.right_tabs.indexOf(self.ms_frame), ms_ui)
+        self.button_frame.batch_search_button.setVisible(ms_ui)
+        self.button_frame.deconvolve_ms_button.setVisible(ms_ui and not is_gcxgc)
+        self.parameters_frame.ms_baseline_button.setVisible(has_ms_data)
+        # created lazily after the first MS baseline correction, which needs MS data.
+        # Never show an unparented checkbox: setVisible(True) would open it as its own window.
+        corrected_check = getattr(self.parameters_frame, 'use_corrected_ms_data_check', None)
+        if corrected_check is not None:
+            try:
+                parented = corrected_check.parent() is not None
+            except RuntimeError:      # its C++ object is already deleted
+                parented = False
+            if parented:
+                corrected_check.setVisible(has_ms_data)
+            else:
+                print("WARNING: MS gate skipped the corrected-MS checkbox: it is deleted or unparented")
 
     @Slot(str)
     def on_directory_opened(self, dir_path):
@@ -963,6 +1114,11 @@ class ChromaKitApp(QMainWindow):
             has_ms_data = data.get('metadata', {}).get('has_ms_data', False)
             self.data_handler.current_directory_path = folder_path
             self.data_handler.has_ms_data = has_ms_data
+            self._apply_ms_visibility(has_ms_data)
+            if not has_ms_data:
+                # The previous file's TIC outlives clear_tic(); process_and_display and the
+                # automation fast path would read it as this file's MS range.
+                self.plot_frame.tic_data = None
             # Load any previously-saved MS time offset from the per-file sidecar.
             # (For .D paths this was already done inside load_data_directory; for
             # .C paths this is the only place it happens. Call is idempotent.)
@@ -1044,10 +1200,6 @@ class ChromaKitApp(QMainWindow):
             if not self._gcxgc_mode:
                 # Show or hide TIC plot based on MS data availability
                 self.plot_frame.set_tic_visible(has_ms_data)
-
-                # Enable or disable MS tab
-                ms_tab_index = self.right_tabs.indexOf(self.ms_frame)
-                self.right_tabs.setTabEnabled(ms_tab_index, has_ms_data)
 
                 # Plot TIC only if MS data is available
                 metadata = data.get('metadata', {})
@@ -2404,6 +2556,9 @@ class ChromaKitApp(QMainWindow):
             classical_processed['peak_metadata'] = [
                 m for m, keep in zip(full_meta, classical_mask) if keep
             ]
+            # Split mode: the merge below renumbers peaks (breaking skim_parent/skim_children) and
+            # drops the skim shading arrays. classical_processed is a copy; processed keeps its rider.
+            classical_processed['rider'] = None
             peak_groups = params.get('integration', {}).get('peak_groups', [])
             classical_results = self.processor.integrate_peaks(
                 processed_data=classical_processed,
@@ -2499,16 +2654,10 @@ class ChromaKitApp(QMainWindow):
                 table.setItem(i, j, item)
             
             # Add quality indicator in the last column
-            if hasattr(peak, 'is_saturated') and peak.is_saturated:
-                quality_item = QTableWidgetItem("⚠️ SATURATED")
-                quality_item.setForeground(QBrush(QColor(128, 0, 128)))  # Purple text
-            elif hasattr(peak, 'is_convoluted') and peak.is_convoluted:
-                quality_item = QTableWidgetItem("⚠️ Check")
-                quality_item.setForeground(QBrush(QColor(255, 0, 0)))  # Red text
-            else:
-                quality_item = QTableWidgetItem("OK")
-                quality_item.setForeground(QBrush(QColor(0, 128, 0)))  # Green text
-            
+            text, color = _quality_text(peak)
+            quality_item = QTableWidgetItem(text)
+            quality_item.setForeground(QBrush(color))
+
             table.setItem(i, len(headers)-1, quality_item)
         
         # Adjust column widths
@@ -2708,7 +2857,12 @@ class ChromaKitApp(QMainWindow):
         # Create and show the automation dialog
         self.automation_dialog = AutomationDialog(self)
         self.automation_dialog.cancelled.connect(self.cancel_automation)
-        
+
+        # Manual overrides are a per-batch opt-in (Batch Job dialog). A finished batch's
+        # options outlive it, and the worker reads them: Automation never opts in.
+        if getattr(self, 'batch_options', None):
+            self.batch_options.pop('apply_manual_overrides', None)
+
         # Create the worker
         self.automation_worker = AutomationWorker(self, parent_dir)
         
@@ -4328,6 +4482,8 @@ class ChromaKitApp(QMainWindow):
         
         # Store options for use during processing
         self.batch_options = options
+        self._gc12_records = {}
+        self._batch_cancelled = False
         if options.get('detector_runs'):
             self._save_method_state_for_batch()
         
@@ -4347,6 +4503,8 @@ class ChromaKitApp(QMainWindow):
         if hasattr(self, 'current_batch_worker') and self.current_batch_worker:
             self.current_batch_worker.cancelled = True
         
+        self._batch_cancelled = True
+
         # Clean up
         self.current_batch_directory = None
         self.batch_directories = []
@@ -4371,6 +4529,7 @@ class ChromaKitApp(QMainWindow):
         if not hasattr(self, 'batch_directories') or not self.batch_directories:
             print("No more directories to process - completing")
             self._restore_method_state_after_batch()
+            self._finish_gc12_workbook()
             self.batch_dialog.complete_processing()
             return
         
@@ -4406,6 +4565,11 @@ class ChromaKitApp(QMainWindow):
         worker.signals.error.connect(
             lambda msg: self.on_batch_directory_error(next_dir, msg)
         )
+
+        worker.signals.run_completed.connect(
+            lambda c_path, detector, ok, msg:
+                self._gc12_records.__setitem__((c_path, detector), (ok, msg))
+        )
         
         # Store reference to the current worker
         self.current_batch_worker = worker
@@ -4419,6 +4583,52 @@ class ChromaKitApp(QMainWindow):
                         self.batch_dialog.directory_status[d]['status'] in ['completed', 'failed', 'skipped']])
         total = len(self.batch_dialog.directory_status)
         self.batch_dialog.update_overall_progress(completed, total)
+
+    def _finish_gc12_workbook(self):
+        """Write the GC1&2 paired workbook once the queue has drained.
+
+        Returns the log line, or None when no workbook was requested. Never
+        raises: the per-channel JSONs are already on disk.
+        """
+        options = self.batch_options
+        path = options.get('gc12_workbook')
+        if not path:
+            return None
+        if self._batch_cancelled:
+            line = "Batch cancelled - GC1&2 workbook not written"
+            self.batch_dialog.add_log_message(line)
+            return line
+        try:
+            from logic import gc12_workbook
+            rows = options.get('gc12_rows', [])
+            tags = options.get('directory_instruments', {})
+            per_instrument = {}
+            for instrument in ("GC1", "GC2"):
+                detectors = [r['detector'] for r in rows if r['instrument'] == instrument]
+                injections = []
+                for folder, tag in tags.items():
+                    if tag == instrument:
+                        injections += gc12_workbook.collect_injections(
+                            folder, instrument, detectors, self._gc12_records)
+                per_instrument[instrument] = injections
+            pairs = gc12_workbook.pair_injections(per_instrument["GC1"], per_instrument["GC2"])
+            summary = gc12_workbook.write_paired_workbook(pairs, path)
+            line = f"GC1&2 workbook written: {path} ({summary.message()})"
+            self.batch_dialog.add_log_message(line)
+            return line
+        except Exception as e:
+            line = f"ERROR writing GC1&2 workbook: {e}"
+            self.batch_dialog.add_log_message(line)
+            self.status_bar.showMessage(line)
+            self._warn_workbook_failed(path, e)
+            return line
+
+    def _warn_workbook_failed(self, path, error):
+        """Tell the user the workbook was not written (tests monkeypatch this)."""
+        QMessageBox.warning(
+            self, "GC1&2 Workbook",
+            f"Could not write the GC1&2 workbook:\n{path}\n\n{error}\n\n"
+            "The per-channel JSON results are saved.")
 
     def on_batch_directory_completed(self, directory, success):
         """Handle completion of a batch directory."""
@@ -4584,20 +4794,19 @@ class ChromaKitApp(QMainWindow):
             # Update status
             self.status_bar.showMessage("MS baseline correction completed. Use the MS options to toggle corrected data.")
             
-            # Add a toggle checkbox to the parameters frame's baseline section
-            if not hasattr(self.parameters_frame, 'use_corrected_ms_data_check'):
-                # Create checkbox to toggle between original and corrected data
-                self.parameters_frame.use_corrected_ms_data_check = QCheckBox("Use Baseline-Corrected MS Data")
-                self.parameters_frame.use_corrected_ms_data_check.setChecked(True)
-                self.parameters_frame.use_corrected_ms_data_check.setToolTip("Toggle between original and baseline-corrected MS data")
-                
-                # Add it to the baseline section of parameters frame
-                baseline_layout = self.parameters_frame.baseline_group.layout()
-                if baseline_layout:
-                    baseline_layout.addWidget(self.parameters_frame.use_corrected_ms_data_check)
-                
+            # Add a toggle checkbox to the parameters frame's baseline section.
+            # ParametersFrame clears the attribute when it rebuilds its controls
+            # (the checkbox is deleted with the old section), so create it again then.
+            if getattr(self.parameters_frame, 'use_corrected_ms_data_check', None) is None:
+                check = QCheckBox("Use Baseline-Corrected MS Data")
+                check.setChecked(True)
+                check.setToolTip("Toggle between original and baseline-corrected MS data")
+                self.parameters_frame.section_groups['baseline'].layout().addRow(check)
+                self.parameters_frame.use_corrected_ms_data_check = check
+
                 # Connect signal to update function
-                self.parameters_frame.use_corrected_ms_data_check.toggled.connect(self._toggle_corrected_ms_data)
+                check.toggled.connect(self._toggle_corrected_ms_data)
+                self._apply_ms_visibility(self._has_ms_data)
             else:
                 # Just make sure it's visible and checked
                 self.parameters_frame.use_corrected_ms_data_check.setVisible(True)
@@ -4774,9 +4983,10 @@ class ChromaKitApp(QMainWindow):
         self.current_method.area_factor = None if area_factor == 1.0 else area_factor
         self._mark_dirty(True)
 
-        # Reload current file so the new signal_factor takes effect immediately.
+        # Reload current file so the new signal_factor takes effect immediately,
+        # on the channel it shows (a .C load with no detector auto-detects the default).
         if hasattr(self, 'current_directory_path') and self.current_directory_path:
-            self.on_file_selected(self.current_directory_path)
+            self.on_file_selected(self.current_directory_path, detector=self._open_channel())
 
     def show_parameter_visibility_dialog(self):
         """Show dialog to configure which parameter sections are visible."""

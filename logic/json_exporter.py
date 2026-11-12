@@ -146,6 +146,10 @@ def _build_processing_metadata(processing_params: Optional[Dict],
         range_filters = pk.get('range_filters', [])
         if range_filters:
             pk_info['range_filters'] = range_filters
+    windows = processing_params.get('peak_windows')
+    if windows:
+        pk_info['peak_windows'] = windows
+        pk_info['outside_windows'] = processing_params.get('outside_windows', 'ignore')
     meta['peak_detection'] = pk_info
 
     # --- Deconvolution (when mode == deconvolution) ---
