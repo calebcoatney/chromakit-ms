@@ -65,7 +65,7 @@ def break_points_ms():
         'enabled': True,
         'method': 'asls',
         'lambda': 1e5,
-        'break_points': [{'time': 4.5, 'tolerance': 0.1}, {'time': 6.5, 'tolerance': 0.1}],
+        'break_points': [{'time': 3.3, 'tolerance': 0.1}, {'time': 5.65, 'tolerance': 0.1}],
     })
     return x, y, params, (1.0, 9.0)
 
@@ -81,7 +81,7 @@ def shoulders_on():
 
 def negative_with_range():
     x, y = _trace(_FIVE + [(4.5, 0.08, -50)], noise=0.05)
-    params = _base_params(range_filters=[[1.0, 9.0]])
+    params = _base_params(range_filters=[[3.0, 7.5]])
     params['negative_peaks'] = {'enabled': True, 'min_prominence': 0.02}
     return x, y, params, None
 
