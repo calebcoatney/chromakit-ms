@@ -886,12 +886,11 @@ class PlotFrame(QWidget):
                     
                     showing_corrected = self.chromatogram_ax.get_title() == 'Baseline-Corrected Chromatogram'
                     
-                    if showing_corrected:
-                        shade_y = self.y_peaks[i]
-                        shade_baseline = np.zeros_like(self.baseline_peaks[i])
-                    else:
-                        shade_y = self.y_peaks[i] + self.baseline_peaks[i] 
-                        shade_baseline = self.baseline_peaks[i]
+                    offset = 0.0 if showing_corrected else self.baseline_peaks[i]
+                    top = getattr(self, 'shade_top_peaks', self.y_peaks)
+                    floor = getattr(self, 'shade_floor_peaks', None)
+                    shade_y = top[i] + offset
+                    shade_baseline = (floor[i] if floor is not None else 0.0) + offset
                     
                     collection = self.chromatogram_ax.fill_between(
                         self.x_peaks[i],
@@ -932,6 +931,10 @@ class PlotFrame(QWidget):
         self.x_peaks = integration_results.get('x_peaks', [])
         self.y_peaks = integration_results.get('y_peaks', [])
         self.baseline_peaks = integration_results.get('baseline_peaks', [])
+        # Older results (deconvolution, cached) lack the skim shading arrays
+        self.shade_top_peaks = integration_results.get('shade_top_peaks', self.y_peaks)
+        self.shade_floor_peaks = integration_results.get(
+            'shade_floor_peaks', [np.zeros_like(y) for y in self.y_peaks])
         
         # Store current limits before clearing
         xlim = self.chromatogram_ax.get_xlim() if not self.chromatogram_ax.get_autoscalex_on() else None
@@ -979,16 +982,16 @@ class PlotFrame(QWidget):
                 linewidth = 0
                 edgecolor = None
             
-            # Shade the peak area - adjust shading based on view mode
-            if showing_corrected:
-                # For corrected view: Use the stored y_peaks and zero baseline 
-                shade_y = self.y_peaks[i]
-                shade_baseline = np.zeros_like(self.baseline_peaks[i])
-            else:
-                # For uncorrected view: Adjust y_peaks back to raw signal
-                shade_y = self.y_peaks[i] + self.baseline_peaks[i] 
-                shade_baseline = self.baseline_peaks[i]
-            
+            # Shade the peak area: top/floor are in corrected space; raw view adds the baseline back
+            offset = 0.0 if showing_corrected else self.baseline_peaks[i]
+            shade_y = self.shade_top_peaks[i] + offset
+            shade_baseline = self.shade_floor_peaks[i] + offset
+
+            if getattr(peak, 'skim_parent', None) is not None:
+                line, = self.chromatogram_ax.plot(
+                    self.x_peaks[i], shade_baseline, linestyle='--', color='crimson', linewidth=1.4)
+                line.is_skim_line = True
+
             collection = self.chromatogram_ax.fill_between(
                 self.x_peaks[i],
                 shade_y,
@@ -1057,6 +1060,9 @@ class PlotFrame(QWidget):
             delattr(self, 'y_peaks')
         if hasattr(self, 'baseline_peaks'):
             delattr(self, 'baseline_peaks')
+        for name in ('shade_top_peaks', 'shade_floor_peaks'):
+            if hasattr(self, name):
+                delattr(self, name)
     
     def set_tic_data(self, x, y):
         """Store the TIC data without plotting it."""

@@ -42,6 +42,31 @@ from logic.data_handler import DataHandler
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resources", "file.ico")
 
 
+
+def _quality_text(peak):
+    """Peak-table quality text and colour: saturated, then check, then skim, then OK."""
+    if getattr(peak, 'is_saturated', False):
+        return "⚠️ SATURATED", QColor(128, 0, 128)
+    if getattr(peak, 'is_convoluted', False):
+        return "⚠️ Check", QColor(255, 0, 0)
+    skim_parent = getattr(peak, 'skim_parent', None)
+    skim_children = getattr(peak, 'skim_children', None)
+    decision = getattr(peak, 'skim_decision', None)
+    text = None
+    if skim_parent is not None:
+        if decision and decision.get('decision') == 'split':
+            text = "Split (rule)"
+        else:
+            text = f"Skimmed from #{skim_parent}"
+    elif skim_children:
+        text = "Riders: " + ", ".join(f"#{n}" for n in skim_children)
+    if text is None:
+        return "OK", QColor(0, 128, 0)
+    if getattr(peak, 'skim_near_threshold', False):
+        text += " · near threshold"
+    return text, QColor(0, 90, 160)
+
+
 class _UpdateCheckThread(QThread):
     """Asks GitHub for the latest release once; emits only when there is a usable answer."""
     found = Signal(str, str)
@@ -2618,16 +2643,10 @@ class ChromaKitApp(QMainWindow):
                 table.setItem(i, j, item)
             
             # Add quality indicator in the last column
-            if hasattr(peak, 'is_saturated') and peak.is_saturated:
-                quality_item = QTableWidgetItem("⚠️ SATURATED")
-                quality_item.setForeground(QBrush(QColor(128, 0, 128)))  # Purple text
-            elif hasattr(peak, 'is_convoluted') and peak.is_convoluted:
-                quality_item = QTableWidgetItem("⚠️ Check")
-                quality_item.setForeground(QBrush(QColor(255, 0, 0)))  # Red text
-            else:
-                quality_item = QTableWidgetItem("OK")
-                quality_item.setForeground(QBrush(QColor(0, 128, 0)))  # Green text
-            
+            text, color = _quality_text(peak)
+            quality_item = QTableWidgetItem(text)
+            quality_item.setForeground(QBrush(color))
+
             table.setItem(i, len(headers)-1, quality_item)
         
         # Adjust column widths
