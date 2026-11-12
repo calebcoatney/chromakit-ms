@@ -1,10 +1,12 @@
 """Split-or-skim intake: the four tests, parent chain, front child, forced modes, window override, flag."""
+import logging
+
 import numpy as np
 import pytest
 from scipy.stats import norm
 
 from logic.method import RiderParams
-from logic.tail_skim import RIDER_DEFAULTS, classify_riders, rider_settings_at
+from logic.tail_skim import RIDER_DEFAULTS, classify_riders, exp_skim, rider_end, rider_settings_at
 from tests.logic.tail_skim_signals import (PARENT_MU, SIGMA, _smooth, _time_axis, emg, emg_pair,
                                            rider_on_tail)
 
@@ -206,3 +208,42 @@ def test_bad_user_split_metadata_raises():
 def test_unknown_rider_integration_raises():
     with pytest.raises(ValueError, match='rider_integration'):
         run(rider_on_tail(1.0, 3.0), defaults={'rider_integration': 'skimm'})
+
+
+def test_detector_left_bound_outside_pair_uses_valley_search(caplog):
+    """Today's shoulder detector can put a shoulder's left_bound at or before the parent apex: the
+    bound is ignored (valley search instead, logged at debug), not raised on like a user split."""
+    pair = rider_on_tail(1.0, 3.0)
+    expected = only_call(pair)
+    for bound in (pair['apex'], pair['apex'] - 5):
+        meta = [{}, {'is_shoulder': True, 'left_bound': bound, 'right_bound': pair['child_apex'] + 20}]
+        with caplog.at_level(logging.DEBUG, logger='logic.tail_skim'):
+            call = only_call(pair, metas=meta)
+        assert call.a == expected.a and call.decision == expected.decision
+        assert any(f"{pair['x'][pair['child_apex']]:.3f}" in r.message and 'left_bound' in r.message
+                   for r in caplog.records if r.levelno == logging.DEBUG)
+
+
+def test_chain_ends_after_fallback_tail_model():
+    """A rider whose tail fit fell back (here too few points before the next rider) has no fitted
+    exponential tail to judge the next child against: the chain ends there."""
+    pair, c2 = _two_riders(1.0, 3.0, 1.0, 3.4)
+    x, y = pair['x'], pair['y']
+    calls = run(pair, extra_apexes=[c2])
+    first = calls[pair['child_apex']]
+    b = rider_end(x, y, first.a, first.child, first.cap)
+    assert first.decision == 'skim'
+    assert exp_skim(x, y, first.a, b, first.parent, first.cap, []).model == 'exponential_2pt'
+    assert calls[c2].parent == pair['child_apex']
+
+
+def test_valley_at_child_apex_gets_no_call():
+    """A 'child' on the parent's falling flank has its lowest point at its own apex: not a rider pair."""
+    pair = rider_on_tail(1.0, 3.0)
+    apex = pair['apex']
+    child = apex + 50
+    assert np.all(np.diff(pair['y'][apex:child + 1]) < 0)
+    for mode in ('auto', 'skim'):
+        calls = classify_riders(pair['x'], pair['y'], np.array([apex, child]), [{}, {}],
+                                {'rider_integration': mode}, [], set(), [])
+        assert calls == {}

@@ -186,8 +186,9 @@ class RiderCall:
 
     `child`, `parent`, `a`, `cap` are indices into `x`. `parent` may be a range-excluded apex.
     `ratios` holds hp_hc, hv_hp, hc_hv and tail_bend. `failed` lists the tests that failed, drawn from
-    front, height, position, valley, tail, excluded. `tail` is the exponential parent-tail model
-    (skim decisions only), used to ask whether a later child still sits on the same tail.
+    front, height, position, valley, tail, excluded. `tail` is the fitted exponential parent-tail model
+    (skim decisions whose fit succeeded only), used to ask whether a later child still sits on the
+    same tail; None ends the parent chain.
     """
     child: int
     parent: int
@@ -246,7 +247,9 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
     `apexes` are sorted indices (kept peaks plus range-excluded apexes) and `metadata[i]` belongs to
     `apexes[i]`. `negative` holds apex indices of negative peaks; `group_spans` are `(start, end)` index
     spans of peak groups. Pairs that fail the always-required checks (parent after child or not taller,
-    tail back to baseline between them) get no call.
+    valley not before the child's apex, tail back to baseline between them) get no call. A shoulder's
+    split point outside (parent, child) raises for a user or suggested split and is ignored (valley
+    search instead) for today's detector's `left_bound`.
     """
     calls: Dict[int, RiderCall] = {}
     spans: Dict[int, Tuple[int, int]] = {}     # skimmed rider apex -> (a, b), excluded from later tail fits
@@ -277,24 +280,33 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
                     p = prev.parent
 
         # 2. valley
+        v = None
         if meta.get('is_shoulder') and meta.get('split_index') is not None:
             v = int(meta['split_index'])
         elif meta.get('is_shoulder') and meta.get('left_bound') is not None:
             v = int(meta['left_bound'])
-        else:
+        if v is not None and not p < v < c:
+            user_split = (meta.get('source') in ('user', 'suggested') or 'split_index' in meta
+                          or 'parent_index' in meta)
+            if user_split:
+                raise ValueError(f"split point {v} for the peak at {x[c]:.3f} min is not between its "
+                                 f"parent apex {p} and its apex {c}")
+            # Today's shoulder detector can put left_bound at or before an earlier apex: not a valley
+            logger.debug("tail skim: shoulder left_bound %d for the peak at %.3f min is not between its "
+                         "parent apex %d and its apex %d; searching for the valley instead", v, x[c], p, c)
+            v = None
+        if v is None:
             between = y[q:c + 1]
             if not np.any(np.isfinite(between)):
                 continue  # all MS-gated: the pair cannot be judged
             v = q + int(np.nanargmin(between))  # NaN-gated samples are not a valley
-        if meta.get('is_shoulder') and not p < v < c:
-            raise ValueError(f"split point {v} for the peak at {x[c]:.3f} min is not between its "
-                             f"parent apex {p} and its apex {c}")
         h_v, h_p = float(y[v]), float(y[p])
 
         # 3. always required: no call when the pair is not a parent/rider pair at all. A NaN (MS-gated)
         # sample is unknown, not a return to baseline: the pair still gets a call, and plan_skims
         # splits a skim whose bound is NaN, with a warning.
-        if not (p < c and h_p > h_c and not np.any(y[p:c + 1] <= PARENT_FLOOR_FRAC * h_p)):
+        # The valley must come before the child's apex: a lowest point at the apex is no valley.
+        if not (p < c and v < c and h_p > h_c and not np.any(y[p:c + 1] <= PARENT_FLOOR_FRAC * h_p)):
             continue
         nxt = apexes[k + 1] if k + 1 < len(apexes) else None
         if nxt is not None:
@@ -326,11 +338,13 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
         call = RiderCall(child=c, parent=p, a=v, cap=cap, decision='skim' if skim else 'split',
                          source=source, skim_model=cfg['skim_model'], ratios=ratios, failed=failed,
                          near_threshold=near)
-        # 6. skim: the chain test always reads an exponential parent-tail model
+        # 6. skim: the chain test reads only a fitted exponential parent-tail model; after a
+        # two-point or tangent fallback the tail is not known well enough and the chain ends
         if skim:
             b = rider_end(x, y, v, c, cap)
             skip = [spans[r] for r, rc in calls.items() if rc.decision == 'skim' and rc.parent == p and r in spans]
-            call.tail = exp_skim(x, y, v, b, p, cap, skip).tail
+            curve = exp_skim(x, y, v, b, p, cap, skip)
+            call.tail = curve.tail if curve.model == 'exponential' else None
             spans[c] = (v, b)
         calls[c] = call
     return calls

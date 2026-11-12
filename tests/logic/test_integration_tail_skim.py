@@ -284,10 +284,14 @@ def test_parent_clamped_before_rider_starts():
 # --- small things -----------------------------------------------------------------------------------
 
 def test_zero_area_rider_kept_with_issue(caplog):
-    pair = rider_on_tail(0.0, 3.0, noise=0.0)
+    """A rider with nothing left above its skim curve (its window ends at its start sample)."""
+    pair = rider_on_tail(1.0, 3.0)
     x = pair['x']
+    call, _, _ = skim_call(pair, SKIM)
+    processed = processed_from(pair, rider={**SKIM, 'skim_model': 'tangent'})
+    processed['peak_metadata'][1]['clamp'] = (None, float(x[call.a]))
     with caplog.at_level(logging.WARNING):
-        result = integrate(processed_from(pair, rider={**SKIM, 'skim_model': 'tangent'}))
+        result = integrate(processed)
     rider = at(result, x, pair['child_apex'])
     assert rider.skim_model == 'tangent'
     assert rider.area == 0
@@ -327,3 +331,40 @@ def test_decision_fields_on_split_child():
     assert set(d) == {'decision', 'parent', 'hp_hc', 'hv_hp', 'hc_hv', 'tail_bend', 'failed'}
     assert child.skim_near_threshold in (True, False)
     assert child.skim_parent is None and parent.skim_children is None
+
+
+# --- today's shoulder detector ----------------------------------------------------------------------
+
+def _noisy_shoulder_trace(trial=2, seed=1):
+    """The final review's probe: a tailing peak with two riders plus a pair at 5 min, noised. Trial 2
+    of seed 1 makes the shoulder detector put a left_bound before its parent's apex near 7.13 min."""
+    from scipy.stats import exponnorm
+    x = np.linspace(0, 10, 12001)
+    g = lambda c, s, a: a * np.exp(-0.5 * ((x - c) / s) ** 2)
+    e = exponnorm.pdf(x, 0.3 / 0.03, loc=2.0, scale=0.03)
+    rng = np.random.default_rng(seed)
+    for _ in range(trial + 1):
+        y = (1000 * e / e.max() + g(2.0 + rng.uniform(0.05, 0.6), 0.02, rng.uniform(20, 300))
+             + g(2.0 + rng.uniform(0.05, 0.6), 0.025, rng.uniform(20, 300))
+             + g(5.0, 0.06, 500) + g(5.0 + rng.uniform(0.04, 0.15), 0.05, rng.uniform(50, 400))
+             + rng.normal(0, 0.5, x.size))
+    return x, y
+
+
+@pytest.mark.parametrize('mode', ['auto', 'skim'])
+def test_detector_shoulders_do_not_break_integration(mode):
+    import copy
+    from logic.processor import ChromatogramProcessor
+    proc = ChromatogramProcessor()
+    x, y = _noisy_shoulder_trace()
+    params = copy.deepcopy(proc.default_params)
+    params['baseline']['enabled'] = False
+    params['smoothing']['enabled'] = True
+    params['shoulders'] = {'enabled': True, 'window_length': 41, 'polyorder': 3, 'sensitivity': 10,
+                           'apex_distance': 10}
+    params['peaks']['min_prominence'] = 5
+    params['rider'] = {**AUTO, 'rider_integration': mode}
+    processed = proc.process(x, y, params)
+    assert sum(1 for m in processed['peak_metadata'] if m.get('is_shoulder')) > 0
+    result = integrate(processed)
+    assert len(result['peaks']) == len(processed['peaks_x'])
