@@ -99,7 +99,7 @@ def test_save_as_writes_and_clears_dirty(qtbot, tmp_path, monkeypatch):
         "ui.app.QFileDialog.getSaveFileName",
         lambda *a, **k: (str(out), "ChromaKit Method (*.chromethod)"),
     )
-    app.save_method_as()
+    app.save_method()
     assert out.exists()
     assert app.current_method_path == out or str(app.current_method_path) == str(out)
     assert app.current_method.name == "mymethod"
@@ -161,6 +161,7 @@ def test_load_and_resave_peak_ranges_and_grouping(qtbot, tmp_path, monkeypatch):
     app._on_params_writeback(parameters.current_params)
     saved_path = tmp_path / "resaved.chromethod"
     app.current_method_path = saved_path
+    _stub_save_as(monkeypatch, saved_path)
     app.save_method()
     saved = ChromaMethod.from_file(saved_path)
     assert saved.peaks.range_filters == [[1.25, 2.5], [3.5, 4.75]]
@@ -441,7 +442,7 @@ def test_save_reports_current_method(qtbot, tmp_path, monkeypatch):
     app = _make(qtbot)
     target = tmp_path / "saved.chromethod"
     monkeypatch.setattr("ui.app.QFileDialog.getSaveFileName", lambda *a, **k: (str(target), ""))
-    app.save_method_as()
+    app.save_method()
     assert "saved" in app.status_bar.currentMessage() and "current method" in app.status_bar.currentMessage()
 
 
@@ -458,35 +459,36 @@ def test_save_as_stamps_open_detector(qtbot, tmp_path, monkeypatch):
     app.data_handler.current_detector = "FID2B"
     out = tmp_path / "m.chromethod"
     _stub_save_as(monkeypatch, out)
-    app.save_method_as()
+    app.save_method()
     assert ChromaMethod.from_file(out).detector == "FID2B"
     assert app._method_dirty is False
 
 
-def test_plain_save_stamps_open_detector(qtbot, tmp_path):
+def test_resave_stamps_open_detector(qtbot, tmp_path, monkeypatch):
     from logic.method import ChromaMethod
     app = _make(qtbot)
     out = tmp_path / "m.chromethod"
     app.current_method_path = out
     app.data_handler.current_detector = "FID1A"
+    _stub_save_as(monkeypatch, out)
     app.save_method()
     assert ChromaMethod.from_file(out).detector == "FID1A"
     assert app._method_dirty is False
 
 
-def test_save_keeps_method_detector_when_channel_unknown(qtbot, tmp_path):
+def test_save_keeps_method_detector_when_channel_unknown(qtbot, tmp_path, monkeypatch):
     from logic.method import ChromaMethod
     app = _make(qtbot)
     app.current_method.detector = "TCD3C"
     app.data_handler.current_detector = "Unknown"
     out = tmp_path / "m.chromethod"
     app.current_method_path = out
+    _stub_save_as(monkeypatch, out)
     app.save_method()
     assert ChromaMethod.from_file(out).detector == "TCD3C"
 
 
-@pytest.mark.parametrize("save", ["save_method", "save_method_as"])
-def test_failed_save_leaves_method_unstamped(qtbot, tmp_path, monkeypatch, save):
+def test_failed_save_leaves_method_unstamped(qtbot, tmp_path, monkeypatch):
     from logic.method import ChromaMethod
     app = _make(qtbot)
     app.current_method.detector = "TCD3C"
@@ -501,10 +503,52 @@ def test_failed_save_leaves_method_unstamped(qtbot, tmp_path, monkeypatch, save)
     errors = []
     monkeypatch.setattr("ui.app.QMessageBox.critical", lambda *a, **k: errors.append(a[2]))
 
-    getattr(app, save)()
+    app.save_method()
 
     assert errors == ["disk full"]
     assert app.current_method.detector == "TCD3C"
     assert app.current_method.name == "Untitled"
     assert app.current_method_path == tmp_path / "m.chromethod"
     assert app._method_dirty is True
+
+
+def test_save_asks_where_even_with_a_loaded_method(qtbot, tmp_path, monkeypatch):
+    """Save must never write over the loaded file silently: it always asks,
+    starting from the loaded file's path, and a cancelled dialog writes nothing."""
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    loaded = tmp_path / "shared.chromethod"
+    ChromaMethod(name="shared", signal_type="gc").to_file(loaded)
+    before = loaded.read_bytes()
+    app.current_method_path = loaded
+    app._mark_dirty(True)
+    asked = []
+
+    def cancel(parent, caption, start, *a, **k):
+        asked.append(start)
+        return ("", "")
+    monkeypatch.setattr("ui.app.QFileDialog.getSaveFileName", cancel)
+
+    app.save_method()
+
+    assert asked == [str(loaded)]
+    assert loaded.read_bytes() == before
+    assert app._method_dirty is True
+
+
+def test_save_to_new_name_takes_the_file_name(qtbot, tmp_path, monkeypatch):
+    """A method saved under a new file name carries that name, so the label
+    follows the file rather than the name stored in the file it came from."""
+    from logic.method import ChromaMethod
+    app = _make(qtbot)
+    app.current_method = ChromaMethod(name="GC1-FID", signal_type="gc")
+    app.current_method_path = tmp_path / "GC1-FID.chromethod"
+    out = tmp_path / "GC1-FID-window.chromethod"
+    _stub_save_as(monkeypatch, out)
+
+    app.save_method()
+
+    assert ChromaMethod.from_file(out).name == "GC1-FID-window"
+    assert app.current_method.name == "GC1-FID-window"
+    assert app.current_method_path == out
+    assert not (tmp_path / "GC1-FID.chromethod").exists()

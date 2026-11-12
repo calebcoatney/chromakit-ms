@@ -427,22 +427,17 @@ class ChromaKitApp(QMainWindow):
         return method
 
     def save_method(self):
-        from pathlib import Path
-        if self.current_method_path is None:
-            return self.save_method_as()
-        try:
-            method = self._stamped_method_copy()
-            method.to_file(self.current_method_path)
-            self.current_method = method
-            self._mark_dirty(False)
-            self.status_bar.showMessage(f"Saved method '{self.current_method.name}'; it is now the current method")
-        except Exception as e:
-            QMessageBox.critical(self, "Save Method Failed", str(e))
+        """Always ask where to save, starting from the loaded file.
 
-    def save_method_as(self):
+        A loaded method is often a shared one (e.g. the rapids-bridge methods
+        the C1 controller runs), so Save never writes over it without the file
+        dialog; the dialog itself confirms replacing an existing file.
+        """
         from pathlib import Path
+        start = (str(self.current_method_path) if self.current_method_path
+                 else f"{self.current_method.name}.chromethod")
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Method", f"{self.current_method.name}.chromethod",
+            self, "Save Method", start,
             "ChromaKit Method (*.chromethod)",
         )
         if not path:
