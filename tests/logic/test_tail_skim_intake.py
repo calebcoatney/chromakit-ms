@@ -42,7 +42,6 @@ def test_anh_like_rider_is_skimmed():
     call = only_call(pair)
     assert call.decision == 'skim' and call.source == 'auto' and call.failed == []
     assert call.parent == pair['apex'] and call.tail is not None
-    print(call.ratios)
 
 
 def test_user_split_parent_index_is_used():
@@ -54,33 +53,36 @@ def test_user_split_parent_index_is_used():
 
 
 def test_symmetric_pair_split_by_tail_test():
-    pair = emg_pair(0.002, 0.002, 4.0, 0.05)
+    pair = emg_pair(0.002, 0.002, 4.0, 0.035)
     call = only_call(pair)
-    print(call.ratios)
-    assert call.decision == 'split' and 'tail' in call.failed
+    assert call.decision == 'split' and call.failed == ['tail']
 
 
 def test_height_ratio_below_2_splits():
     pair = emg_pair(0.06, 0.06, 2.2, 0.12)
     call = only_call(pair)
-    print(call.ratios)
     assert call.decision == 'split' and call.failed == ['height']
 
 
-def test_valley_above_half_parent_splits():
-    pair = emg_pair(0.06, 0.06, 4.0, 0.03)
-    call = only_call(pair)
-    print(call.ratios)
-    assert call.ratios['hv_hp'] > 0.5
-    assert call.decision == 'split' and 'position' in call.failed
+def test_valley_above_max_fraction_splits():
+    # With default thresholds position cannot fail alone on a real valley (h_v <= h_c, so passing the
+    # height test implies h_v <= 0.5 h_p), so lower skim_max_valley_frac below this pair's h_v / h_p.
+    pair = rider_on_tail(1.0, 3.0)
+    call = only_call(pair, defaults={**AUTO, 'skim_max_valley_frac': 0.05})
+    assert call.ratios['hv_hp'] > 0.05
+    assert call.decision == 'split' and call.failed == ['position']
 
 
 def test_nearly_resolved_pair_splits_on_valley_ratio():
     pair = emg_pair(0.03, 0.01, 3.0, 0.2, noise=0.0002)
     call = only_call(pair)
-    print(call.ratios)
     assert call.ratios['hc_hv'] > 20
-    assert call.decision == 'split' and 'valley' in call.failed
+    assert call.decision == 'split' and call.failed == ['valley']
+
+
+def only_call_with_next(pair, n, defaults):
+    calls = run(pair, defaults=defaults, extra_apexes=[n])
+    return calls[pair['child_apex']]
 
 
 def _with_front_peak(pair, mult=2.0, gap=0.03):
@@ -98,13 +100,7 @@ def test_front_child_always_split():
     pair, n = _with_front_peak(rider_on_tail(1.0, 3.0))
     for mode in ('auto', 'skim'):
         call = only_call_with_next(pair, n, {'rider_integration': mode})
-        print(mode, call.ratios)
-        assert call.decision == 'split' and 'front' in call.failed
-
-
-def only_call_with_next(pair, n, defaults):
-    calls = run(pair, defaults=defaults, extra_apexes=[n])
-    return calls[pair['child_apex']]
+        assert call.decision == 'split' and call.failed == ['front']
 
 
 def _two_riders(h1, d1, h2, d2, parent_tau=0.06):
@@ -126,7 +122,6 @@ def test_chain_keeps_parent_while_tail_real():
     pair, c2 = _two_riders(1.0, 3.0, 1.0, 4.5)
     calls = run(pair, extra_apexes=[c2])
     first, second = calls[pair['child_apex']], calls[c2]
-    print(first.ratios, second.ratios, first.decision, second.decision)
     assert first.decision == 'skim'
     assert second.parent == pair['apex']
 
@@ -136,7 +131,6 @@ def test_chain_ends_when_tail_dies():
     calls = run(pair, extra_apexes=[c2])
     first = calls[pair['child_apex']]
     second = calls[c2]
-    print(first.decision, float(first.tail(pair['x'][c2])), pair['y'][c2])
     assert first.decision == 'skim'
     assert second.parent == pair['child_apex']
 
@@ -165,7 +159,6 @@ def test_window_override_beats_default():
 def test_near_threshold_flag():
     pair = emg_pair(0.06, 0.06, 3.0, 0.12)
     near = only_call(pair)
-    print(near.ratios, near.decision, near.failed)
     assert near.ratios['hp_hc'] == pytest.approx(2.05, rel=0.03)
     assert near.near_threshold is True
     far = only_call(emg_pair(0.06, 0.06, 2.2, 0.12))
@@ -181,8 +174,11 @@ def test_no_rider_key_means_split():
 
 def test_negative_or_group_overlap_is_excluded():
     pair = rider_on_tail(1.0, 3.0)
+    cap = run(pair)[pair['child_apex']].cap
+    assert cap > pair['child_apex'] + 1
     for kw in ({'negative': [pair['child_apex']]},
-               {'groups': [(pair['apex'] - 2, pair['child_apex'] + 2)]}):
+               {'groups': [(pair['apex'] - 2, pair['child_apex'] + 2)]},
+               {'groups': [(pair['child_apex'] + 1, cap)]}):
         call = only_call(pair, **kw)
         assert call.decision == 'split' and 'excluded' in call.failed
 
@@ -190,3 +186,19 @@ def test_negative_or_group_overlap_is_excluded():
 def test_child_taller_than_parent_gets_no_call():
     pair = emg_pair(0.06, 0.06, 0.5, 0.08)
     assert run(pair) == {}
+
+
+def test_bad_user_split_metadata_raises():
+    pair = rider_on_tail(1.0, 3.0)
+    apex, child = pair['apex'], pair['child_apex']
+    for meta in ({'is_shoulder': True, 'split_index': child + 1},
+                 {'is_shoulder': True, 'split_index': apex},
+                 {'parent_index': child + 5},
+                 {'parent_index': child - 1}):
+        with pytest.raises(ValueError, match='min'):
+            run(pair, metas=[{}, meta])
+
+
+def test_unknown_rider_integration_raises():
+    with pytest.raises(ValueError, match='rider_integration'):
+        run(rider_on_tail(1.0, 3.0), defaults={'rider_integration': 'skimm'})

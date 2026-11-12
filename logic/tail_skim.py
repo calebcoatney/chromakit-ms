@@ -257,10 +257,16 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
         meta = metadata[k] or {}
         cfg = rider_settings_at(defaults, windows, float(x[c]))
         h_c = float(y[c])
+        if cfg['rider_integration'] not in ('auto', 'skim', 'split'):
+            raise ValueError(f"unknown rider_integration {cfg['rider_integration']!r} "
+                             f"for the peak at {x[c]:.3f} min")
 
         # 1. parent
         if meta.get('parent_index') is not None:
             p = int(meta['parent_index'])
+            if p not in apexes or p >= c or not y[p] > h_c:
+                raise ValueError(f"parent_index {p} for the peak at {x[c]:.3f} min is not an earlier, "
+                                 f"taller peak apex")
         else:
             p = q
             prev = calls.get(q)
@@ -275,6 +281,9 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
             v = int(meta['left_bound'])
         else:
             v = q + int(np.argmin(y[q:c + 1]))
+        if meta.get('is_shoulder') and not p < v < c:
+            raise ValueError(f"split point {v} for the peak at {x[c]:.3f} min is not between its "
+                             f"parent apex {p} and its apex {c}")
         h_v, h_p = float(y[v]), float(y[p])
 
         # 3. always required: no call when the pair is not a parent/rider pair at all
@@ -288,7 +297,7 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
             cap = c + int(np.argmin(y[c:end + 1]))
         front = nxt is not None and y[nxt] > h_c and y[cap] > h_v
         excluded = (c in negative or p in negative
-                    or any(s <= c and e >= p for s, e in group_spans))
+                    or any(s <= cap and e >= p for s, e in group_spans))
         ratios = {'hp_hc': h_p / h_c, 'hv_hp': h_v / h_p, 'hc_hv': h_c / h_v,
                   'tail_bend': tail_bend(x, y, p, v)}
         tests = _thresholds(cfg, ratios)
