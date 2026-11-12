@@ -352,13 +352,19 @@ class ChromaMethod(BaseModel):
         from logic.windows import windows_from_range_filters
         data = dict(data)
         peaks = data.get("peaks")
-        filters = peaks.get("range_filters") if isinstance(peaks, dict) else None
+        if isinstance(peaks, dict):
+            filters = peaks.get("range_filters")
+        elif isinstance(peaks, PeakParams):
+            filters = peaks.range_filters
+        else:
+            filters = None
         windows, messages = windows_from_range_filters(filters)
         for msg in messages:
             logger.warning("Method migration: %s", msg)
         data["peak_windows"] = windows
         data.setdefault("outside_windows", "ignore")
-        data["version"] = "2"
+        if data.get("version") in (None, "1"):
+            data["version"] = "2"
         return data
 
     @model_validator(mode="after")

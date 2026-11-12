@@ -145,3 +145,27 @@ def test_unknown_event_type_raises():
             "name": "m", "signal_type": "gc",
             "peak_windows": [_win("a", 1, 4, events=[{"type": "nope"}])],
         })
+
+
+def test_peaks_model_instance_migrates_via_constructor():
+    from logic.method import PeakParams
+    m = ChromaMethod(name="r", signal_type="gc",
+                     peaks=PeakParams(range_filters=[[1.25, 2.5]]))
+    assert [(w.start, w.end) for w in m.peak_windows] == [(1.25, 2.5)]
+    assert m.peaks.range_filters == [[1.25, 2.5]]
+
+
+def test_peaks_model_instance_migrates_via_model_validate():
+    from logic.method import PeakParams
+    m = ChromaMethod.model_validate({
+        "name": "r", "signal_type": "gc",
+        "peaks": PeakParams(range_filters=[[1.25, 2.5]])})
+    assert [(w.start, w.end) for w in m.peak_windows] == [(1.25, 2.5)]
+    assert m.peaks.range_filters == [[1.25, 2.5]]
+
+
+def test_migration_keeps_explicit_version():
+    m = ChromaMethod.model_validate({"name": "m", "signal_type": "gc", "version": "9"})
+    assert m.version == "9"
+    m1 = ChromaMethod.model_validate({"name": "m", "signal_type": "gc", "version": "1"})
+    assert m1.version == "2"
