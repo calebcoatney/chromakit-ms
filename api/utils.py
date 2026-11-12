@@ -57,6 +57,12 @@ def serialize_numpy(data: Any) -> Any:
         return data
 
 
+def _rename_lambda(section):
+    """Pydantic alias 'lambda_' -> processor key 'lambda', in place."""
+    if section and 'lambda_' in section:
+        section['lambda'] = section.pop('lambda_')
+
+
 def convert_params_for_processor(params: dict) -> dict:
     """Convert API parameters to the format expected by ChromatogramProcessor.
 
@@ -89,6 +95,10 @@ def convert_params_for_processor(params: dict) -> dict:
         if bl.get('fastchrom') is None:
             bl['fastchrom'] = {'half_window': None, 'smooth_half_window': None}
 
+        # Per-break overrides use the same lambda_ -> lambda rule
+        for bp in bl['break_points']:
+            _rename_lambda(bp.get('overrides'))
+
     # ── Peaks → separate out shoulder params for processor ──
     if 'peaks' in params:
         pk = params['peaks']
@@ -100,6 +110,20 @@ def convert_params_for_processor(params: dict) -> dict:
         # Range filters: ensure list
         if pk.get('range_filters') is None:
             pk['range_filters'] = []
+
+    # ── Peak windows ──
+    # The processor treats a PRESENT 'peak_windows' key (even empty) as
+    # authoritative and ignores peaks.range_filters. ProcessingParams dumps
+    # an empty list by default, so drop the key then, and range_filters-only
+    # API callers keep their existing behaviour.
+    windows = params.get('peak_windows') or []
+    if windows:
+        for w in windows:
+            _rename_lambda(w.get('smoothing'))
+            _rename_lambda(w.get('baseline'))
+        params['peak_windows'] = list(windows)
+    else:
+        params.pop('peak_windows', None)
 
     # ── Shoulders ──
     if 'shoulders' in params:
