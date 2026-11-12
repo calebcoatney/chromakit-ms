@@ -12,7 +12,7 @@ import logging
 import numpy as np
 
 from logic.method import GCxGCParams
-from logic.windows import validate_windows
+from logic.windows import _EDGE_TOL, resolve_break_points, validate_windows
 from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
 
 INFO_ICON = "\u24d8"
@@ -1218,9 +1218,44 @@ class ParametersFrame(QWidget):
                         spin.setStyleSheet("border: 1px solid red;")
                         spin.setToolTip(msg)
             return
+        # Anchored breaks follow their window edge; that move must not land on another break.
+        moved = [dict(bp, time=self._anchored_time(bp, proposed))
+                 for bp in self.current_params['baseline'].get('break_points') or []]
+        try:
+            resolve_break_points(proposed, moved)
+        except ValueError as exc:
+            msg = str(exc)
+            logger.warning("Range edit not applied: %s", msg)
+            for r in range(table.rowCount()):
+                for c in (0, 1):
+                    spin = table.cellWidget(r, c)
+                    spin.setStyleSheet("border: 1px solid red;")
+                    spin.setToolTip(msg)
+            return
         self.current_params['peak_windows'] = proposed
+        self.current_params['baseline']['break_points'] = moved
+        self._sync_anchored_break_spinboxes()
         self._sync_range_filter_mirror()
         self.parameters_changed.emit(self.current_params)
+
+    @staticmethod
+    def _anchored_time(bp, windows):
+        """The break's time: its window edge if anchored (as resolve_break_points does), else its own."""
+        anchor = bp.get('anchor')
+        if anchor:
+            for w in windows:
+                if w['id'] == anchor['window_id']:
+                    return float(w['start'] if anchor['edge'] == 'start' else w['end'])
+        return bp['time']
+
+    def _sync_anchored_break_spinboxes(self):
+        table = self.break_point_table
+        for r, bp in enumerate(self.current_params['baseline'].get('break_points') or []):
+            spin = table.cellWidget(r, 0)
+            if spin is not None and bp.get('anchor'):
+                spin.blockSignals(True)
+                spin.setValue(bp['time'])
+                spin.blockSignals(False)
 
     def _sync_range_filter_mirror(self):
         """peaks.range_filters mirrors the window spans under 'ignore' and is empty under 'global'."""
@@ -1360,6 +1395,26 @@ class ParametersFrame(QWidget):
                 bp = dict(old[r]) if r < len(old) else {}
                 bp['time'], bp['tolerance'] = time_w.value(), tol_w.value()
                 bps.append(bp)
+        table = self.break_point_table
+        for r in range(table.rowCount()):
+            for c in (0, 1):
+                spin = table.cellWidget(r, c)
+                if spin:
+                    spin.setStyleSheet("")
+                    if not (c == 0 and not spin.isEnabled()):  # keep the anchor tooltip
+                        spin.setToolTip("")
+        try:
+            resolve_break_points(self.current_params['peak_windows'], bps)
+        except ValueError as exc:
+            msg = str(exc)
+            logger.warning("Break point edit not applied: %s", msg)
+            times = [self._anchored_time(bp, self.current_params['peak_windows']) for bp in bps]
+            for r, t in enumerate(times):
+                if any(abs(t - o) < _EDGE_TOL for i, o in enumerate(times) if i != r):
+                    for c in (0, 1):
+                        table.cellWidget(r, c).setStyleSheet("border: 1px solid red;")
+                        table.cellWidget(r, c).setToolTip(msg)
+            return
         self.current_params['baseline']['break_points'] = bps
         self.parameters_changed.emit(self.current_params)
 

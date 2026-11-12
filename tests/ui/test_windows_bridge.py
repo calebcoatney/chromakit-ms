@@ -105,3 +105,28 @@ def test_overrides_note_shown_only_with_overrides(qtbot):
     plain = _frame(qtbot, [W2])
     assert all(n.isHidden() for n in plain._overrides_notes if n.parent() is not None
                and plain.isAncestorOf(n))
+
+
+def test_anchored_break_follows_window_span_edit(qtbot):
+    bp = {'time': 4.0, 'anchor': {'window_id': 'w1', 'edge': 'end'}}
+    f = _frame(qtbot, [W1, W2], [bp])
+    f.range_filter_table.cellWidget(0, 1).setValue(5.0)
+    assert f.current_params['baseline']['break_points'][0]['time'] == 5.0
+    assert f.break_point_table.cellWidget(0, 0).value() == 5.0
+    f.range_filter_table.cellWidget(0, 0).setValue(0.5)  # start edge change leaves an end anchor alone
+    assert f.current_params['baseline']['break_points'][0]['time'] == 5.0
+
+
+def test_duplicate_break_edit_rejected_and_flagged(qtbot):
+    f = _frame(qtbot, breaks=[{'time': 3.0}, {'time': 6.0}])
+    emitted = []
+    f.parameters_changed.connect(emitted.append)
+    f.break_point_table.cellWidget(1, 0).setValue(3.0)
+    assert [b['time'] for b in f.current_params['baseline']['break_points']] == [3.0, 6.0]
+    assert not emitted
+    for r in (0, 1):
+        spin = f.break_point_table.cellWidget(r, 0)
+        assert 'red' in spin.styleSheet() and 'Duplicate' in spin.toolTip()
+    f.break_point_table.cellWidget(1, 0).setValue(7.0)
+    assert f.break_point_table.cellWidget(1, 0).styleSheet() == ''
+    assert f.current_params['baseline']['break_points'][1]['time'] == 7.0
