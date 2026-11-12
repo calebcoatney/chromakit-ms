@@ -1305,11 +1305,12 @@ class ParametersFrame(QWidget):
     _RIDER_MODES = [("Automatic", "auto"), ("Always skim", "skim"), ("Always split", "split")]
     _RIDER_MODELS = [("Exponential", "exponential"), ("Tangent", "tangent")]
     # (attribute, rider key, label, min, max, step, decimals)
+    # Ranges follow logic.method.RiderParams' validation, so a loaded method shows its real value
     _RIDER_SPINS = [
         ("skim_height_ratio_spin", "skim_height_ratio", "Height ratio:", 1.0, 100.0, 0.1, 1),
-        ("skim_max_valley_frac_spin", "skim_max_valley_frac", "Max valley fraction:", 0.05, 1.0, 0.05, 2),
-        ("skim_valley_ratio_spin", "skim_valley_ratio", "Valley ratio:", 1.0, 1000.0, 1.0, 0),
-        ("skim_tail_bend_spin", "skim_tail_bend", "Tail bend:", 0.5, 3.0, 0.01, 2),
+        ("skim_max_valley_frac_spin", "skim_max_valley_frac", "Max valley fraction:", 0.01, 1.0, 0.05, 2),
+        ("skim_valley_ratio_spin", "skim_valley_ratio", "Valley ratio:", 1.0, 1000.0, 1.0, 1),
+        ("skim_tail_bend_spin", "skim_tail_bend", "Tail bend:", 0.01, 10.0, 0.01, 2),
     ]
 
     def _init_tail_skim_controls(self):

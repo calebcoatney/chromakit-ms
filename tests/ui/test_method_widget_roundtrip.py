@@ -214,6 +214,18 @@ def test_tail_skim_controls_round_trip(qtbot):
     pf.rider_mode_combo.setCurrentText("Automatic")
     assert pf.skim_height_ratio_spin.isEnabled()
 
+    # Values the model accepts but the old spin ranges/decimals clipped show as loaded
+    m.rider.skim_max_valley_frac = 0.02
+    m.rider.skim_valley_ratio = 12.5
+    m.rider.skim_tail_bend = 5.0
+    pf.apply_method(m)
+    assert pf.skim_max_valley_frac_spin.value() == pytest.approx(0.02)
+    assert pf.skim_valley_ratio_spin.value() == pytest.approx(12.5)
+    assert pf.skim_tail_bend_spin.value() == pytest.approx(5.0)
+    m.rider.skim_tail_bend = 0.02
+    pf.apply_method(m)
+    assert pf.skim_tail_bend_spin.value() == pytest.approx(0.02)
+
 
 def test_new_session_defaults_to_automatic_tail_skim(qtbot):
     app = _app(qtbot)
