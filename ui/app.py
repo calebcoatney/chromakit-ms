@@ -42,6 +42,37 @@ from logic.data_handler import DataHandler
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resources", "file.ico")
 
 
+def _quality_text(peak):
+    """Peak-table quality text and colour: saturated, then check, then skim, then OK.
+
+    A skim whose other side is outside every window still shows: a rider without a reported parent,
+    a parent whose riders are all unreported.
+    """
+    if getattr(peak, 'is_saturated', False):
+        return "⚠️ SATURATED", QColor(128, 0, 128)
+    if getattr(peak, 'is_convoluted', False):
+        return "⚠️ Check", QColor(255, 0, 0)
+    skim_parent = getattr(peak, 'skim_parent', None)
+    skim_children = getattr(peak, 'skim_children', None)
+    decision = getattr(peak, 'skim_decision', None)
+    text = None
+    if decision is not None and decision.get('decision') == 'split':
+        text = "Split (rule)"
+    elif skim_parent is not None:
+        text = f"Skimmed from #{skim_parent}"
+    elif getattr(peak, 'skim_model', None) is not None:
+        text = "Skimmed (parent not reported)"
+    elif skim_children:
+        text = "Riders: " + ", ".join(f"#{n}" for n in skim_children)
+    elif getattr(peak, 'area_before_skim', None) is not None:
+        text = "Riders: not reported"
+    if text is None:
+        return "OK", QColor(0, 128, 0)
+    if getattr(peak, 'skim_near_threshold', False):
+        text += " · near threshold"
+    return text, QColor(0, 90, 160)
+
+
 class _UpdateCheckThread(QThread):
     """Asks GitHub for the latest release once; emits only when there is a usable answer."""
     found = Signal(str, str)
@@ -170,8 +201,10 @@ class ChromaKitApp(QMainWindow):
         self._deconv_inspector = None
 
         # ── Document model: current_method is the always-present atom ──────────
-        from logic.method import ChromaMethod
-        self.current_method = ChromaMethod(name="Untitled", signal_type="gc")
+        from logic.method import ChromaMethod, RiderParams
+        # rider passed explicitly: a dict without 'rider' migrates to split (old files),
+        # but a new session defaults to automatic tail skim.
+        self.current_method = ChromaMethod(name="Untitled", signal_type="gc", rider=RiderParams())
         # Seed the freshly-created method's scaling from session defaults (QSettings)
         # so the method is the single source of truth from the start. Store 1.0 as
         # None ("no scaling").
@@ -2523,6 +2556,9 @@ class ChromaKitApp(QMainWindow):
             classical_processed['peak_metadata'] = [
                 m for m, keep in zip(full_meta, classical_mask) if keep
             ]
+            # Split mode: the merge below renumbers peaks (breaking skim_parent/skim_children) and
+            # drops the skim shading arrays. classical_processed is a copy; processed keeps its rider.
+            classical_processed['rider'] = None
             peak_groups = params.get('integration', {}).get('peak_groups', [])
             classical_results = self.processor.integrate_peaks(
                 processed_data=classical_processed,
@@ -2618,16 +2654,10 @@ class ChromaKitApp(QMainWindow):
                 table.setItem(i, j, item)
             
             # Add quality indicator in the last column
-            if hasattr(peak, 'is_saturated') and peak.is_saturated:
-                quality_item = QTableWidgetItem("⚠️ SATURATED")
-                quality_item.setForeground(QBrush(QColor(128, 0, 128)))  # Purple text
-            elif hasattr(peak, 'is_convoluted') and peak.is_convoluted:
-                quality_item = QTableWidgetItem("⚠️ Check")
-                quality_item.setForeground(QBrush(QColor(255, 0, 0)))  # Red text
-            else:
-                quality_item = QTableWidgetItem("OK")
-                quality_item.setForeground(QBrush(QColor(0, 128, 0)))  # Green text
-            
+            text, color = _quality_text(peak)
+            quality_item = QTableWidgetItem(text)
+            quality_item.setForeground(QBrush(color))
+
             table.setItem(i, len(headers)-1, quality_item)
         
         # Adjust column widths

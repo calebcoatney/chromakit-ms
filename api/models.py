@@ -18,6 +18,7 @@ from logic.method import (
     ShoulderParams,
     IntegrationSubParams,
     PeakWindow,
+    RiderParams,
 )
 
 
@@ -40,6 +41,8 @@ class ProcessingParams(BaseModel):
     integration: IntegrationSubParams = Field(default_factory=IntegrationSubParams)
     peak_windows: List[PeakWindow] = Field(default_factory=list)
     outside_windows: Literal["ignore", "global"] = "ignore"
+    # API callers that omit rider settings keep the old split behaviour.
+    rider: RiderParams = Field(default_factory=lambda: RiderParams(rider_integration='split'))
 
 
 class ProcessRequest(BaseModel):
@@ -211,6 +214,8 @@ class ProcessResponse(BaseModel):
     peaks_x: List[float]
     peaks_y: List[float]
     peak_metadata: List[Dict[str, Any]]
+    # Rider (tail skim) settings, passed back to /api/integrate inside processed_data
+    rider: Optional[Dict[str, Any]] = None
 
 
 class IntegrateResponse(BaseModel):

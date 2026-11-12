@@ -14,8 +14,8 @@ import pytest
 from logic.processor import ChromatogramProcessor
 
 
-@pytest.fixture
-def setup():
+def build_setup():
+    """(processor, x, y, params) for two overlapping peaks and one isolated peak, no baseline or smoothing."""
     proc = ChromatogramProcessor()
     x = np.linspace(0, 10, 6001)
 
@@ -28,6 +28,11 @@ def setup():
     params['baseline']['enabled'] = False
     params['smoothing']['enabled'] = False
     return proc, x, y, params
+
+
+@pytest.fixture
+def setup():
+    return build_setup()
 
 
 def _integrate(proc, x, y, params):

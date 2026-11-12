@@ -226,3 +226,19 @@ def test_stitch_touching_windows_blend_only_in_later_window():
     # earlier window's end is pure A right up to the shared edge
     assert np.all(out[earlier & (x > 2.2)] == 1.0)
     assert out[edge - 1] == 1.0
+
+
+# ---- rider block in process() result ----
+def test_process_returns_rider_block():
+    import copy
+    from logic.processor import ChromatogramProcessor
+    proc = ChromatogramProcessor()
+    x = np.linspace(0, 10, 1001)
+    y = 100 * np.exp(-0.5 * ((x - 5.0) / 0.1) ** 2)
+    params = copy.deepcopy(proc.default_params)
+    params['baseline']['enabled'] = False
+    params['smoothing']['enabled'] = False
+    assert proc.process(x, y, copy.deepcopy(params))['rider'] is None
+    params['rider'] = {'rider_integration': 'auto'}
+    out = proc.process(x, y, params)
+    assert out['rider']['rider_integration'] == 'auto'
