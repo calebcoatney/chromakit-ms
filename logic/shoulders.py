@@ -40,6 +40,11 @@ from scipy.stats import f as f_dist
 #: Candidate threshold (x d2y-dip noise) at sensitivity 1 and at 10.
 K_PROM_RANGE = (6.0, 2.0)
 DEFAULT_SENSITIVITY = 5
+# Floors the app runs with. Real peaks miss the EMG shape by far more than the noise, so without
+# floors scaled to the parent the fit check passes on plain tailing and flank wiggles. With these
+# (sensitivity 5) the detector scored best of every method tried on Caleb's blind gold set
+# (2026-11-12): per panel P 0.82 / R 0.82 / F1 0.82, per peak P 0.46 / R 0.53 / F1 0.49.
+APP_FLOORS = dict(min_dip_frac=0.05, min_child_frac=0.05, min_rss_drop=0.5)
 #: A peak's extent for candidates and fitting, in its FWHMs (before, after the apex).
 EXTENT_FWHM = (5.0, 10.0)
 #: Detected neighbours fitted alongside a peak, nearest first.

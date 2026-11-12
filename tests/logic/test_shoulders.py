@@ -147,3 +147,29 @@ def test_processor_estimates_noise_from_real_samples_not_the_masked_fill(monkeyp
     out = ChromatogramProcessor().process(x, y, params)
     assert 40 < seen['noise'] < 65            # true SD 50; flat fill would read ~3x low
     assert sum(m['is_shoulder'] for m in out['peak_metadata']) == 1
+
+
+def test_processor_runs_the_detector_with_the_app_floors(monkeypatch):
+    """The app runs the floors the detector was scored with on the gold set; unit
+    callers of detect_shoulders keep the floors off unless they ask for them."""
+    import logic.shoulders
+    from logic.processor import ChromatogramProcessor
+    seen = {}
+    real = logic.shoulders.detect_shoulders
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        return real(*a, **kw)
+    monkeypatch.setattr(logic.shoulders, 'detect_shoulders', spy)
+    x = np.arange(-0.15, 0.35, DT)
+    y = _peak(x, 0.0, 1e5) + _peak(x, 2.6 * SIGMA, 3e4) + np.random.default_rng(3).normal(0, 50, len(x))
+    params = {
+        'smoothing': {'enabled': False},
+        'baseline': {'enabled': False, 'method': 'asls', 'lambda': 1e6},
+        'peaks': {'enabled': True, 'min_prominence': 500},
+        'shoulders': {'enabled': True, 'sensitivity': 5},
+    }
+    out = ChromatogramProcessor().process(x, y, params)
+    for k, v in logic.shoulders.APP_FLOORS.items():
+        assert seen[k] == v
+    assert sum(m['is_shoulder'] for m in out['peak_metadata']) == 1   # a clear 30 % shoulder survives the floors

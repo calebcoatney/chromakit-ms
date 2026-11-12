@@ -219,12 +219,13 @@ class ChromatogramProcessor:
         # signal: its noise estimate needs the raw noise.
         shoulder_calls = []
         if shoulder_params.get('enabled', False):
-            from logic.shoulders import detect_shoulders, noise_sd, DEFAULT_SENSITIVITY
+            from logic.shoulders import detect_shoulders, noise_sd, DEFAULT_SENSITIVITY, APP_FLOORS
             shoulder_calls = detect_shoulders(
                 x, _extend_nan_with_nearest_finite(y), peak_indices,
                 sensitivity=shoulder_params.get('sensitivity', DEFAULT_SENSITIVITY),
                 # the filled-in masked regions are flat and would read as no noise
                 noise=noise_sd(y[np.isfinite(y)]),
+                **APP_FLOORS,
             )
         shoulder_indices = [c.apex_index for c in shoulder_calls]
         # inner bound = the split from the parent; outer = where the child's
