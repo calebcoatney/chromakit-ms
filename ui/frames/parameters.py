@@ -1354,6 +1354,7 @@ class ParametersFrame(QWidget):
             spin.valueChanged.connect(lambda v, k=key: self._on_rider_value_changed(k, v))
             setattr(self, attr, spin)
             adv.addRow(label, spin)
+        self.skim_advanced_frame.setToolTip("Applies in Automatic mode only")
         self.skim_advanced_frame.setVisible(False)
         form.addRow(self.skim_advanced_frame)
 

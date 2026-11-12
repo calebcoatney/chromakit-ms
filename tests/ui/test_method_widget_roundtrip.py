@@ -213,3 +213,9 @@ def test_tail_skim_controls_round_trip(qtbot):
 
     pf.rider_mode_combo.setCurrentText("Automatic")
     assert pf.skim_height_ratio_spin.isEnabled()
+
+
+def test_new_session_defaults_to_automatic_tail_skim(qtbot):
+    app = _app(qtbot)
+    assert app.current_method.rider.rider_integration == 'auto'
+    assert app.parameters_frame.rider_mode_combo.currentData() == 'auto'

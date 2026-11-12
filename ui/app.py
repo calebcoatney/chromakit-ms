@@ -193,8 +193,10 @@ class ChromaKitApp(QMainWindow):
         self._deconv_inspector = None
 
         # ── Document model: current_method is the always-present atom ──────────
-        from logic.method import ChromaMethod
-        self.current_method = ChromaMethod(name="Untitled", signal_type="gc")
+        from logic.method import ChromaMethod, RiderParams
+        # rider passed explicitly: a dict without 'rider' migrates to split (old files),
+        # but a new session defaults to automatic tail skim.
+        self.current_method = ChromaMethod(name="Untitled", signal_type="gc", rider=RiderParams())
         # Seed the freshly-created method's scaling from session defaults (QSettings)
         # so the method is the single source of truth from the start. Store 1.0 as
         # None ("no scaling").
