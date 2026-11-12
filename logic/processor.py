@@ -462,10 +462,7 @@ class ChromatogramProcessor:
         y_values = np.copy(y)
         
         # STEP 1: Apply smoothing if enabled
-        if params['smoothing']['enabled']:
-            smoothed_y = self._apply_smoothing(np.copy(y_values), params['smoothing'])
-        else:
-            smoothed_y = np.copy(y_values)
+        smoothed_y = self._smooth_full(y_values, params['smoothing'])
         
         # STEP 2: Baseline correction (skippable via baseline.enabled=False).
         # When disabled, corrected_y IS the smoothed signal and baseline is zero,
@@ -498,7 +495,8 @@ class ChromatogramProcessor:
         # excluded apexes still bound kept peaks' valleys in integration.
         if windows:
             peaks_x, peaks_y, peak_metadata, range_excluded_x = self._detect_in_windows(
-                x_values, baseline_corrected_y, smoothed_y, params, ms_range, windows, outside)
+                x_values, y_values, baseline_corrected_y, smoothed_y, params, ms_range,
+                windows, outside)
         else:
             peaks_x, peaks_y, peak_metadata, range_excluded_x, _ = self._detect_all(
                 x_values, baseline_corrected_y, smoothed_y, params, ms_range)
@@ -627,7 +625,15 @@ class ChromatogramProcessor:
 
         return peaks_x, peaks_y, peak_metadata, ms_excluded_x, detection_signal
 
-    def _detect_in_windows(self, x, corrected_y, smoothed_y, params, ms_range,
+    def _smooth_full(self, y, smoothing_params):
+        """Smooth the full raw trace; a copy of it when smoothing is disabled."""
+        import numpy as np
+
+        if smoothing_params['enabled']:
+            return self._apply_smoothing(np.copy(y), smoothing_params)
+        return np.copy(y)
+
+    def _detect_in_windows(self, x, y, corrected_y, smoothed_y, params, ms_range,
                            windows, outside):
         """Global pass plus one pass per window; keep each window's own apexes.
 
@@ -637,6 +643,9 @@ class ChromatogramProcessor:
         those outside every window are kept under ``"global"`` and become
         excluded valley neighbours under ``"ignore"``. Each kept peak's metadata
         gets ``window_id`` and its integration ``clamp`` (``apex_clamp``).
+        A window pass's MS-excluded apexes count as neighbours only inside that
+        window. ``y`` is the raw trace: a window whose merged smoothing differs
+        from the global one smooths it again for its own pass.
 
         Returns ``(peaks_x, peaks_y, peak_metadata, excluded_x)``.
         """
@@ -665,10 +674,13 @@ class ChromatogramProcessor:
             if overrides_any(w):
                 pos_mask = in_w if (w.get('peaks') or {}).get('min_prominence') is not None else None
                 neg_mask = in_w if (w.get('negative_peaks') or {}).get('min_prominence') is not None else None
+                merged = window_params(params, w)
+                w_smoothed = (smoothed_y if merged['smoothing'] == params['smoothing']
+                              else self._smooth_full(y, merged['smoothing']))
                 wx, wy, wmeta, w_ms_excl, _ = self._detect_all(
-                    x, corrected_y, smoothed_y, window_params(params, w), ms_range,
+                    x, corrected_y, w_smoothed, merged, ms_range,
                     pos_range_mask=pos_mask, neg_range_mask=neg_mask)
-                excluded.append(w_ms_excl)
+                excluded.append([e for e in w_ms_excl if window_at(windows, e) is w])
             else:
                 wx, wy, wmeta = gx, gy, gmeta
             for px, py, meta in zip(wx, wy, wmeta, strict=True):

@@ -202,3 +202,46 @@ def test_legacy_processed_without_clamp_uses_range_filters(pair):
     peaks = proc.integrate_peaks(processed)['peaks']
     assert _rts(peaks) == [7.0]
     assert peaks[0].start_time >= 6.9 and peaks[0].end_time <= 7.03
+
+
+def test_window_pass_ms_excluded_apex_outside_window_is_not_a_neighbour():
+    # Baseline off, so the pre-MS region keeps its real signal. The 2.97 bump
+    # is below the global threshold but clears the window's 1 % override; it
+    # lies before MS-on and outside the window, so it must not bound 3.3.
+    x = np.linspace(0, 10, 6001)
+    y = (_gauss(x, 1.0, 0.08, 100) + _gauss(x, 2.97, 0.03, 4)
+         + _gauss(x, 3.3, 0.1, 100))
+    w = win('w1', 3.1, 5.0, peaks={'min_prominence': 0.01})
+    params = _params([w], outside='global')
+
+    processed, peaks = _run(x, y, params, ms_range=(3.0, 10.0))
+    excluded = np.round(processed['range_excluded_peaks_x'], 2)
+    assert 1.0 in excluded and 2.97 not in excluded
+    kept = {round(p.retention_time, 2): p for p in peaks}
+    assert sorted(kept) == [3.3]
+
+    # Without ms_range nothing is MS-excluded: the 1.0 peak is a kept global
+    # neighbour and the 2.97 bump is dropped by the window pass, as above.
+    _, ref = _run(x, y, params)
+    ref = {round(p.retention_time, 2): p for p in ref}
+    assert kept[3.3].start_time == pytest.approx(ref[3.3].start_time)
+
+
+@pytest.mark.parametrize('global_smoothing', [
+    {'enabled': False},
+    {'enabled': True, 'method': 'savgol', 'savgol_window': 5, 'savgol_polyorder': 2},
+])
+def test_window_smoothing_reaches_negative_detection(global_smoothing):
+    x = np.linspace(0, 10, 6001)
+    rng = np.random.default_rng(7)
+    y = (_gauss(x, 2.0, 0.1, 100) + _gauss(x, 6.0, 0.1, 100)
+         - _gauss(x, 6.6, 0.1, 50) + rng.normal(0, 1.0, x.size))
+    heavy = {'enabled': True, 'method': 'savgol', 'savgol_window': 101, 'savgol_polyorder': 2}
+    params = _params([win('w1', 5.5, 7.5, smoothing=heavy)])
+    params['smoothing'].update(global_smoothing)
+    # Absolute prominence 3: raw noise (sd 1) has dips that deep, the heavily
+    # smoothed trace does not.
+    params['negative_peaks'] = {'enabled': True, 'min_prominence': 3.0}
+    processed, _ = _run(x, y, params)
+    neg = [round(m['x'], 1) for m in processed['peak_metadata'] if m.get('is_negative')]
+    assert neg == [6.6]
