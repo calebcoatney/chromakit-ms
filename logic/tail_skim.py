@@ -1,17 +1,19 @@
-"""Skim geometry for tail skimming: a small rider on a bigger peak's decaying tail.
+"""Tail skimming: a small rider on a bigger peak's decaying tail.
 
-Pure functions on arrays (numpy and scipy only). They measure whether the parent's back side is a tail
+Pure functions on arrays (numpy and scipy only). Geometry: whether the parent's back side is a tail
 (`tail_bend`), where the rider ends (`rider_end`) and what baseline the rider is integrated above
-(`exp_skim`, `tangent_skim`). Indices are positions in `x` / `y`; `y` is the smoothed,
-baseline-corrected signal.
+(`exp_skim`, `tangent_skim`). Intake: `classify_riders` decides, peak by peak, split or skim.
+Indices are positions in `x` / `y`; `y` is the smoothed, baseline-corrected signal.
 """
 import logging
 import warnings
-from dataclasses import dataclass
-from typing import Callable, List, Tuple
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 from scipy.optimize import OptimizeWarning, curve_fit
+
+from logic.windows import window_at
 
 logger = logging.getLogger(__name__)
 
@@ -157,3 +159,165 @@ def tangent_skim(x: np.ndarray, y: np.ndarray, a: int, b: int) -> SkimCurve:
     s = np.interp(x[a:b + 1], [xa, xb], [ya, yb])
     tail = lambda t: np.interp(t, [xa, xb], [ya, yb], right=yb)
     return SkimCurve(np.minimum(s, y[a:b + 1]), 'tangent', tail)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Intake: split or skim (spec section 1)
+# ---------------------------------------------------------------------------------------------------
+
+# Mirrors logic.method.RiderParams (a test keeps the two equal; this module must not import method).
+RIDER_DEFAULTS = {
+    'rider_integration': 'auto',
+    'skim_model': 'exponential',
+    'skim_height_ratio': 2.0,
+    'skim_max_valley_frac': 0.5,
+    'skim_valley_ratio': 20.0,
+    'skim_tail_bend': 1.10,
+    'skim_chain_min_tail': 0.15,
+    'skim_flag_band': 0.05,
+}
+PARENT_FLOOR_FRAC = 0.0025     # signal must stay above this fraction of h_p between parent and child
+NO_NEXT_CAP_MIN = 2.0          # min; how far past the last apex a rider's cap may be searched
+
+
+@dataclass
+class RiderCall:
+    """The split-or-skim decision for one child peak.
+
+    `child`, `parent`, `a`, `cap` are indices into `x`. `parent` may be a range-excluded apex.
+    `ratios` holds hp_hc, hv_hp, hc_hv and tail_bend. `failed` lists the tests that failed, drawn from
+    front, height, position, valley, tail, excluded. `tail` is the exponential parent-tail model
+    (skim decisions only), used to ask whether a later child still sits on the same tail.
+    """
+    child: int
+    parent: int
+    a: int
+    cap: int
+    decision: Literal['skim', 'split']
+    source: Literal['auto', 'forced']
+    skim_model: str
+    ratios: dict
+    failed: List[str]
+    near_threshold: bool
+    tail: Optional[Callable[[np.ndarray], np.ndarray]] = field(default=None, repr=False, compare=False)
+
+
+def rider_settings_at(defaults: Optional[dict], windows: List[dict], rt: float) -> dict:
+    """Rider settings governing a child with apex time `rt`.
+
+    `defaults is None` means the method has no rider block (legacy): always split. Otherwise the
+    non-None fields of the holding window's `rider` overrides are merged over the defaults.
+    """
+    if defaults is None:
+        return {**RIDER_DEFAULTS, 'rider_integration': 'split'}
+    out = {**RIDER_DEFAULTS, **defaults}
+    window = window_at(windows or [], rt)
+    overrides = (window or {}).get('rider') or {}
+    out.update({k: v for k, v in overrides.items() if v is not None})
+    return out
+
+
+def _thresholds(cfg: dict, ratios: dict) -> List[Tuple[str, float, float, bool]]:
+    """(test name, measured value, threshold, passes) for the four tests of the rule."""
+    bend = ratios['tail_bend']
+    return [
+        ('height', ratios['hp_hc'], cfg['skim_height_ratio'], ratios['hp_hc'] >= cfg['skim_height_ratio']),
+        ('position', ratios['hv_hp'], cfg['skim_max_valley_frac'], ratios['hv_hp'] <= cfg['skim_max_valley_frac']),
+        ('valley', ratios['hc_hv'], cfg['skim_valley_ratio'], ratios['hc_hv'] <= cfg['skim_valley_ratio']),
+        ('tail', bend, cfg['skim_tail_bend'], bool(np.isfinite(bend) and bend <= cfg['skim_tail_bend'])),
+    ]
+
+
+def _near_threshold(tests, band: float) -> bool:
+    """True when moving one measured value by `band` (relative) across its threshold flips split/skim."""
+    for i, (_, value, threshold, _) in enumerate(tests):
+        if not np.isfinite(value) or abs(value / threshold - 1) > band:
+            continue
+        if all(ok for j, (_, _, _, ok) in enumerate(tests) if j != i):
+            return True
+    return False
+
+
+def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: List[dict],
+                    defaults: Optional[dict], windows: List[dict], negative: set,
+                    group_spans: List[Tuple[int, int]]) -> Dict[int, RiderCall]:
+    """Decide split or skim for every child peak, in RT order. Keyed by the child's apex index.
+
+    `apexes` are sorted indices (kept peaks plus range-excluded apexes) and `metadata[i]` belongs to
+    `apexes[i]`. `negative` holds apex indices of negative peaks; `group_spans` are `(start, end)` index
+    spans of peak groups. Pairs that fail the always-required checks (parent after child or not taller,
+    tail back to baseline between them) get no call.
+    """
+    calls: Dict[int, RiderCall] = {}
+    spans: Dict[int, Tuple[int, int]] = {}     # skimmed rider apex -> (a, b), excluded from later tail fits
+    apexes = [int(i) for i in apexes]
+
+    for k in range(1, len(apexes)):
+        q, c = apexes[k - 1], apexes[k]
+        meta = metadata[k] or {}
+        cfg = rider_settings_at(defaults, windows, float(x[c]))
+        h_c = float(y[c])
+
+        # 1. parent
+        if meta.get('parent_index') is not None:
+            p = int(meta['parent_index'])
+        else:
+            p = q
+            prev = calls.get(q)
+            if prev is not None and prev.decision == 'skim' and prev.tail is not None:
+                if float(prev.tail(x[c])) >= cfg['skim_chain_min_tail'] * h_c:
+                    p = prev.parent
+
+        # 2. valley
+        if meta.get('is_shoulder') and meta.get('split_index') is not None:
+            v = int(meta['split_index'])
+        elif meta.get('is_shoulder') and meta.get('left_bound') is not None:
+            v = int(meta['left_bound'])
+        else:
+            v = q + int(np.argmin(y[q:c + 1]))
+        h_v, h_p = float(y[v]), float(y[p])
+
+        # 3. always required: no call when the pair is not a parent/rider pair at all
+        if not (p < c and h_p > h_c and np.all(y[p:c + 1] > PARENT_FLOOR_FRAC * h_p)):
+            continue
+        nxt = apexes[k + 1] if k + 1 < len(apexes) else None
+        if nxt is not None:
+            cap = c + int(np.argmin(y[c:nxt + 1]))
+        else:
+            end = min(len(y) - 1, int(np.searchsorted(x, x[c] + NO_NEXT_CAP_MIN)))
+            cap = c + int(np.argmin(y[c:end + 1]))
+        front = nxt is not None and y[nxt] > h_c and y[cap] > h_v
+        excluded = (c in negative or p in negative
+                    or any(s <= c and e >= p for s, e in group_spans))
+        ratios = {'hp_hc': h_p / h_c, 'hv_hp': h_v / h_p, 'hc_hv': h_c / h_v,
+                  'tail_bend': tail_bend(x, y, p, v)}
+        tests = _thresholds(cfg, ratios)
+
+        # 4. mode
+        mode = cfg['rider_integration']
+        always = (['front'] if front else []) + (['excluded'] if excluded else [])
+        if mode == 'split':
+            failed, skim, source = [], False, 'forced'
+        elif mode == 'skim':
+            failed, skim, source = always, not always, 'forced'
+        else:
+            failed = (['front'] if front else []) + [n for n, _, _, ok in tests if not ok] \
+                + (['excluded'] if excluded else [])
+            skim, source = not failed, 'auto'
+        if excluded and mode != 'split':
+            logger.warning("tail skim: peak at %.3f min not skimmed (negative peak or peak-group overlap)", x[c])
+
+        # 5. near threshold (auto only; front and excluded are hard stops)
+        near = mode == 'auto' and not always and _near_threshold(tests, cfg['skim_flag_band'])
+
+        call = RiderCall(child=c, parent=p, a=v, cap=cap, decision='skim' if skim else 'split',
+                         source=source, skim_model=cfg['skim_model'], ratios=ratios, failed=failed,
+                         near_threshold=near)
+        # 6. skim: the chain test always reads an exponential parent-tail model
+        if skim:
+            b = rider_end(x, y, v, c, cap)
+            skip = [spans[r] for r, rc in calls.items() if rc.decision == 'skim' and rc.parent == p and r in spans]
+            call.tail = exp_skim(x, y, v, b, p, cap, skip).tail
+            spans[c] = (v, b)
+        calls[c] = call
+    return calls
