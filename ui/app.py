@@ -2556,6 +2556,9 @@ class ChromaKitApp(QMainWindow):
             classical_processed['peak_metadata'] = [
                 m for m, keep in zip(full_meta, classical_mask) if keep
             ]
+            # Split mode: the merge below renumbers peaks (breaking skim_parent/skim_children) and
+            # drops the skim shading arrays. classical_processed is a copy; processed keeps its rider.
+            classical_processed['rider'] = None
             peak_groups = params.get('integration', {}).get('peak_groups', [])
             classical_results = self.processor.integrate_peaks(
                 processed_data=classical_processed,
