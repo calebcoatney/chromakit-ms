@@ -214,6 +214,8 @@ class ProcessResponse(BaseModel):
     peaks_x: List[float]
     peaks_y: List[float]
     peak_metadata: List[Dict[str, Any]]
+    # Rider (tail skim) settings, passed back to /api/integrate inside processed_data
+    rider: Optional[Dict[str, Any]] = None
 
 
 class IntegrateResponse(BaseModel):
