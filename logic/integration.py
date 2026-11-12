@@ -1037,6 +1037,10 @@ class Integrator:
             # Add negative peak flag
             if is_negative:
                 peak.is_negative = True
+
+            # Record which RT window the peak belongs to (not exported yet)
+            if has_shoulder_info and i < len(peak_metadata):
+                peak.window_id = peak_metadata[i].get('window_id')
             
             # Assess peak quality if MS data is available and quality checks are enabled
             if ms_data is not None and quality_options and quality_options.get('quality_checks_enabled', False):
@@ -1056,6 +1060,11 @@ class Integrator:
             
             peaks_list.append(peak)
         
+        # Per-window events (registry is empty in phase 1; handlers must keep
+        # the peak count so the parallel lists below stay aligned)
+        from logic.window_events import apply_window_events
+        peaks_list = apply_window_events(peaks_list, processed_data)
+
         # Apply peak grouping if specified
         if peak_groups and len(peak_groups) > 0 and len(peaks_list) > 0:
             peaks_list, x_peaks, y_peaks, baseline_peaks, ret_times, integrated_areas, integration_bounds = \
