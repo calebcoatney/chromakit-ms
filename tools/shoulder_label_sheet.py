@@ -154,12 +154,17 @@ draw();
 </script></body></html>"""
 
 
-def review_runs(labels_path, n_panels, seed=0):
+def review_runs(labels_path, n_panels, seed=0, blind=False, exclude=None):
     """A random sample of `n_panels` already-labelled panels, with the draft
     marks pre-filled, for a person to check and correct."""
     import random
     doc = json.loads(Path(labels_path).read_text())
-    pool = [(ri, pi) for ri, r in enumerate(doc['runs']) for pi in range(len(r['panels']))]
+    skip = set()
+    if exclude:   # panels already shown to the reviewer (another labels file's panels)
+        for r in json.loads(Path(exclude).read_text())['runs']:
+            skip |= {(r['name'], round(lo, 4)) for lo, _ in r['panels']}
+    pool = [(ri, pi) for ri, r in enumerate(doc['runs']) for pi in range(len(r['panels']))
+            if (r['name'], round(r['panels'][pi][0], 4)) not in skip]
     pick = sorted(random.Random(seed).sample(pool, min(n_panels, len(pool))))
     runs = []
     for ri in sorted({ri for ri, _ in pick}):
@@ -170,7 +175,7 @@ def review_runs(labels_path, n_panels, seed=0):
             lo, hi = r['panels'][pi]
             m = (x >= lo) & (x <= hi)
             panels.append(dict(x=[round(float(v), 5) for v in x[m]], y=[round(float(v), 3) for v in y[m]],
-                               draft=[l for l in r['labels'] if lo <= l['rt'] <= hi]))
+                               draft=[] if blind else [l for l in r['labels'] if lo <= l['rt'] <= hi]))
         runs.append(dict(name=r['name'], path=r['path'], method=r.get('method'), detector=r.get('detector'), panels=panels))
     return runs
 
@@ -185,8 +190,11 @@ def main(argv=None):
     ap.add_argument('--review', type=Path, default=None,
                     help='labels.json: show a random sample of its panels with the marks pre-filled')
     ap.add_argument('--sample', type=int, default=40, help='panels to sample with --review')
+    ap.add_argument('--blind', action='store_true', help='with --review: show no marks (a gold set that also counts misses)')
+    ap.add_argument('--exclude', type=Path, default=None, help='with --review: skip panels in this labels.json')
+    ap.add_argument('--seed', type=int, default=0)
     args = ap.parse_args(argv)
-    runs = review_runs(args.review, args.sample) if args.review else []
+    runs = review_runs(args.review, args.sample, args.seed, args.blind, args.exclude) if args.review else []
     for path in ([] if args.review else args.runs):
         x, y, _ = load_run(path, args.method, detector=args.detector)
         spans, _ = panels_for_run(x, y, args.min_snr)
