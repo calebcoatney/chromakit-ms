@@ -930,12 +930,20 @@ class Integrator:
                     # Don't extend past the next peak's apex; use midpoint as boundary
                     right_bound = (peak_idx + next_peak_idx) // 2
 
-            # Clamp bounds to the range-filter window holding this apex.
-            # Windows may overlap; use their union around the apex.
-            windows = [(s, e) for s, e in range_filters if s <= apex_x <= e]
-            if windows:
-                lo = min(s for s, _ in windows)
-                hi = max(e for _, e in windows)
+            # Clamp bounds to the span allowed for this apex. The processor puts
+            # a per-peak 'clamp' in the metadata (a None side is unbounded).
+            # Processed dicts without one (older API clients) fall back to the
+            # range filters holding the apex; these may overlap, so use their
+            # union. By value, so descending x-axes work.
+            clamp = peak_metadata[i].get('clamp') if i < len(peak_metadata) else None
+            if clamp is None:
+                windows = [(s, e) for s, e in range_filters if s <= apex_x <= e]
+                clamp = ((min(s for s, _ in windows), max(e for _, e in windows))
+                         if windows else (None, None))
+            lo, hi = clamp
+            if lo is not None or hi is not None:
+                lo = -np.inf if lo is None else lo
+                hi = np.inf if hi is None else hi
                 in_window = np.flatnonzero((x >= lo) & (x <= hi))
                 left_bound = max(left_bound, int(in_window.min()))
                 right_bound = min(right_bound, int(in_window.max()))
@@ -1037,6 +1045,11 @@ class Integrator:
             # Add negative peak flag
             if is_negative:
                 peak.is_negative = True
+
+            # Record which RT window the peak belongs to (not exported yet)
+            peak.window_id = None
+            if has_shoulder_info and i < len(peak_metadata):
+                peak.window_id = peak_metadata[i].get('window_id')
             
             # Assess peak quality if MS data is available and quality checks are enabled
             if ms_data is not None and quality_options and quality_options.get('quality_checks_enabled', False):
@@ -1056,6 +1069,11 @@ class Integrator:
             
             peaks_list.append(peak)
         
+        # Per-window events (registry is empty in phase 1; handlers must keep
+        # the peak count so the parallel lists below stay aligned)
+        from logic.window_events import apply_window_events
+        peaks_list = apply_window_events(peaks_list, processed_data)
+
         # Apply peak grouping if specified
         if peak_groups and len(peak_groups) > 0 and len(peaks_list) > 0:
             peaks_list, x_peaks, y_peaks, baseline_peaks, ret_times, integrated_areas, integration_bounds = \

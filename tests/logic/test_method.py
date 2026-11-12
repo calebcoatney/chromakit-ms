@@ -56,7 +56,7 @@ def test_creates_with_defaults():
     m = ChromaMethod(name="Test", signal_type="gc")
     assert m.name == "Test"
     assert m.signal_type == "gc"
-    assert m.version == "1"
+    assert m.version == "2"
     assert m.area_factor is None
     assert m.signal_factor is None
     assert m.detector is None

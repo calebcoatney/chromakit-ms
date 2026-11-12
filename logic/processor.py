@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -5,6 +6,12 @@ from scipy import signal, interpolate
 from scipy.signal import medfilt, savgol_filter, find_peaks
 from scipy.optimize import curve_fit
 from pybaselines import Baseline
+
+from logic.windows import (apex_clamp, blend_points, merge_overrides, overrides_any,
+                           dedupe_v1_break_points, resolve_break_points, resolve_windows, section_overrides,
+                           shared_edge_neighbour, stitch_smoothed, window_at, window_params)
+
+logger = logging.getLogger(__name__)
 
 
 # Minimum length a segment must have for pybaselines to be worth running on it.
@@ -116,8 +123,16 @@ def _build_baseline_segments(x, ms_range, break_points):
                     if seg.start < b < seg.end:
                         used_bps.add(b)
         dropped_bps = [b for b in bp_indices if b not in used_bps]
-        if dropped_bps:
-            print(f"Warning: {len(dropped_bps)} break point(s) dropped because they fall outside the MS-on region")
+        # Breaks before the MS start keep their overrides for the first fitted
+        # segment (section_overrides); only those after the MS end are dropped.
+        first_fit = next((seg.start for seg in segments if seg.fit), None)
+        pre_ms = [b for b in dropped_bps if first_fit is not None and b <= first_fit]
+        post_ms = [b for b in dropped_bps if b not in pre_ms]
+        for b in pre_ms:
+            logger.warning("break at %.3f min is before the MS start; it doesn't split the "
+                           "baseline, but its settings apply from the MS start", float(x[b]))
+        if post_ms:
+            logger.warning("%d break point(s) dropped because they fall outside the MS-on region", len(post_ms))
 
         segments = new_segments
 
@@ -125,7 +140,7 @@ def _build_baseline_segments(x, ms_range, break_points):
     final_segments = []
     for seg in segments:
         if seg.fit and (seg.end - seg.start) < MIN_SEGMENT_LEN:
-            print(f"Warning: segment [{seg.start}:{seg.end}] is too short ({seg.end - seg.start} < {MIN_SEGMENT_LEN}); demoting to fit=False")
+            logger.warning("segment [%d:%d] is too short (%d < %d); demoting to fit=False", seg.start, seg.end, seg.end - seg.start, MIN_SEGMENT_LEN)
             final_segments.append(_BaselineSegment(start=seg.start, end=seg.end, fit=False))
         else:
             final_segments.append(seg)
@@ -179,7 +194,8 @@ def _extend_nan_with_nearest_finite(signal):
 class ChromatogramProcessor:
     """Processes chromatogram data with smoothing, baseline subtraction, and peak finding."""
 
-    def _detect_peaks_and_shoulders_derivative(self, x, y, peak_params, shoulder_params, smoothed_y=None):
+    def _detect_peaks_and_shoulders_derivative(self, x, y, peak_params, shoulder_params, smoothed_y=None,
+                                               range_mask=None):
         """
         Detect peaks and shoulders using derivative analysis.
         Uses noise-adaptive local thresholds for consistent detection
@@ -191,6 +207,8 @@ class ChromatogramProcessor:
             peak_params: Peak detection parameters from UI
             shoulder_params: Shoulder detection parameters from UI  
             smoothed_y: Pre-smoothed signal (if smoothing was enabled), otherwise None
+            range_mask: Optional boolean sample mask. A fractional prominence (<= 1)
+                is then measured against the signal's range over these samples only.
         """
         from scipy.signal import savgol_filter, find_peaks
         import numpy as np
@@ -207,7 +225,8 @@ class ChromatogramProcessor:
         # spurious step that find_peaks interprets as a local maximum).
         signal_for_detection = _extend_nan_with_nearest_finite(signal_for_detection)
 
-        signal_range = np.max(signal_for_detection) - np.min(signal_for_detection)
+        ranged = signal_for_detection if range_mask is None else signal_for_detection[range_mask]
+        signal_range = np.max(ranged) - np.min(ranged)
         min_prominence = peak_prominence if peak_prominence > 1 else peak_prominence * signal_range
 
         peak_indices, peak_props = find_peaks(signal_for_detection, prominence=min_prominence, width=peak_width)
@@ -451,16 +470,55 @@ class ChromatogramProcessor:
         x_values = np.copy(x)
         y_values = np.copy(y)
         
-        # STEP 1: Apply smoothing if enabled
-        if params['smoothing']['enabled']:
-            smoothed_y = self._apply_smoothing(np.copy(y_values), params['smoothing'])
-        else:
-            smoothed_y = np.copy(y_values)
-        
+        # STEP 1: Apply smoothing if enabled. Windows whose merged smoothing
+        # differs get their own full-trace smoothing, computed once here; the
+        # trace the baseline and integration share is stitched from them.
+        windows, outside = resolve_windows(params)
+        base_smoothed = self._smooth_full(y_values, params['smoothing'])
+        smoothed_y = base_smoothed
+        window_traces = {}
+        pieces = []
+        def _smoothing_of(w):
+            return window_params(params, w)['smoothing']
+
+        differs = {w['id']: _smoothing_of(w) != params['smoothing'] for w in windows}
+        for w in windows:
+            earlier = shared_edge_neighbour(windows, w, 'start')
+            # A window touching a differing earlier window joins the stitch even
+            # on the global smoothing, so it can ramp away from that trace.
+            if not differs[w['id']] and not (earlier and differs[earlier['id']]):
+                continue
+            in_w = (x_values >= w['start']) & (x_values <= w['end'])
+            if not in_w.any():
+                continue
+            w_smoothing = _smoothing_of(w)
+            if differs[w['id']]:
+                trace = self._smooth_full(y_values, w_smoothing)
+                window_traces[w['id']] = trace
+            else:
+                trace = base_smoothed
+            n_w = int(in_w.sum())
+            # Only the later window blends at a shared edge: its left k.
+            nb_left = _smoothing_of(earlier) if earlier else params['smoothing']
+            k_left = blend_points(nb_left, w_smoothing, n_w)
+            k_right = (0 if shared_edge_neighbour(windows, w, 'end')
+                       else blend_points(params['smoothing'], w_smoothing, n_w))
+            pieces.append((w, trace, k_left, k_right))
+        if pieces:
+            smoothed_y = stitch_smoothed(x_values, base_smoothed, pieces)
+
         # STEP 2: Baseline correction (skippable via baseline.enabled=False).
         # When disabled, corrected_y IS the smoothed signal and baseline is zero,
         # so downstream (band integration, plotting) has a well-defined corrected_y.
-        if params['baseline'].get('enabled', True):
+        raw_breaks = params['baseline'].get('break_points', [])
+        if 'peak_windows' not in params:  # v1 params: main deduplicated breaks
+            raw_breaks, bp_messages = dedupe_v1_break_points(raw_breaks)
+            for msg in bp_messages:
+                logger.warning(msg)
+        resolved_breaks = resolve_break_points(windows, raw_breaks)
+        any_section_enabled = any(
+            (b.get('overrides') or {}).get('enabled') is True for b in resolved_breaks)
+        if params['baseline'].get('enabled', True) or any_section_enabled:
             # Pass ms_range so the baseline is not fit through the solvent peak
             # (the pre-MS region of the FID is masked with NaN).
             baseline_y, baseline_corrected_y = self._apply_baseline_correction(
@@ -468,21 +526,62 @@ class ChromatogramProcessor:
                 method=params['baseline']['method'],
                 lam=params['baseline']['lambda'],
                 fastchrom_params=params['baseline'].get('fastchrom'),
-                break_points=params['baseline'].get('break_points', []),
+                break_points=resolved_breaks,
                 baseline_offset=params['baseline'].get('baseline_offset', 0.0),
                 ms_range=ms_range,
+                baseline_params=params['baseline'],
             )
         else:
             baseline_y = np.zeros_like(smoothed_y)
             baseline_corrected_y = np.copy(smoothed_y)
         
+        # STEPS 3-4: detection (positive, negative, MS-range filter).
+        # STEP 5: window membership. With no windows nothing is filtered;
+        # otherwise each window's own detection pass supplies its peaks and the
+        # excluded apexes still bound kept peaks' valleys in integration.
+        if windows:
+            peaks_x, peaks_y, peak_metadata, range_excluded_x = self._detect_in_windows(
+                x_values, baseline_corrected_y, base_smoothed, window_traces, params,
+                ms_range, windows, outside)
+        else:
+            peaks_x, peaks_y, peak_metadata, range_excluded_x, _ = self._detect_all(
+                x_values, baseline_corrected_y, smoothed_y, params, ms_range)
+        # Window spans for readers of the legacy key (mirrors the saved method).
+        range_filters = [[w['start'], w['end']] for w in windows] if outside == 'ignore' else []
+
+        # Return processed data
+        return {
+            'x': x_values,
+            'original_y': y_values,
+            'smoothed_y': smoothed_y,
+            'baseline_y': baseline_y,
+            'corrected_y': baseline_corrected_y,
+            'peaks_x': peaks_x,
+            'peaks_y': peaks_y,
+            'peak_metadata': peak_metadata,
+            'range_filters': range_filters,
+            'range_excluded_peaks_x': range_excluded_x,
+            'peak_windows': windows,
+            'outside_windows': outside,
+        }
+    
+    def _detect_all(self, x, corrected_y, smoothed_y, params, ms_range,
+                    pos_range_mask=None, neg_range_mask=None):
+        """Positive and negative detection over the full trace, MS-range filtered.
+
+        Returns ``(peaks_x, peaks_y, peak_metadata, ms_excluded_x, detection_signal)``,
+        sorted by x when negative peaks are merged in. The range masks restrict
+        the range a fractional prominence is measured against (see the detectors).
+        """
+        import numpy as np
+
         # STEP 3: Find peaks and shoulders using derivative method
         peaks_x = np.array([])
         peaks_y = np.array([])
         peak_metadata = []
-        detection_signal = baseline_corrected_y  # Default to corrected signal
-        # Apexes dropped by the MS-range filter; merged with range-filter
-        # exclusions below so integration sees one set of excluded neighbours.
+        detection_signal = corrected_y  # Default to corrected signal
+        # Apexes dropped by the MS-range filter; the caller merges them with the
+        # window exclusions so integration sees one set of excluded neighbours.
         ms_excluded_x = np.array([])
         
         if params['peaks']['enabled']:
@@ -491,17 +590,18 @@ class ChromatogramProcessor:
             # on steep baselines because prominence was computed against a sloped zero.
             if params['smoothing']['enabled']:
                 smoothed_for_detection = self._apply_smoothing(
-                    np.copy(baseline_corrected_y), params['smoothing']
+                    np.copy(corrected_y), params['smoothing']
                 )
             else:
                 smoothed_for_detection = None
             
             # Use derivative-based detection, passing both peak and shoulder params
             peaks_x, peaks_y, peak_metadata, detection_signal = self._detect_peaks_and_shoulders_derivative(
-                x_values, baseline_corrected_y,
+                x, corrected_y,
                 peak_params=params['peaks'],
                 shoulder_params=params.get('shoulders', {'enabled': False}),
-                smoothed_y=smoothed_for_detection
+                smoothed_y=smoothed_for_detection,
+                range_mask=pos_range_mask,
             )
             
             # SOLVENT DELAY FILTERING: Filter peaks based on MS data range
@@ -533,9 +633,10 @@ class ChromatogramProcessor:
         if params.get('negative_peaks', {}).get('enabled', False):
             smoothed_for_neg = smoothed_y if params['smoothing']['enabled'] else None
             neg_peaks_x, neg_peaks_y, neg_peak_metadata = self._detect_negative_peaks(
-                x_values, baseline_corrected_y,
+                x, corrected_y,
                 neg_peak_params=params['negative_peaks'],
-                smoothed_y=smoothed_for_neg
+                smoothed_y=smoothed_for_neg,
+                range_mask=neg_range_mask,
             )
 
             # Apply same solvent delay filtering as positive peaks
@@ -568,43 +669,78 @@ class ChromatogramProcessor:
                 peaks_y = merged_y[sort_order]
                 peak_metadata = [merged_meta[i] for i in sort_order]
 
-        # STEP 5: Range filtering — keep only peaks within user-specified time ranges
-        # The excluded apexes and the windows are passed on to integration:
-        # an excluded neighbour still marks the valley that bounds a kept
-        # peak, and a kept peak's bounds are clamped to its window.
-        range_filters = [list(rf) for rf in (params.get('peaks', {}).get('range_filters') or []) if len(rf) == 2]
-        range_excluded_x = np.array([])
-        if range_filters and len(peaks_x) > 0:
-            range_mask = np.zeros(len(peaks_x), dtype=bool)
-            for rf_start, rf_end in range_filters:
-                range_mask |= (peaks_x >= rf_start) & (peaks_x <= rf_end)
+        return peaks_x, peaks_y, peak_metadata, ms_excluded_x, detection_signal
 
-            filtered_count = len(peaks_x) - np.sum(range_mask)
-            if filtered_count > 0:
-                print(f"Range filtering: Removing {filtered_count} peaks outside specified ranges")
+    def _smooth_full(self, y, smoothing_params):
+        """Smooth the full raw trace; a copy of it when smoothing is disabled."""
+        import numpy as np
 
-            range_excluded_x = peaks_x[~range_mask]
-            peaks_x = peaks_x[range_mask]
-            peaks_y = peaks_y[range_mask]
-            if peak_metadata and len(peak_metadata) > 0:
-                peak_metadata = [m for i, m in enumerate(peak_metadata) if i < len(range_mask) and range_mask[i]]
+        if smoothing_params['enabled']:
+            return self._apply_smoothing(np.copy(y), smoothing_params)
+        return np.copy(y)
 
-        range_excluded_x = np.concatenate([ms_excluded_x, range_excluded_x])
+    def _detect_in_windows(self, x, corrected_y, smoothed_y, window_traces, params, ms_range,
+                           windows, outside):
+        """Global pass plus one pass per window; keep each window's own apexes.
 
-        # Return processed data
-        return {
-            'x': x_values,
-            'original_y': y_values,
-            'smoothed_y': smoothed_y,
-            'baseline_y': baseline_y,
-            'corrected_y': baseline_corrected_y,
-            'peaks_x': peaks_x,
-            'peaks_y': peaks_y,
-            'peak_metadata': peak_metadata,
-            'range_filters': range_filters,
-            'range_excluded_peaks_x': range_excluded_x,
-        }
-    
+        Every pass runs over the full trace, so no window edge creates an apex.
+        A window without detection overrides reuses the global pass. Global-pass
+        apexes inside a window are dropped (the window's pass replaces them);
+        those outside every window are kept under ``"global"`` and become
+        excluded valley neighbours under ``"ignore"``. Each kept peak's metadata
+        gets ``window_id`` and its integration ``clamp`` (``apex_clamp``).
+        A window pass's MS-excluded apexes count as neighbours only inside that
+        window. ``smoothed_y`` is the global-smoothing trace; ``window_traces`` maps
+        a window id to its own full-trace smoothing when its merged smoothing
+        differs (computed once in ``process``).
+
+        Returns ``(peaks_x, peaks_y, peak_metadata, excluded_x)``.
+        """
+        import numpy as np
+
+        gx, gy, gmeta, g_ms_excl, _ = self._detect_all(x, corrected_y, smoothed_y, params, ms_range)
+        excluded = [g_ms_excl]
+        kept = []  # (x, y, metadata)
+
+        def keep(px, py, meta, window_id):
+            lo, hi = apex_clamp(windows, px, outside)
+            kept.append((px, py, dict(meta, window_id=window_id, clamp=[lo, hi])))
+
+        for px, py, meta in zip(gx, gy, gmeta, strict=True):
+            if window_at(windows, px) is not None:
+                continue
+            if outside == 'global':
+                keep(px, py, meta, None)
+            else:
+                excluded.append([px])
+
+        for w in windows:
+            in_w = (x >= w['start']) & (x <= w['end'])  # by value: descending axes work
+            if not in_w.any():
+                continue  # window lies outside this run's x-range: it can hold no apex
+            if overrides_any(w):
+                pos_mask = in_w if (w.get('peaks') or {}).get('min_prominence') is not None else None
+                neg_mask = in_w if (w.get('negative_peaks') or {}).get('min_prominence') is not None else None
+                merged = window_params(params, w)
+                w_smoothed = window_traces.get(w['id'], smoothed_y)
+                wx, wy, wmeta, w_ms_excl, _ = self._detect_all(
+                    x, corrected_y, w_smoothed, merged, ms_range,
+                    pos_range_mask=pos_mask, neg_range_mask=neg_mask)
+                excluded.append([e for e in w_ms_excl if window_at(windows, e) is w])
+            else:
+                wx, wy, wmeta = gx, gy, gmeta
+            for px, py, meta in zip(wx, wy, wmeta, strict=True):
+                if window_at(windows, px) is w:
+                    keep(px, py, meta, w['id'])
+
+        kept.sort(key=lambda k: k[0])
+        deduped = [k for i, k in enumerate(kept) if i == 0 or k[0] != kept[i - 1][0]]
+        peaks_x = np.array([k[0] for k in deduped], dtype=float)
+        peaks_y = np.array([k[1] for k in deduped], dtype=float)
+        peak_metadata = [k[2] for k in deduped]
+        excluded_x = np.unique(np.concatenate([np.asarray(e, dtype=float) for e in excluded]))
+        return peaks_x, peaks_y, peak_metadata, excluded_x
+
     def _apply_smoothing(self, y, smoothing_params):
         """Apply smoothing using the selected method.
 
@@ -648,7 +784,7 @@ class ChromatogramProcessor:
             print(f"Smoothing failed: {str(e)}")
             return y
     
-    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0, ms_range=None):
+    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0, ms_range=None, baseline_params=None):
         """Apply baseline correction using the specified method.
         
         Signal is split into segments based on:
@@ -670,6 +806,11 @@ class ChromatogramProcessor:
             baseline_offset: Constant offset applied to the fitted baseline.
             ms_range: Optional (t_lo, t_hi) tuple of MS-detector-on time window.
                       Regions outside this window are not fitted.
+            baseline_params: Optional global baseline settings dict. When given,
+                each fit segment uses these merged with the overrides of the
+                latest break at or before the segment start (break_points must
+                then be resolved break dicts, see logic.windows). A segment
+                whose merged ``enabled`` is False gets a zero baseline.
         
         Returns:
             (baseline_y, corrected_y) — both full-length arrays matching len(y).
@@ -695,18 +836,37 @@ class ChromatogramProcessor:
         
         baseline_pieces = []
         corrected_pieces = []
-        
+
+        # Same argmin mapping as _build_baseline_segments. Breaks it drops (after the
+        # MS-on region) can never be at or before a fit segment's start, so they
+        # contribute nothing; a break in the masked pre-MS region is inherited by
+        # the first fit segment (spec 3.2).
+        bp_indices = []
+        if baseline_params is not None:
+            bp_indices = [int(np.argmin(np.abs(x - bp['time']))) for bp in (break_points or [])]
+
         for seg in segments:
             seg_y = y[seg.start:seg.end]
             if len(seg_y) == 0:
                 continue
             
             if seg.fit:
+                seg_method, seg_lam, seg_fc, seg_offset = method, lam, fastchrom_params, baseline_offset
+                if baseline_params is not None:
+                    cfg = merge_overrides(
+                        baseline_params,
+                        section_overrides(seg.start, bp_indices, break_points))
+                    if not cfg.get('enabled', True):
+                        baseline_pieces.append(np.zeros(len(seg_y)))
+                        corrected_pieces.append(np.copy(seg_y))
+                        continue
+                    seg_method, seg_lam = cfg['method'], cfg['lambda']
+                    seg_fc, seg_offset = cfg.get('fastchrom'), cfg.get('baseline_offset', 0.0)
                 print(f"  Baseline segment [{seg.start}:{seg.end}] (fit, length={len(seg_y)})")
                 seg_baseline, seg_corrected = self._apply_baseline_correction_single(
-                    seg_y, method=method, lam=lam,
-                    fastchrom_params=fastchrom_params,
-                    baseline_offset=baseline_offset,
+                    seg_y, method=seg_method, lam=seg_lam,
+                    fastchrom_params=seg_fc,
+                    baseline_offset=seg_offset,
                 )
             else:
                 print(f"  Baseline segment [{seg.start}:{seg.end}] (masked, NaN, length={len(seg_y)})")
@@ -1659,7 +1819,7 @@ class ChromatogramProcessor:
             
         return shoulder_bounds
 
-    def _detect_negative_peaks(self, x, y, neg_peak_params, smoothed_y=None):
+    def _detect_negative_peaks(self, x, y, neg_peak_params, smoothed_y=None, range_mask=None):
         """
         Detect negative peaks by running find_peaks on the negated signal.
 
@@ -1668,6 +1828,8 @@ class ChromatogramProcessor:
             y: Signal intensity array (baseline-corrected)
             neg_peak_params: Negative peak detection parameters from UI
             smoothed_y: Pre-smoothed signal (if smoothing was enabled), otherwise None
+            range_mask: Optional boolean sample mask. A fractional prominence (<= 1)
+                is then measured against the signal's range over these samples only.
 
         Returns:
             tuple: (neg_peaks_x, neg_peaks_y, neg_peak_metadata)
@@ -1690,7 +1852,8 @@ class ChromatogramProcessor:
         negated = -signal_for_detection
 
         # Calculate effective prominence
-        signal_range = np.max(negated) - np.min(negated)
+        ranged = negated if range_mask is None else negated[range_mask]
+        signal_range = np.max(ranged) - np.min(ranged)
         effective_prominence = neg_prominence if neg_prominence > 1 else neg_prominence * signal_range
 
         # Find peaks on the negated signal

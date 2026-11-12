@@ -43,6 +43,8 @@ def key_sets(qapp):
 def test_top_level_sections_match(key_sets):
     gui, method = key_sets
     assert set(gui) == set(method) - METHOD_ONLY_SECTIONS
+    # peak_windows / outside_windows are top-level keys, not dict sections.
+    assert {'peak_windows', 'outside_windows'} <= set(gui)
 
 
 SECTIONS = ['smoothing', 'baseline', 'peaks', 'peak_splitting', 'negative_peaks',
@@ -65,4 +67,5 @@ def test_section_keys_match(key_sets, section):
 
 def test_every_gui_section_is_covered(key_sets):
     gui, _ = key_sets
-    assert set(gui) == set(SECTIONS)
+    # peak_windows (list) and outside_windows (str) are top-level values, not sections.
+    assert {k for k, v in gui.items() if isinstance(v, dict)} == set(SECTIONS)
