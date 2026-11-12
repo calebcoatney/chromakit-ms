@@ -141,10 +141,16 @@ def test_forced_skim_skips_thresholds():
     assert call.decision == 'skim' and call.source == 'forced'
 
 
-def test_split_mode_never_skims():
+def test_split_mode_gives_no_calls():
     pair = rider_on_tail(1.0, 3.0)
-    call = only_call(pair, defaults={'rider_integration': 'split'})
-    assert call.decision == 'split' and call.source == 'forced' and call.tail is None
+    assert run(pair, defaults={'rider_integration': 'split'}) == {}
+
+
+def test_split_mode_skips_metadata_checks():
+    pair = rider_on_tail(1.0, 3.0)
+    meta = [{}, {'is_shoulder': True, 'left_bound': pair['apex']}]   # invalid split point
+    assert run(pair, defaults={'rider_integration': 'split'}, metas=meta) == {}
+    assert run(pair, defaults=None, metas=meta) == {}
 
 
 def test_window_override_beats_default():
@@ -152,7 +158,7 @@ def test_window_override_beats_default():
     x = pair['x']
     windows = [{'id': 'w1', 'start': float(x[0]), 'end': float(x[-1]),
                 'rider': {'rider_integration': 'auto'}}]
-    assert only_call(pair, defaults={'rider_integration': 'split'}).decision == 'split'
+    assert run(pair, defaults={'rider_integration': 'split'}) == {}
     assert only_call(pair, defaults={'rider_integration': 'split'}, windows=windows).decision == 'skim'
 
 
@@ -167,9 +173,7 @@ def test_near_threshold_flag():
 
 def test_no_rider_key_means_split():
     pair = rider_on_tail(1.0, 3.0)
-    call = only_call(pair, defaults=None)
-    assert call.decision == 'split'
-    assert not any(c.decision == 'skim' for c in run(pair, defaults=None).values())
+    assert run(pair, defaults=None) == {}
 
 
 def test_negative_or_group_overlap_is_excluded():

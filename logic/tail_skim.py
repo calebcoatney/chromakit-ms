@@ -257,9 +257,11 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
         meta = metadata[k] or {}
         cfg = rider_settings_at(defaults, windows, float(x[c]))
         h_c = float(y[c])
-        if cfg['rider_integration'] not in ('auto', 'skim', 'split'):
-            raise ValueError(f"unknown rider_integration {cfg['rider_integration']!r} "
-                             f"for the peak at {x[c]:.3f} min")
+        mode = cfg['rider_integration']
+        if mode not in ('auto', 'skim', 'split'):
+            raise ValueError(f"unknown rider_integration {mode!r} for the peak at {x[c]:.3f} min")
+        if mode == 'split':
+            continue  # split is today's behaviour: no call, no metadata checks, no ratios
 
         # 1. parent
         if meta.get('parent_index') is not None:
@@ -280,15 +282,18 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
         elif meta.get('is_shoulder') and meta.get('left_bound') is not None:
             v = int(meta['left_bound'])
         else:
-            v = q + int(np.argmin(y[q:c + 1]))
+            between = y[q:c + 1]
+            if not np.any(np.isfinite(between)):
+                continue  # all MS-gated: the pair cannot be judged
+            v = q + int(np.nanargmin(between))  # NaN-gated samples are not a valley
         if meta.get('is_shoulder') and not p < v < c:
             raise ValueError(f"split point {v} for the peak at {x[c]:.3f} min is not between its "
                              f"parent apex {p} and its apex {c}")
         h_v, h_p = float(y[v]), float(y[p])
 
         # 3. always required: no call when the pair is not a parent/rider pair at all. A NaN (MS-gated)
-        # sample is unknown, not a return to baseline: the pair gets a call, and plan_skims splits a
-        # skim whose bound is NaN, with a warning.
+        # sample is unknown, not a return to baseline: the pair still gets a call, and plan_skims
+        # splits a skim whose bound is NaN, with a warning.
         if not (p < c and h_p > h_c and not np.any(y[p:c + 1] <= PARENT_FLOOR_FRAC * h_p)):
             continue
         nxt = apexes[k + 1] if k + 1 < len(apexes) else None
@@ -304,18 +309,15 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
                   'tail_bend': tail_bend(x, y, p, v)}
         tests = _thresholds(cfg, ratios)
 
-        # 4. mode
-        mode = cfg['rider_integration']
+        # 4. mode ('split' already returned no call above)
         always = (['front'] if front else []) + (['excluded'] if excluded else [])
-        if mode == 'split':
-            failed, skim, source = [], False, 'forced'
-        elif mode == 'skim':
+        if mode == 'skim':
             failed, skim, source = always, not always, 'forced'
         else:
             failed = (['front'] if front else []) + [n for n, _, _, ok in tests if not ok] \
                 + (['excluded'] if excluded else [])
             skim, source = not failed, 'auto'
-        if excluded and mode != 'split':
+        if excluded:
             logger.warning("tail skim: peak at %.3f min not skimmed (negative peak or peak-group overlap)", x[c])
 
         # 5. near threshold (auto only; front and excluded are hard stops)

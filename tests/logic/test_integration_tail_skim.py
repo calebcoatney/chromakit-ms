@@ -59,7 +59,7 @@ def test_spectral_profile_untouched():
 
 
 def _main_fixtures():
-    proc, x, y, params = test_range_filter_bounds.setup.__wrapped__()
+    proc, x, y, params = test_range_filter_bounds.build_setup()
     yield test_integration_area_factor._simple_processed()
     yield test_integration_nan_baseline._build_processed(include_nan=False)
     yield test_integration_nan_baseline._build_processed(include_nan=True)
@@ -84,6 +84,7 @@ def test_split_mode_matches_main(processed):
         result = integrate(run)
         assert summary(result) == expected
         assert all(p.skim_parent is None and p.skim_children is None for p in result['peaks'])
+        assert all(p.skim_decision is None and p.skim_near_threshold is None for p in result['peaks'])
         assert all(top is y for top, y in zip(result['shade_top_peaks'], result['y_peaks']))
         assert all(not f.any() for f in result['shade_floor_peaks'])
 
@@ -129,7 +130,7 @@ def test_two_riders_both_subtracted():
 
 
 def test_area_factor_applies_to_all():
-    pair, _, processed = two_riders()
+    _, _, processed = two_riders()
     one = integrate(processed)
     two = integrate(processed, area_factor=2.0)
     for p, q in zip(one['peaks'], two['peaks']):
@@ -139,25 +140,58 @@ def test_area_factor_applies_to_all():
 
 # --- fall back to split -----------------------------------------------------------------------------
 
-def test_nan_at_rider_bound_splits(caplog):
+@pytest.mark.parametrize('bound', ['a', 'b'])
+def test_nan_at_rider_bound_splits(caplog, bound):
+    """NaN at the rider's start (a user split placed there) or at its end: split, with a warning."""
     pair = rider_on_tail(1.0, 3.0)
     x = pair['x']
-    call, _, _ = skim_call(pair, SKIM)
-    processed = processed_from(pair, rider=SKIM)
-    processed['corrected_y'][call.a] = np.nan
-    main = processed_from(pair)
-    main['corrected_y'][call.a] = np.nan
+    call, b, _ = skim_call(pair, SKIM)
+    nan_at = call.a if bound == 'a' else b
+    runs = []
+    for rider in (SKIM, None):
+        processed = processed_from(pair, rider=rider)
+        processed['corrected_y'][nan_at] = np.nan
+        if bound == 'a':
+            processed['peak_metadata'][1].update(is_shoulder=True, split_index=int(call.a),
+                                                 parent_index=int(pair['apex']))
+        runs.append(processed)
     with caplog.at_level(logging.WARNING):
-        result = integrate(processed)
+        result = integrate(runs[0])
     rider = at(result, x, pair['child_apex'])
     assert rider.skim_parent is None and rider.skim_decision['decision'] == 'split'
-    # Split exactly as main does. Main's own split walk crosses this lone NaN sample, so the area is
-    # NaN there too (the brief expected it finite; reported as a concern, not changed here).
+    # Split exactly as main does. Main's own split walk crosses a lone NaN sample inside the span, so
+    # an area can be NaN there too (the brief expected it finite; reported as a concern).
     np.testing.assert_array_equal([p.area for p in result['peaks']],
-                                  [p.area for p in integrate(main)['peaks']])
-    assert np.isfinite(at(result, x, pair['apex']).area)
+                                  [p.area for p in integrate(runs[1])['peaks']])
     assert any(f"{x[pair['child_apex']]:.3f}" in r.message and 'not finite' in r.message
                for r in caplog.records)
+
+
+def test_nan_between_apexes_still_skimmed():
+    """A NaN sample between parent and rider, away from a and b, is not taken as the valley."""
+    pair = rider_on_tail(1.0, 3.0)
+    x = pair['x']
+    call, b, _ = skim_call(pair)
+    processed = processed_from(pair, rider=AUTO)
+    nan_at = (pair['apex'] + call.a) // 2
+    processed['corrected_y'][nan_at] = np.nan
+    result = integrate(processed)
+    rider = at(result, x, pair['child_apex'])
+    assert rider.skim_parent == at(result, x, pair['apex']).peak_number
+    assert (rider.start_index, rider.end_index) == (call.a, b)
+    assert rider.area == pytest.approx(pair['true_child_area'], rel=0.10)
+
+
+def test_shoulder_at_previous_apex_without_rider_key():
+    """Legacy run: shoulder metadata the skim intake would reject is never checked in split mode."""
+    pair = rider_on_tail(1.0, 3.0)
+    processed = processed_from(pair)
+    processed.pop('rider')
+    processed['peak_metadata'][1].update(is_shoulder=True, left_bound=int(pair['apex']),
+                                         right_bound=int(pair['child_apex'] + 20))
+    result = integrate(processed)
+    assert len(result['peaks']) == 2
+    assert all(p.skim_decision is None for p in result['peaks'])
 
 
 def test_peak_group_overlap_splits(caplog):
@@ -228,6 +262,23 @@ def test_rider_outside_window_still_subtracted():
     assert parent.area == pytest.approx(parent.area_before_skim - expected_rider_area, rel=1e-6)
     assert parent.skimmed_area == pytest.approx(expected_rider_area)
     assert parent.skim_children == []
+
+
+def test_parent_clamped_before_rider_starts():
+    """Parent's window ends before its rider's span; the rider is outside every window."""
+    pair = rider_on_tail(1.0, 3.0)
+    x = pair['x']
+    call, b, _ = skim_call(pair)
+    processed = processed_from(pair, rider=AUTO)
+    processed['peak_metadata'][0]['clamp'] = (None, float(x[call.a - 10]))
+    processed.update(peaks_x=x[[pair['apex']]], peaks_y=pair['y'][[pair['apex']]],
+                     peak_metadata=processed['peak_metadata'][:1],
+                     range_excluded_peaks_x=x[[pair['child_apex']]])
+    result = integrate(processed)
+    (parent,) = result['peaks']
+    assert parent.end_index == call.a - 10
+    np.testing.assert_array_equal(result['shade_top_peaks'][0],
+                                  pair['y'][parent.start_index:parent.end_index + 1])
 
 
 # --- small things -----------------------------------------------------------------------------------

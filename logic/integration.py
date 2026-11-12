@@ -761,6 +761,8 @@ class Integrator:
             """The skim curve over ``[lo, hi]`` clipped to its span, as (offset from lo, values)."""
             a, b = skim.call.a, skim.b
             s_lo, s_hi = max(a, lo), min(b, hi)
+            if s_hi < s_lo:  # the peak's (clamped) bounds end before the rider starts
+                return 0, skim.curve.s[:0]
             return s_lo - lo, skim.curve.s[s_lo - a:s_hi - a + 1]
 
         for c, skim in skims.items():
