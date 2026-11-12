@@ -213,3 +213,32 @@ def test_composition_percent_absent_when_none():
         integrator="BB", width=0.1, area=1.0, start_time=1.9, end_time=2.1,
     )
     assert "composition_percent" not in p.as_dict()   # omitted when None, like other quant fields
+
+
+SKIM_FIELDS = [
+    'skim_model', 'skim_parent', 'skim_source', 'area_before_skim',
+    'skimmed_area', 'skim_children', 'skim_decision', 'skim_near_threshold',
+]
+
+
+def test_skim_fields_round_trip():
+    peak = ChromatographicPeak("x", 2, 5.0, "BB", 0.05, 100.0, 4.9, 5.1)
+    peak.skim_model = 'exp'
+    peak.skim_parent = 1
+    peak.skim_source = 'auto'
+    peak.area_before_skim = 120.0
+    peak.skimmed_area = 20.0
+    peak.skim_children = [3, 4]
+    peak.skim_decision = {
+        'decision': 'skim', 'parent': 1, 'hp_hc': 3.2, 'hv_hp': 0.4,
+        'hc_hv': 1.5, 'tail_bend': 0.1, 'failed': [],
+    }
+    peak.skim_near_threshold = True
+    d = peak.as_dict()
+    restored = ChromatographicPeak.from_dict(d)
+    for name in SKIM_FIELDS:
+        assert getattr(restored, name) == getattr(peak, name), name
+
+    plain = ChromatographicPeak("x", 2, 5.0, "BB", 0.05, 100.0, 4.9, 5.1)
+    assert not any(name in plain.as_dict() for name in SKIM_FIELDS)
+    assert all(getattr(plain, name) is None for name in SKIM_FIELDS)

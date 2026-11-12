@@ -97,6 +97,16 @@ class ChromatographicPeak(Feature):
         self.wt_percent = None  # Weight percentage
         self.raw_amount = None  # Pre-normalization amount (area / RF); RF-table strategy
         self.composition_percent = None  # normalized % in the method's rf_unit basis
+
+        # Tail-skim fields (None = peak was not skimmed / not evaluated)
+        self.skim_model = None  # str: tail model used
+        self.skim_parent = None  # int: peak_number of the parent peak
+        self.skim_source = None  # str: 'auto' or 'forced'
+        self.area_before_skim = None  # float: area before skim correction
+        self.skimmed_area = None  # float: area removed/added by the skim
+        self.skim_children = None  # list[int]: peak_numbers skimmed off this peak
+        self.skim_decision = None  # dict: decision, parent, hp_hc, hv_hp, hc_hv, tail_bend, failed
+        self.skim_near_threshold = None  # bool: decision was close to a threshold
     
     @property
     def position(self) -> float:
@@ -181,6 +191,24 @@ class ChromatographicPeak(Feature):
         if self.composition_percent is not None:
             d['composition_percent'] = self.composition_percent
 
+        # Tail-skim fields
+        if self.skim_model is not None:
+            d['skim_model'] = self.skim_model
+        if self.skim_parent is not None:
+            d['skim_parent'] = self.skim_parent
+        if self.skim_source is not None:
+            d['skim_source'] = self.skim_source
+        if self.area_before_skim is not None:
+            d['area_before_skim'] = self.area_before_skim
+        if self.skimmed_area is not None:
+            d['skimmed_area'] = self.skimmed_area
+        if self.skim_children is not None:
+            d['skim_children'] = self.skim_children
+        if self.skim_decision is not None:
+            d['skim_decision'] = self.skim_decision
+        if self.skim_near_threshold is not None:
+            d['skim_near_threshold'] = self.skim_near_threshold
+
         return d
 
     @classmethod
@@ -249,6 +277,23 @@ class ChromatographicPeak(Feature):
             peak.raw_amount = d['raw_amount']
         if 'composition_percent' in d:
             peak.composition_percent = d['composition_percent']
+        # Tail-skim fields
+        if 'skim_model' in d:
+            peak.skim_model = d['skim_model']
+        if 'skim_parent' in d:
+            peak.skim_parent = d['skim_parent']
+        if 'skim_source' in d:
+            peak.skim_source = d['skim_source']
+        if 'area_before_skim' in d:
+            peak.area_before_skim = d['area_before_skim']
+        if 'skimmed_area' in d:
+            peak.skimmed_area = d['skimmed_area']
+        if 'skim_children' in d:
+            peak.skim_children = d['skim_children']
+        if 'skim_decision' in d:
+            peak.skim_decision = d['skim_decision']
+        if 'skim_near_threshold' in d:
+            peak.skim_near_threshold = d['skim_near_threshold']
         # Deconvolved spectrum (not emitted by as_dict but may be in API payloads)
         if 'deconvolved_spectrum' in d and d['deconvolved_spectrum'] is not None:
             spec = d['deconvolved_spectrum']
