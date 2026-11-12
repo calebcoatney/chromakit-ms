@@ -353,3 +353,34 @@ def test_old_file_with_chemstation_area_factor_loads_as_none():
         assert not hasattr(loaded, "chemstation_area_factor")
     finally:
         os.unlink(path)
+
+
+# ---- rider (tail-skim) settings ----
+from pydantic import ValidationError
+from logic.method import RiderParams, PeakWindow
+
+
+def test_new_method_defaults_to_auto_via_gui_params():
+    params = ChromaMethod(name='n', signal_type='gc').to_gui_params()
+    params['rider'] = RiderParams().model_dump()
+    m = ChromaMethod.from_gui_params(params, name='n', signal_type='gc')
+    assert m.rider.rider_integration == 'auto'
+
+
+def test_method_without_rider_loads_as_split(tmp_path):
+    d = ChromaMethod(name='old', signal_type='gc').model_dump(by_alias=True, mode='json')
+    d.pop('rider')
+    p = tmp_path / 'old.chromethod'
+    p.write_text(json.dumps(d))
+    assert ChromaMethod.from_file(p).rider.rider_integration == 'split'
+
+
+def test_rider_round_trips_through_processor_and_gui_params():
+    m = ChromaMethod(name='r', signal_type='gc', rider=RiderParams(skim_model='tangent', skim_height_ratio=3.0))
+    assert m.to_processor_params()['rider']['skim_height_ratio'] == 3.0
+    assert m.to_gui_params()['rider']['skim_model'] == 'tangent'
+
+
+def test_window_rider_overrides_reject_unknown_keys():
+    with pytest.raises(ValidationError):
+        PeakWindow(id='w1', start=1.0, end=2.0, rider={'bogus': 1})

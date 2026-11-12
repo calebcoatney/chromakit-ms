@@ -48,7 +48,7 @@ def test_top_level_sections_match(key_sets):
 
 
 SECTIONS = ['smoothing', 'baseline', 'peaks', 'peak_splitting', 'negative_peaks',
-            'shoulders', 'integration', 'gcxgc']
+            'shoulders', 'rider', 'integration', 'gcxgc']
 
 
 # shortcut: compares keys one level deep (section -> key); keys inside a nested dict

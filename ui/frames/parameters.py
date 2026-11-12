@@ -11,7 +11,7 @@ import html
 import logging
 import numpy as np
 
-from logic.method import GCxGCParams
+from logic.method import GCxGCParams, RiderParams
 from logic.windows import _EDGE_TOL, resolve_break_points, validate_windows
 from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
 
@@ -174,6 +174,7 @@ class ParametersFrame(QWidget):
                 'sensitivity': 8,
                 'apex_distance': 10
             },
+            'rider': RiderParams().model_dump(),  # no widgets yet
             'integration': {
                 'peak_groups': []  # List of [start, end] time windows for grouping
             }

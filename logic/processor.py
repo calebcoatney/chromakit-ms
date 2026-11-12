@@ -563,6 +563,7 @@ class ChromatogramProcessor:
             'range_excluded_peaks_x': range_excluded_x,
             'peak_windows': windows,
             'outside_windows': outside,
+            'rider': dict(params['rider']) if params.get('rider') else None,
         }
     
     def _detect_all(self, x, corrected_y, smoothed_y, params, ms_range,

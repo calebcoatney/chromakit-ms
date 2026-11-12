@@ -90,6 +90,20 @@ class BaselineOverrides(BaseModel):
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
 
+class RiderOverrides(BaseModel):
+    """Per-window overrides of RiderParams; None inherits the global value."""
+    model_config = {"extra": "forbid"}
+
+    rider_integration: Optional[Literal["auto", "skim", "split"]] = None
+    skim_model: Optional[Literal["exponential", "tangent"]] = None
+    skim_height_ratio: Optional[float] = Field(None, ge=1)
+    skim_max_valley_frac: Optional[float] = Field(None, gt=0, le=1)
+    skim_valley_ratio: Optional[float] = Field(None, ge=1)
+    skim_tail_bend: Optional[float] = Field(None, gt=0)
+    skim_chain_min_tail: Optional[float] = Field(None, ge=0, le=1)
+    skim_flag_band: Optional[float] = Field(None, ge=0)
+
+
 class WindowAnchor(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -109,6 +123,7 @@ class PeakWindow(BaseModel):
     peaks: PeakOverrides = Field(default_factory=PeakOverrides)
     shoulders: ShoulderOverrides = Field(default_factory=ShoulderOverrides)
     negative_peaks: NegativePeakOverrides = Field(default_factory=NegativePeakOverrides)
+    rider: RiderOverrides = Field(default_factory=RiderOverrides)
     events: List[dict] = Field(default_factory=list)
 
     @field_validator("events")
@@ -196,6 +211,18 @@ class ShoulderParams(BaseModel):
     polyorder: int = 3
     sensitivity: int = Field(default=8, ge=1, le=10, description="Detection sensitivity 1-10")
     apex_distance: int = 10
+
+
+class RiderParams(BaseModel):
+    """Tail-skim settings: how a small peak riding on a bigger peak's tail is integrated."""
+    rider_integration: Literal["auto", "skim", "split"] = "auto"
+    skim_model: Literal["exponential", "tangent"] = "exponential"
+    skim_height_ratio: float = Field(2.0, ge=1)
+    skim_max_valley_frac: float = Field(0.5, gt=0, le=1)
+    skim_valley_ratio: float = Field(20.0, ge=1)
+    skim_tail_bend: float = Field(1.10, gt=0)
+    skim_chain_min_tail: float = Field(0.15, ge=0, le=1)
+    skim_flag_band: float = Field(0.05, ge=0)
 
 
 class IntegrationSubParams(BaseModel):
@@ -313,6 +340,7 @@ class ChromaMethod(BaseModel):
     deconvolution: DeconvolutionParams = Field(default_factory=DeconvolutionParams)
     negative_peaks: NegativePeakParams = Field(default_factory=NegativePeakParams)
     shoulders: ShoulderParams = Field(default_factory=ShoulderParams)
+    rider: RiderParams = Field(default_factory=RiderParams)
     gcxgc: GCxGCParams = Field(default_factory=GCxGCParams)
     integration: IntegrationSubParams = Field(default_factory=IntegrationSubParams)
     peak_windows: List[PeakWindow] = Field(default_factory=list)
@@ -353,6 +381,15 @@ class ChromaMethod(BaseModel):
         default=None,
         description="Intended acquisition channel (e.g. 'TCD3C'). None => auto-detect.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_rider(cls, data):
+        """Methods saved before tail-skim existed keep splitting riders as before."""
+        if not isinstance(data, dict) or "rider" in data:
+            return data
+        logger.info("Method migration: no tail-skim settings; riders are split as before")
+        return {**data, "rider": {"rider_integration": "split"}}
 
     @model_validator(mode="before")
     @classmethod
