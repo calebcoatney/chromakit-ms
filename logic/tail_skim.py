@@ -7,7 +7,7 @@ Indices are positions in `x` / `y`; `y` is the smoothed, baseline-corrected sign
 """
 import logging
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
@@ -286,8 +286,10 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
                              f"parent apex {p} and its apex {c}")
         h_v, h_p = float(y[v]), float(y[p])
 
-        # 3. always required: no call when the pair is not a parent/rider pair at all
-        if not (p < c and h_p > h_c and np.all(y[p:c + 1] > PARENT_FLOOR_FRAC * h_p)):
+        # 3. always required: no call when the pair is not a parent/rider pair at all. A NaN (MS-gated)
+        # sample is unknown, not a return to baseline: the pair gets a call, and plan_skims splits a
+        # skim whose bound is NaN, with a warning.
+        if not (p < c and h_p > h_c and not np.any(y[p:c + 1] <= PARENT_FLOOR_FRAC * h_p)):
             continue
         nxt = apexes[k + 1] if k + 1 < len(apexes) else None
         if nxt is not None:
@@ -330,3 +332,57 @@ def classify_riders(x: np.ndarray, y: np.ndarray, apexes: np.ndarray, metadata: 
             spans[c] = (v, b)
         calls[c] = call
     return calls
+
+
+# ---------------------------------------------------------------------------------------------------
+# Resolving skim calls for the integrator (spec sections 3-4)
+# ---------------------------------------------------------------------------------------------------
+
+@dataclass
+class Skim:
+    """A rider that is skimmed: its call, its right bound `b` (index) and its skim curve over `[a, b]`."""
+    call: RiderCall
+    b: int
+    curve: SkimCurve
+
+
+def demote(call: RiderCall, rt: float, why: str) -> RiderCall:
+    """`call` turned into a split, with a logged warning naming the child's RT and the reason."""
+    logger.warning("tail skim: peak at %.3f min split instead of skimmed: %s", rt, why)
+    return replace(call, decision='split', failed=call.failed + ['excluded'], near_threshold=False,
+                   tail=None)
+
+
+def plan_skims(x: np.ndarray, y: np.ndarray,
+               calls: Dict[int, RiderCall]) -> Tuple[Dict[int, RiderCall], Dict[int, Skim]]:
+    """Bounds and skim curves for every skim call, in RT order.
+
+    A call is demoted to split when the signal at `a` or `b` is not finite (an MS-gated region), or when
+    its parent is itself skimmed (nested skims are not supported). Each curve's tail fit skips the spans
+    of the same parent's other riders. Returns the calls (demotions applied) and the skims by child.
+    """
+    calls = dict(calls)
+    ends: Dict[int, int] = {}
+    for c in sorted(calls):
+        call = calls[c]
+        if call.decision != 'skim':
+            continue
+        if call.skim_model not in ('exponential', 'tangent'):
+            raise ValueError(f"unknown skim_model {call.skim_model!r} for the peak at {x[c]:.3f} min")
+        b = rider_end(x, y, call.a, c, call.cap)
+        if not (np.isfinite(y[call.a]) and np.isfinite(y[b])):
+            calls[c] = demote(call, x[c], "signal at its skim bounds is not finite")
+        elif call.parent in ends:
+            calls[c] = demote(call, x[c], "its parent is itself a skimmed rider")
+        else:
+            ends[c] = b
+    skims = {}
+    for c, b in ends.items():
+        call = calls[c]
+        if call.skim_model == 'tangent':
+            curve = tangent_skim(x, y, call.a, b)
+        else:
+            skip = [(calls[r].a, br) for r, br in ends.items() if r != c and calls[r].parent == call.parent]
+            curve = exp_skim(x, y, call.a, b, call.parent, call.cap, skip)
+        skims[c] = Skim(call, b, curve)
+    return calls, skims
