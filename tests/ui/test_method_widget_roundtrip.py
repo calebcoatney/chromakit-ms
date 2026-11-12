@@ -187,3 +187,29 @@ def test_apply_method_restores_rt_weight_sliders(qtbot):
     f.apex_weight_slider.setValue(60)
     w = app.current_method.rt_matching.weights
     assert (w.start, w.apex, w.end) == pytest.approx((10 / 90, 60 / 90, 20 / 90))
+
+
+def test_tail_skim_controls_round_trip(qtbot):
+    app = _app(qtbot)
+    pf = app.parameters_frame
+    pf.rider_mode_combo.setCurrentText("Always skim")
+    pf.rider_model_combo.setCurrentText("Tangent")
+    pf.skim_height_ratio_spin.setValue(3.0)
+    pf.current_params['rider']['skim_flag_band'] = 0.07  # no widget; must round-trip
+
+    m = ChromaMethod.from_gui_params(pf.current_params, name="t", signal_type="gc")
+    assert m.rider.rider_integration == 'skim'
+    assert m.rider.skim_model == 'tangent'
+    assert m.rider.skim_height_ratio == pytest.approx(3.0)
+    assert m.rider.skim_flag_band == pytest.approx(0.07)
+
+    m.rider.rider_integration = 'split'
+    pf.apply_method(m)
+    assert pf.rider_mode_combo.currentText() == "Always split"
+    assert pf.rider_model_combo.currentText() == "Tangent"
+    assert pf.skim_height_ratio_spin.value() == pytest.approx(3.0)
+    assert not pf.skim_height_ratio_spin.isEnabled()
+    assert pf.current_params['rider']['skim_flag_band'] == pytest.approx(0.07)
+
+    pf.rider_mode_combo.setCurrentText("Automatic")
+    assert pf.skim_height_ratio_spin.isEnabled()

@@ -174,7 +174,7 @@ class ParametersFrame(QWidget):
                 'sensitivity': 8,
                 'apex_distance': 10
             },
-            'rider': RiderParams().model_dump(),  # no widgets yet
+            'rider': RiderParams().model_dump(),
             'integration': {
                 'peak_groups': []  # List of [start, end] time windows for grouping
             }
@@ -223,6 +223,9 @@ class ParametersFrame(QWidget):
 
         # Add peak grouping controls
         self._init_peak_grouping_controls()
+
+        # Add tail skim controls
+        self._init_tail_skim_controls()
 
         # Add GCxGC controls
         self._init_gcxgc_controls()
@@ -1299,6 +1302,87 @@ class ParametersFrame(QWidget):
         for start, end in self.current_params.get('integration', {}).get('peak_groups') or []:
             self._add_peak_group_row(start, end, notify=False)
 
+    _RIDER_MODES = [("Automatic", "auto"), ("Always skim", "skim"), ("Always split", "split")]
+    _RIDER_MODELS = [("Exponential", "exponential"), ("Tangent", "tangent")]
+    # (attribute, rider key, label, min, max, step, decimals)
+    _RIDER_SPINS = [
+        ("skim_height_ratio_spin", "skim_height_ratio", "Height ratio:", 1.0, 100.0, 0.1, 1),
+        ("skim_max_valley_frac_spin", "skim_max_valley_frac", "Max valley fraction:", 0.05, 1.0, 0.05, 2),
+        ("skim_valley_ratio_spin", "skim_valley_ratio", "Valley ratio:", 1.0, 1000.0, 1.0, 0),
+        ("skim_tail_bend_spin", "skim_tail_bend", "Tail bend:", 0.5, 3.0, 0.01, 2),
+    ]
+
+    def _init_tail_skim_controls(self):
+        """Initialize tail skim controls (small peak riding on a larger peak's tail)."""
+        rider = self.current_params['rider']
+        group = QGroupBox("Tail Skim")
+        form = QFormLayout(group)
+
+        info = QLabel("Integrates a small peak on a larger peak's tail above a skim\nbaseline instead of splitting it off the tail.")
+        info.setStyleSheet("color: #666666; font-size: 10px;")
+        form.addRow("", info)
+
+        self.rider_mode_combo = QComboBox()
+        for text, value in self._RIDER_MODES:
+            self.rider_mode_combo.addItem(text, value)
+        self.rider_mode_combo.setCurrentIndex(self.rider_mode_combo.findData(rider['rider_integration']))
+        self.rider_mode_combo.currentIndexChanged.connect(self._on_rider_mode_changed)
+        form.addRow("Mode:", self.rider_mode_combo)
+
+        self.rider_model_combo = QComboBox()
+        for text, value in self._RIDER_MODELS:
+            self.rider_model_combo.addItem(text, value)
+        self.rider_model_combo.setCurrentIndex(self.rider_model_combo.findData(rider['skim_model']))
+        self.rider_model_combo.currentIndexChanged.connect(self._on_rider_model_changed)
+        form.addRow("Skim model:", self.rider_model_combo)
+
+        self.skim_advanced_toggle = QPushButton("\u25b6 Advanced")
+        self.skim_advanced_toggle.setFlat(True)
+        self.skim_advanced_toggle.setStyleSheet("text-align: left; font-weight: bold;")
+        self.skim_advanced_toggle.clicked.connect(self._toggle_skim_advanced)
+        form.addRow(self.skim_advanced_toggle)
+
+        self.skim_advanced_frame = QFrame()
+        self.skim_advanced_frame.setFrameStyle(QFrame.Box)
+        adv = QFormLayout(self.skim_advanced_frame)
+        for attr, key, label, lo, hi, step, decimals in self._RIDER_SPINS:
+            spin = QDoubleSpinBox()
+            spin.setDecimals(decimals)
+            spin.setRange(lo, hi)
+            spin.setSingleStep(step)
+            spin.setValue(rider[key])
+            spin.valueChanged.connect(lambda v, k=key: self._on_rider_value_changed(k, v))
+            setattr(self, attr, spin)
+            adv.addRow(label, spin)
+        self.skim_advanced_frame.setVisible(False)
+        form.addRow(self.skim_advanced_frame)
+
+        self._update_skim_controls_state()
+        self.section_groups['tail_skim'] = group
+        self.params_layout.addWidget(group)
+
+    def _update_skim_controls_state(self):
+        # Thresholds only matter when the rule decides split vs skim.
+        self.skim_advanced_frame.setEnabled(self.current_params['rider']['rider_integration'] == 'auto')
+
+    def _on_rider_mode_changed(self, _index):
+        self.current_params['rider']['rider_integration'] = self.rider_mode_combo.currentData()
+        self._update_skim_controls_state()
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_rider_model_changed(self, _index):
+        self.current_params['rider']['skim_model'] = self.rider_model_combo.currentData()
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_rider_value_changed(self, key, value):
+        self.current_params['rider'][key] = value
+        self.parameters_changed.emit(self.current_params)
+
+    def _toggle_skim_advanced(self):
+        visible = not self.skim_advanced_frame.isVisible()
+        self.skim_advanced_frame.setVisible(visible)
+        self.skim_advanced_toggle.setText("\u25bc Advanced" if visible else "\u25b6 Advanced")
+
     def _add_peak_group_row(self, start=0.0, end=60.0, notify=True):
         """Add a new row to the peak grouping table."""
         row = self.peak_group_table.rowCount()
@@ -2250,6 +2334,7 @@ class ParametersFrame(QWidget):
         self._init_shoulder_controls()
         self._init_range_filter_controls()
         self._init_peak_grouping_controls()
+        self._init_tail_skim_controls()
         self._init_gcxgc_controls()
         self._apply_help_icons()
         self.params_layout.addStretch()
