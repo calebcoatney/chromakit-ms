@@ -245,3 +245,43 @@ def test_window_smoothing_reaches_negative_detection(global_smoothing):
     processed, _ = _run(x, y, params)
     neg = [round(m['x'], 1) for m in processed['peak_metadata'] if m.get('is_negative')]
     assert neg == [6.6]
+
+
+def test_window_smoothing_reaches_detection_and_area():
+    x = np.linspace(0, 10, 6001)
+    rng = np.random.default_rng(11)
+    y = (_gauss(x, 2.0, 0.1, 100) + _gauss(x, 6.0, 0.1, 100)
+         + rng.normal(0, 1.0, x.size))
+    heavy = {'enabled': True, 'method': 'savgol', 'savgol_window': 101, 'savgol_polyorder': 2}
+    base_win = [win('w1', 5.0, 7.0)]
+    over_win = [win('w1', 5.0, 7.0, smoothing=heavy)]
+
+    def run(windows):
+        params = _params(windows, min_prominence=3.0)
+        params['smoothing'].update({'enabled': True, 'method': 'savgol',
+                                    'savgol_window': 5, 'savgol_polyorder': 2})
+        processed, peaks = _run(x, y, params)
+        return processed, peaks
+
+    p0, plain = run(base_win)
+    p1, heavy_peaks = run(over_win)
+    assert len(heavy_peaks) < len(plain)  # fewer noise peaks
+    main0 = max(plain, key=lambda p: p.area)
+    main1 = max(heavy_peaks, key=lambda p: p.area)
+    assert abs(main1.area - main0.area) / main0.area < 0.02
+    # the shared trace carries the window's smoothing inside, global outside
+    assert not np.array_equal(p0['smoothed_y'], p1['smoothed_y'])
+    outside = (x < 4.0) | (x > 8.0)
+    assert np.array_equal(p0['smoothed_y'][outside], p1['smoothed_y'][outside])
+
+
+def test_no_smoothing_override_matches_parity():
+    x, y, params = _anh()
+    params['smoothing']['enabled'] = True
+    params['peak_windows'] = [win('w1', 2.0, 6.0, peaks={'min_prominence': 0.1})]
+    params['outside_windows'] = 'ignore'
+    with_w, _ = _run(x, y, params)
+    params2 = copy.deepcopy(params)
+    params2['peak_windows'] = []
+    without, _ = _run(x, y, params2)
+    assert np.array_equal(with_w['smoothed_y'], without['smoothed_y'])

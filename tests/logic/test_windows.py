@@ -158,3 +158,57 @@ def test_break_point_overrides_do_not_share_caller_dicts():
     sec = W.section_overrides(0, [0], out)
     sec['fastchrom']['half_window'] = 7
     assert out[0]['overrides']['fastchrom']['half_window'] == 99
+
+
+# ---- smoothing stitch ----
+import numpy as np
+
+
+def _traces():
+    rng = np.random.default_rng(3)
+    x = np.linspace(0, 10, 1001)
+    base = np.sin(x) + 0.0 * x
+    own = base + 0.5 + rng.normal(0, 0.01, x.size)
+    return x, base, own
+
+
+def test_stitch_interior_equals_own_trace():
+    x, base, own = _traces()
+    w = win('w1', 3, 7)
+    out = W.stitch_smoothed(x, base, [(w, own, 20, 20)])
+    inside = (x >= 3) & (x <= 7)
+    core = inside & (x > 3.3) & (x < 6.7)
+    assert np.array_equal(out[core], own[core])
+    assert np.array_equal(out[~inside], base[~inside])
+
+
+def test_stitch_no_step_at_edge():
+    x, base, own = _traces()
+    k = 20
+    w = win('w1', 3, 7)
+    out = W.stitch_smoothed(x, base, [(w, own, k, k)])
+    idx = np.flatnonzero((x >= 3) & (x <= 7))
+    for edge in (idx[0], idx[-1] + 1):
+        seg = out[edge - k:edge + k]
+        assert np.abs(np.diff(out[edge - 1:edge + 1])).max() <= np.abs(np.diff(seg)).max()
+    # unblended it would step by ~0.5; blended the edge jump is small
+    assert abs(out[idx[0]] - out[idx[0] - 1]) < 0.1
+
+
+def test_blend_descending_axis():
+    x, base, own = _traces()
+    xd = x[::-1].copy()
+    w = win('w1', 3, 7)
+    asc = W.stitch_smoothed(x, base, [(w, own, 15, 25)])
+    desc = W.stitch_smoothed(xd, base[::-1], [(w, own[::-1], 15, 25)])
+    assert np.allclose(desc[::-1], asc)
+
+
+def test_blend_points_rules():
+    sav21 = {'enabled': True, 'method': 'savgol', 'savgol_window': 21}
+    whit = {'enabled': True, 'method': 'whittaker'}
+    off = {'enabled': False}
+    assert W.blend_points(sav21, whit, 1000) == 21
+    assert W.blend_points(off, off, 1000) == 0
+    assert W.blend_points(off, whit, 1000) == 11
+    assert W.blend_points(sav21, whit, 40) == 10

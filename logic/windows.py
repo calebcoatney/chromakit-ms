@@ -174,3 +174,58 @@ def section_overrides(seg_start_idx, bp_indices, break_points):
         if idx <= seg_start_idx and (best is None or idx > bp_indices[best]):
             best = i
     return copy.deepcopy(break_points[best].get('overrides') or {}) if best is not None else {}
+
+
+def blend_points(a, b, n_window):
+    """Samples of linear blend inside a window edge between two smoothings.
+
+    Each enabled side contributes its savgol window (11 for other methods); the
+    larger wins (0 if neither is enabled), capped at a quarter of the window.
+    """
+    k = 0
+    for s in (a, b):
+        if s.get('enabled'):
+            k = max(k, s.get('savgol_window', 11) if s.get('method') == 'savgol' else 11)
+    return min(k, n_window // 4)
+
+
+def stitch_smoothed(x, base, pieces):
+    """One smoothed trace from full-trace smoothings, blended at window edges.
+
+    ``pieces`` is a list of ``(window, full_trace, k_left, k_right)``. Inside a
+    window the result is its trace, outside every window it is ``base``. On the
+    first/last k samples inside an edge the value moves linearly from the
+    neighbour's trace (the touching window's, else base) to the window's own:
+    ``(1 - w) * neighbour + w * own`` with ``w = (j + 1) / (k + 1)``, j counting
+    inward. Samples are found by value, so descending axes work.
+    """
+    import numpy as np
+
+    x = np.asarray(x)
+    out = np.array(base, dtype=float, copy=True)
+    masks = [(x >= w['start']) & (x <= w['end']) for w, _, _, _ in pieces]
+    for mask, (_, trace, _, _) in zip(masks, pieces):
+        out[mask] = np.asarray(trace)[mask]
+    for mask, (w, trace, k_left, k_right) in zip(masks, pieces):
+        idx = np.flatnonzero(mask)
+        if idx.size == 0:
+            continue
+        idx = idx[np.argsort(x[idx], kind='stable')]  # ascending value: start edge first
+        own = np.asarray(trace)
+        for edge, k, at_start in (('start', k_left, True), ('end', k_right, False)):
+            k = min(k, idx.size // 2)
+            if k <= 0:
+                continue
+            nb = base
+            for o, otrace, _, _ in pieces:
+                if o is w:
+                    continue
+                other = o['end'] if at_start else o['start']
+                if abs(other - w[edge]) < _EDGE_TOL:
+                    nb = otrace
+                    break
+            nb = np.asarray(nb)
+            sel = idx[:k] if at_start else idx[::-1][:k]  # j counts inward
+            wt = (np.arange(k) + 1.0) / (k + 1.0)
+            out[sel] = (1 - wt) * nb[sel] + wt * own[sel]
+    return out

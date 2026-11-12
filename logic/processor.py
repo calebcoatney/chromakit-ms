@@ -7,8 +7,9 @@ from scipy.signal import medfilt, savgol_filter, find_peaks
 from scipy.optimize import curve_fit
 from pybaselines import Baseline
 
-from logic.windows import (apex_clamp, merge_overrides, overrides_any, resolve_break_points,
-                           resolve_windows, section_overrides, window_at, window_params)
+from logic.windows import (apex_clamp, blend_points, merge_overrides, overrides_any,
+                           resolve_break_points, resolve_windows, section_overrides,
+                           stitch_smoothed, window_at, window_params)
 
 logger = logging.getLogger(__name__)
 
@@ -461,13 +462,37 @@ class ChromatogramProcessor:
         x_values = np.copy(x)
         y_values = np.copy(y)
         
-        # STEP 1: Apply smoothing if enabled
-        smoothed_y = self._smooth_full(y_values, params['smoothing'])
-        
+        # STEP 1: Apply smoothing if enabled. Windows whose merged smoothing
+        # differs get their own full-trace smoothing, computed once here; the
+        # trace the baseline and integration share is stitched from them.
+        windows, outside = resolve_windows(params)
+        base_smoothed = self._smooth_full(y_values, params['smoothing'])
+        smoothed_y = base_smoothed
+        window_traces = {}
+        pieces = []
+        for w in windows:
+            w_smoothing = window_params(params, w)['smoothing']
+            if w_smoothing == params['smoothing']:
+                continue
+            in_w = (x_values >= w['start']) & (x_values <= w['end'])
+            if not in_w.any():
+                continue
+            trace = self._smooth_full(y_values, w_smoothing)
+            window_traces[w['id']] = trace
+            n_w = int(in_w.sum())
+            sides = []
+            for edge, other_edge in (('start', 'end'), ('end', 'start')):
+                nb = next((window_params(params, o)['smoothing'] for o in windows
+                           if o is not w and abs(o[other_edge] - w[edge]) < 1e-9),
+                          params['smoothing'])
+                sides.append(blend_points(nb, w_smoothing, n_w))
+            pieces.append((w, trace, sides[0], sides[1]))
+        if pieces:
+            smoothed_y = stitch_smoothed(x_values, base_smoothed, pieces)
+
         # STEP 2: Baseline correction (skippable via baseline.enabled=False).
         # When disabled, corrected_y IS the smoothed signal and baseline is zero,
         # so downstream (band integration, plotting) has a well-defined corrected_y.
-        windows, outside = resolve_windows(params)
         resolved_breaks = resolve_break_points(
             windows, params['baseline'].get('break_points', []))
         any_section_enabled = any(
@@ -495,8 +520,8 @@ class ChromatogramProcessor:
         # excluded apexes still bound kept peaks' valleys in integration.
         if windows:
             peaks_x, peaks_y, peak_metadata, range_excluded_x = self._detect_in_windows(
-                x_values, y_values, baseline_corrected_y, smoothed_y, params, ms_range,
-                windows, outside)
+                x_values, baseline_corrected_y, base_smoothed, window_traces, params,
+                ms_range, windows, outside)
         else:
             peaks_x, peaks_y, peak_metadata, range_excluded_x, _ = self._detect_all(
                 x_values, baseline_corrected_y, smoothed_y, params, ms_range)
@@ -633,7 +658,7 @@ class ChromatogramProcessor:
             return self._apply_smoothing(np.copy(y), smoothing_params)
         return np.copy(y)
 
-    def _detect_in_windows(self, x, y, corrected_y, smoothed_y, params, ms_range,
+    def _detect_in_windows(self, x, corrected_y, smoothed_y, window_traces, params, ms_range,
                            windows, outside):
         """Global pass plus one pass per window; keep each window's own apexes.
 
@@ -644,8 +669,9 @@ class ChromatogramProcessor:
         excluded valley neighbours under ``"ignore"``. Each kept peak's metadata
         gets ``window_id`` and its integration ``clamp`` (``apex_clamp``).
         A window pass's MS-excluded apexes count as neighbours only inside that
-        window. ``y`` is the raw trace: a window whose merged smoothing differs
-        from the global one smooths it again for its own pass.
+        window. ``smoothed_y`` is the global-smoothing trace; ``window_traces`` maps
+        a window id to its own full-trace smoothing when its merged smoothing
+        differs (computed once in ``process``).
 
         Returns ``(peaks_x, peaks_y, peak_metadata, excluded_x)``.
         """
@@ -675,8 +701,7 @@ class ChromatogramProcessor:
                 pos_mask = in_w if (w.get('peaks') or {}).get('min_prominence') is not None else None
                 neg_mask = in_w if (w.get('negative_peaks') or {}).get('min_prominence') is not None else None
                 merged = window_params(params, w)
-                w_smoothed = (smoothed_y if merged['smoothing'] == params['smoothing']
-                              else self._smooth_full(y, merged['smoothing']))
+                w_smoothed = window_traces.get(w['id'], smoothed_y)
                 wx, wy, wmeta, w_ms_excl, _ = self._detect_all(
                     x, corrected_y, w_smoothed, merged, ms_range,
                     pos_range_mask=pos_mask, neg_range_mask=neg_mask)
