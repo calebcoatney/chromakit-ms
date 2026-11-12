@@ -930,12 +930,20 @@ class Integrator:
                     # Don't extend past the next peak's apex; use midpoint as boundary
                     right_bound = (peak_idx + next_peak_idx) // 2
 
-            # Clamp bounds to the range-filter window holding this apex.
-            # Windows may overlap; use their union around the apex.
-            windows = [(s, e) for s, e in range_filters if s <= apex_x <= e]
-            if windows:
-                lo = min(s for s, _ in windows)
-                hi = max(e for _, e in windows)
+            # Clamp bounds to the span allowed for this apex. The processor puts
+            # a per-peak 'clamp' in the metadata (a None side is unbounded).
+            # Processed dicts without one (older API clients) fall back to the
+            # range filters holding the apex; these may overlap, so use their
+            # union. By value, so descending x-axes work.
+            clamp = peak_metadata[i].get('clamp') if i < len(peak_metadata) else None
+            if clamp is None:
+                windows = [(s, e) for s, e in range_filters if s <= apex_x <= e]
+                clamp = ((min(s for s, _ in windows), max(e for _, e in windows))
+                         if windows else (None, None))
+            lo, hi = clamp
+            if lo is not None or hi is not None:
+                lo = -np.inf if lo is None else lo
+                hi = np.inf if hi is None else hi
                 in_window = np.flatnonzero((x >= lo) & (x <= hi))
                 left_bound = max(left_bound, int(in_window.min()))
                 right_bound = min(right_bound, int(in_window.max()))
