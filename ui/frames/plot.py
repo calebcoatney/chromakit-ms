@@ -987,7 +987,7 @@ class PlotFrame(QWidget):
             shade_y = self.shade_top_peaks[i] + offset
             shade_baseline = self.shade_floor_peaks[i] + offset
 
-            if getattr(peak, 'skim_parent', None) is not None:
+            if getattr(peak, 'skim_model', None) is not None:  # a rider, its parent reported or not
                 line, = self.chromatogram_ax.plot(
                     self.x_peaks[i], shade_baseline, linestyle='--', color='crimson', linewidth=1.4)
                 line.is_skim_line = True

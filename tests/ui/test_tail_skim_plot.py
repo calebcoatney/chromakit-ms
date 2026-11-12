@@ -87,3 +87,45 @@ def test_quality_text():
     assert _quality_text(SimpleNamespace())[0] == "OK"
     sat = SimpleNamespace(is_saturated=True, is_convoluted=True, skim_parent=2)
     assert _quality_text(sat)[0] == "⚠️ SATURATED"
+
+
+def _one_sided(reported):
+    """Rider and parent with only one of them reported (the other outside every window)."""
+    pair = rider_on_tail(1.0, 3.0)
+    x = pair['x']
+    k = 1 if reported == 'rider' else 0
+    other = pair['apex'] if reported == 'rider' else pair['child_apex']
+    processed = processed_from(pair, rider={'rider_integration': 'auto'})
+    processed.update(peaks_x=processed['peaks_x'][[k]], peaks_y=processed['peaks_y'][[k]],
+                     peak_metadata=[processed['peak_metadata'][k]], range_excluded_peaks_x=x[[other]])
+    (peak,) = Integrator.integrate(processed, verbose=False)['peaks']
+    return processed, peak
+
+
+def test_quality_text_when_one_side_not_reported():
+    from ui.app import _quality_text
+    _, rider = _one_sided('rider')
+    assert rider.skim_model is not None and rider.skim_parent is None
+    assert _quality_text(rider)[0] == "Skimmed (parent not reported)"
+    _, parent = _one_sided('parent')
+    assert parent.area_before_skim is not None and parent.skim_children == []
+    assert _quality_text(parent)[0] == "Riders: not reported"
+    near = SimpleNamespace(skim_model='exponential', skim_parent=None, skim_near_threshold=True)
+    assert _quality_text(near)[0] == "Skimmed (parent not reported) · near threshold"
+    assert _quality_text(SimpleNamespace(area_before_skim=1.0, skim_children=None))[0] == \
+        "Riders: not reported"
+    split = SimpleNamespace(skim_decision={'decision': 'split'}, area_before_skim=1.0, skim_children=[])
+    assert _quality_text(split)[0] == "Split (rule)"
+
+
+@pytest.mark.parametrize('corrected', [False, True])
+def test_rider_with_unreported_parent_gets_dashed_skim_line(qtbot, corrected):
+    from ui.frames.plot import PlotFrame
+    processed, rider = _one_sided('rider')
+    result = Integrator.integrate(processed, verbose=False)
+    plot = PlotFrame()
+    qtbot.addWidget(plot)
+    plot.plot_chromatogram(processed, show_corrected=corrected, new_file=True)
+    plot.shade_integration_areas(result)
+    lines = [ln for ln in plot.chromatogram_ax.lines if getattr(ln, 'is_skim_line', False)]
+    assert len(lines) == 1 and lines[0].get_linestyle() == '--'

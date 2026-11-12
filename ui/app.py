@@ -43,7 +43,11 @@ ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 
 def _quality_text(peak):
-    """Peak-table quality text and colour: saturated, then check, then skim, then OK."""
+    """Peak-table quality text and colour: saturated, then check, then skim, then OK.
+
+    A skim whose other side is outside every window still shows: a rider without a reported parent,
+    a parent whose riders are all unreported.
+    """
     if getattr(peak, 'is_saturated', False):
         return "⚠️ SATURATED", QColor(128, 0, 128)
     if getattr(peak, 'is_convoluted', False):
@@ -56,8 +60,12 @@ def _quality_text(peak):
         text = "Split (rule)"
     elif skim_parent is not None:
         text = f"Skimmed from #{skim_parent}"
+    elif getattr(peak, 'skim_model', None) is not None:
+        text = "Skimmed (parent not reported)"
     elif skim_children:
         text = "Riders: " + ", ".join(f"#{n}" for n in skim_children)
+    elif getattr(peak, 'area_before_skim', None) is not None:
+        text = "Riders: not reported"
     if text is None:
         return "OK", QColor(0, 128, 0)
     if getattr(peak, 'skim_near_threshold', False):
