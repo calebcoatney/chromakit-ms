@@ -8,7 +8,7 @@ from scipy.optimize import curve_fit
 from pybaselines import Baseline
 
 from logic.windows import (apex_clamp, blend_points, merge_overrides, overrides_any,
-                           resolve_break_points, resolve_windows, section_overrides,
+                           dedupe_v1_break_points, resolve_break_points, resolve_windows, section_overrides,
                            shared_edge_neighbour, stitch_smoothed, window_at, window_params)
 
 logger = logging.getLogger(__name__)
@@ -123,8 +123,16 @@ def _build_baseline_segments(x, ms_range, break_points):
                     if seg.start < b < seg.end:
                         used_bps.add(b)
         dropped_bps = [b for b in bp_indices if b not in used_bps]
-        if dropped_bps:
-            logger.warning("%d break point(s) dropped because they fall outside the MS-on region", len(dropped_bps))
+        # Breaks before the MS start keep their overrides for the first fitted
+        # segment (section_overrides); only those after the MS end are dropped.
+        first_fit = next((seg.start for seg in segments if seg.fit), None)
+        pre_ms = [b for b in dropped_bps if first_fit is not None and b <= first_fit]
+        post_ms = [b for b in dropped_bps if b not in pre_ms]
+        for b in pre_ms:
+            logger.warning("break at %.3f min is before the MS start; it doesn't split the "
+                           "baseline, but its settings apply from the MS start", float(x[b]))
+        if post_ms:
+            logger.warning("%d break point(s) dropped because they fall outside the MS-on region", len(post_ms))
 
         segments = new_segments
 
@@ -502,8 +510,12 @@ class ChromatogramProcessor:
         # STEP 2: Baseline correction (skippable via baseline.enabled=False).
         # When disabled, corrected_y IS the smoothed signal and baseline is zero,
         # so downstream (band integration, plotting) has a well-defined corrected_y.
-        resolved_breaks = resolve_break_points(
-            windows, params['baseline'].get('break_points', []))
+        raw_breaks = params['baseline'].get('break_points', [])
+        if 'peak_windows' not in params:  # v1 params: main deduplicated breaks
+            raw_breaks, bp_messages = dedupe_v1_break_points(raw_breaks)
+            for msg in bp_messages:
+                logger.warning(msg)
+        resolved_breaks = resolve_break_points(windows, raw_breaks)
         any_section_enabled = any(
             (b.get('overrides') or {}).get('enabled') is True for b in resolved_breaks)
         if params['baseline'].get('enabled', True) or any_section_enabled:

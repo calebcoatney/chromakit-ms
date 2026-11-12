@@ -1047,6 +1047,7 @@ class Integrator:
                 peak.is_negative = True
 
             # Record which RT window the peak belongs to (not exported yet)
+            peak.window_id = None
             if has_shoulder_info and i < len(peak_metadata):
                 peak.window_id = peak_metadata[i].get('window_id')
             

@@ -1100,7 +1100,7 @@ class ParametersFrame(QWidget):
     @staticmethod
     def _new_window(wid, start, end):
         # Keys left out inherit; ChromaMethod fills the override groups with defaults.
-        return {'id': wid, 'label': wid, 'start': start, 'end': end, 'events': []}
+        return {'id': wid, 'label': '', 'start': start, 'end': end, 'events': []}
 
     def _make_overrides_note(self):
         note = QLabel(OVERRIDES_NOTE)
@@ -1124,8 +1124,15 @@ class ParametersFrame(QWidget):
         for n in self._overrides_notes:
             n.setVisible(visible)
 
-    def _add_range_filter_row(self, start=0.0, end=60.0, notify=True):
-        """Add a new row to the range filter table."""
+    def _add_range_filter_row(self, start=None, end=None, notify=True):
+        """Add a new row to the range filter table.
+
+        Defaults to a 1-min span after the last window, or 0-60 when there is none.
+        """
+        if start is None:
+            windows = self.current_params.get('peak_windows') or []
+            last_end = max((w['end'] for w in windows), default=None)
+            start, end = (0.0, 60.0) if last_end is None else (last_end, last_end + 1.0)
         row = self.range_filter_table.rowCount()
         self.range_filter_table.insertRow(row)
 

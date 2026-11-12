@@ -23,7 +23,7 @@ def test_v1_file_migrates_range_filters():
     assert [(w.id, w.start, w.end) for w in m.peak_windows] == [("w1", 2, 5), ("w2", 7, 9)]
     for w in m.peak_windows:
         assert w.peaks.min_prominence is None and w.smoothing.enabled is None
-        assert w.baseline.method is None and w.events == []
+        assert w.events == []
     assert m.outside_windows == "ignore"
     assert m.version == "2"
 
@@ -169,3 +169,71 @@ def test_migration_keeps_explicit_version():
     assert m.version == "9"
     m1 = ChromaMethod.model_validate({"name": "m", "signal_type": "gc", "version": "1"})
     assert m1.version == "2"
+
+
+# --- final-review fixes -----------------------------------------------------
+
+def test_v1_duplicate_breaks_dedupe_with_warning(caplog):
+    d = _v1([], baseline={"break_points": [{"time": 0.0}, {"time": 0.0}, {"time": 3.0}]})
+    with caplog.at_level(logging.WARNING):
+        m = ChromaMethod.model_validate(d)
+    assert [b.time for b in m.baseline.break_points] == [0.0, 3.0]
+    assert any("duplicate break" in r.getMessage().lower() for r in caplog.records)
+
+
+def test_v1_inverted_and_zero_width_filters_dropped_with_warning(caplog):
+    with caplog.at_level(logging.WARNING):
+        m = ChromaMethod.model_validate(_v1([[5, 2], [3, 3], [6, 8]]))
+    assert [(w.start, w.end) for w in m.peak_windows] == [(6, 8)]
+    assert sum("dropped" in r.getMessage().lower() for r in caplog.records) == 2
+
+
+def test_v2_inverted_window_still_raises():
+    with pytest.raises(ValueError):
+        ChromaMethod.model_validate(
+            {"name": "m", "version": "2", "signal_type": "gc",
+             "peak_windows": [_win("a", 5, 2)]})
+
+
+def test_unknown_window_key_raises():
+    with pytest.raises(ValueError):
+        ChromaMethod.model_validate(
+            {"name": "m", "version": "2", "signal_type": "gc",
+             "peak_windows": [_win("a", 1, 2, rider={"x": 1})]})
+
+
+def test_unknown_override_key_in_window_section_raises():
+    with pytest.raises(ValueError):
+        ChromaMethod.model_validate(
+            {"name": "m", "version": "2", "signal_type": "gc",
+             "peak_windows": [_win("a", 1, 2, peaks={"min_prominance": 1})]})
+
+
+def test_unknown_break_override_key_raises():
+    with pytest.raises(ValueError):
+        ChromaMethod.model_validate(
+            {"name": "m", "version": "2", "signal_type": "gc",
+             "baseline": {"break_points": [{"time": 3.0, "overrides": {"bogus": 1}}]}})
+
+
+def test_noop_min_height_and_asymmetry_round_trip():
+    m = ChromaMethod.model_validate(
+        {"name": "m", "version": "2", "signal_type": "gc",
+         "peak_windows": [_win("a", 1, 2, peaks={"min_height": 0.5})],
+         "baseline": {"break_points": [{"time": 3.0, "overrides": {"asymmetry": 0.02}}]}})
+    assert m.peak_windows[0].peaks.min_height == 0.5
+    assert m.baseline.break_points[0].overrides.asymmetry == 0.02
+    m2 = ChromaMethod.model_validate(m.model_dump(by_alias=True))
+    assert m2.peak_windows[0].peaks.min_height == 0.5
+
+
+def test_window_baseline_key_raises():
+    with pytest.raises(ValueError):
+        ChromaMethod.model_validate(
+            {"name": "m", "version": "2", "signal_type": "gc",
+             "peak_windows": [_win("a", 1, 2, baseline={"method": "asls"})]})
+
+
+def test_migrated_window_label_is_empty():
+    m = ChromaMethod.model_validate(_v1([[2, 5]]))
+    assert m.peak_windows[0].label == ""

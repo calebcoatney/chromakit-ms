@@ -302,3 +302,12 @@ def test_extend_nan_with_nearest_finite_eliminates_boundary_step():
     assert 500 not in peaks, f"Spurious peak at boundary; found peaks at {peaks}"
     # In fact, no peaks at all because the signal is monotonically non-increasing
     assert len(peaks) == 0
+
+
+def test_pre_ms_break_warning_says_settings_apply(caplog):
+    import logging
+    x = np.linspace(0.0, 9.99, 1000)
+    with caplog.at_level(logging.WARNING):
+        _build_baseline_segments(x, ms_range=(6.0, 9.99), break_points=[3.0])
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "before the MS start" in msgs and "dropped" not in msgs

@@ -120,7 +120,6 @@ def convert_params_for_processor(params: dict) -> dict:
     if windows:
         for w in windows:
             _rename_lambda(w.get('smoothing'))
-            _rename_lambda(w.get('baseline'))
         params['peak_windows'] = list(windows)
     else:
         params.pop('peak_windows', None)

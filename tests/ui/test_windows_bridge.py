@@ -130,3 +130,19 @@ def test_duplicate_break_edit_rejected_and_flagged(qtbot):
     f.break_point_table.cellWidget(1, 0).setValue(7.0)
     assert f.break_point_table.cellWidget(1, 0).styleSheet() == ''
     assert f.current_params['baseline']['break_points'][1]['time'] == 7.0
+
+
+def test_add_row_defaults_after_last_window_and_new_label_empty(qtbot):
+    f = _frame(qtbot, [W1, W2])
+    f._add_range_filter_row()
+    assert (f.range_filter_table.cellWidget(2, 0).value(),
+            f.range_filter_table.cellWidget(2, 1).value()) == (9.0, 10.0)
+    assert [w['end'] for w in f.current_params['peak_windows']] == [4.0, 9.0, 10.0]
+    assert _win(f, 'w3')['label'] == ''
+
+
+def test_add_row_defaults_to_full_run_when_no_windows(qtbot):
+    f = _frame(qtbot)
+    f._add_range_filter_row()
+    assert (f.range_filter_table.cellWidget(0, 0).value(),
+            f.range_filter_table.cellWidget(0, 1).value()) == (0.0, 60.0)

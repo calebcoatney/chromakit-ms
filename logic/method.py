@@ -51,15 +51,20 @@ class SmoothingOverrides(BaseModel):
     savgol_window: Optional[int] = Field(default=None, ge=3)
     savgol_polyorder: Optional[int] = Field(default=None, ge=1)
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "forbid"}
 
 
 class PeakOverrides(BaseModel):
+    model_config = {"extra": "forbid"}
+
     min_prominence: Optional[float] = None
     min_width: Optional[float] = None
+    min_height: Optional[float] = None  # no-op: the processor ignores peaks.min_height too
 
 
 class ShoulderOverrides(BaseModel):
+    model_config = {"extra": "forbid"}
+
     enabled: Optional[bool] = None
     sensitivity: Optional[int] = Field(default=None, ge=1, le=10)
     window_length: Optional[int] = None
@@ -68,6 +73,8 @@ class ShoulderOverrides(BaseModel):
 
 
 class NegativePeakOverrides(BaseModel):
+    model_config = {"extra": "forbid"}
+
     enabled: Optional[bool] = None
     min_prominence: Optional[float] = None
 
@@ -78,17 +85,22 @@ class BaselineOverrides(BaseModel):
     lambda_: Optional[float] = Field(default=None, alias="lambda")
     baseline_offset: Optional[float] = None
     fastchrom: Optional["FastchromParams"] = None
+    asymmetry: Optional[float] = None  # no-op: the processor ignores baseline.asymmetry too
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "forbid"}
 
 
 class WindowAnchor(BaseModel):
+    model_config = {"extra": "forbid"}
+
     window_id: str
     edge: Literal["start", "end"]
 
 
 class PeakWindow(BaseModel):
     """An RT window with optional per-section parameter overrides."""
+    model_config = {"extra": "forbid"}
+
     id: str
     label: str = ""
     start: float
@@ -97,7 +109,6 @@ class PeakWindow(BaseModel):
     peaks: PeakOverrides = Field(default_factory=PeakOverrides)
     shoulders: ShoulderOverrides = Field(default_factory=ShoulderOverrides)
     negative_peaks: NegativePeakOverrides = Field(default_factory=NegativePeakOverrides)
-    baseline: BaselineOverrides = Field(default_factory=BaselineOverrides)
     events: List[dict] = Field(default_factory=list)
 
     @field_validator("events")
@@ -349,8 +360,14 @@ class ChromaMethod(BaseModel):
         """Methods without peak_windows (v1 files, GUI dicts) get windows from range_filters."""
         if not isinstance(data, dict) or "peak_windows" in data:
             return data
-        from logic.windows import windows_from_range_filters
+        from logic.windows import dedupe_v1_break_points, windows_from_range_filters
         data = dict(data)
+        baseline = data.get("baseline")
+        if isinstance(baseline, dict) and baseline.get("break_points"):
+            deduped, bp_messages = dedupe_v1_break_points(baseline["break_points"])
+            for msg in bp_messages:
+                logger.warning("Method migration: %s", msg)
+            data["baseline"] = {**baseline, "break_points": deduped}
         peaks = data.get("peaks")
         if isinstance(peaks, dict):
             filters = peaks.get("range_filters")

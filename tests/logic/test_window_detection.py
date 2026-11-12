@@ -298,3 +298,28 @@ def test_touching_windows_smoothing_has_no_step_at_shared_edge():
     # the later window ramps from the earlier trace: jumps are small steps of
     # the trace difference, never the full difference at once
     assert np.abs(np.diff(s[edge - 5:edge + 5])).max() < 5.0
+
+
+def test_processor_v1_params_inverted_range_filter_warns(caplog):
+    import logging
+    x = np.linspace(0, 10, 2000)
+    y = _gauss(x, 5, 0.1, 1.0)
+    params = _params([])
+    del params['peak_windows']
+    params['peaks']['range_filters'] = [[5, 2]]
+    with caplog.at_level(logging.WARNING):
+        processed, peaks = _run(x, y, params)
+    assert any("dropped" in r.getMessage().lower() for r in caplog.records)
+    assert len(peaks) >= 1
+
+
+def test_peak_window_id_defaults_to_none_without_metadata():
+    from logic.integration import Peak
+    x = np.linspace(0, 10, 2000)
+    y = _gauss(x, 5, 0.1, 1.0)
+    proc = ChromatogramProcessor()
+    params = _params([])
+    del params['peak_windows']
+    processed = proc.process(x, y, params)
+    for p in proc.integrate_peaks(processed)['peaks']:
+        assert hasattr(p, 'window_id')

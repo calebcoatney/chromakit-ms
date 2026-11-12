@@ -34,7 +34,7 @@ def validate_windows(windows):
 
 
 def _empty_window(wid, start, end):
-    return {'id': wid, 'label': wid, 'start': start, 'end': end,
+    return {'id': wid, 'label': '', 'start': start, 'end': end,
             'smoothing': {}, 'peaks': {}, 'shoulders': {},
             'negative_peaks': {}, 'events': []}
 
@@ -43,12 +43,21 @@ def windows_from_range_filters(range_filters):
     """Build windows from legacy range filters, merging only overlapping ones.
 
     Malformed entries (len != 2) are ignored, as ``processor.process`` does.
-    Returns ``(windows, messages)``, one message per merge.
+    Inverted or zero-width filters are dropped (v1 methods tolerated them).
+    Returns ``(windows, messages)``, one message per merge or dropped filter.
     """
-    spans = sorted(
-        (float(rf[0]), float(rf[1])) for rf in (range_filters or [])
-        if len(rf) == 2)
-    merged, messages = [], []
+    spans, messages = [], []
+    for rf in (range_filters or []):
+        if len(rf) != 2:
+            continue
+        start, end = float(rf[0]), float(rf[1])
+        if not start < end:
+            messages.append(
+                f"Range filter {start}-{end} is inverted or zero-width; dropped")
+            continue
+        spans.append((start, end))
+    spans.sort()
+    merged = []
     for start, end in spans:
         if merged and start < merged[-1][1]:
             prev = merged[-1]
@@ -60,6 +69,23 @@ def windows_from_range_filters(range_filters):
             merged.append([start, end])
     windows = [_empty_window(f"w{i}", s, e) for i, (s, e) in enumerate(merged, 1)]
     return windows, messages
+
+
+def dedupe_v1_break_points(break_points):
+    """Drop repeated break times from a v1 list (they carry no overrides).
+
+    Items are numbers or dicts with ``time``. Returns ``(list, messages)``,
+    one message per dropped duplicate. Not for v2 input, which stays strict.
+    """
+    out, seen, messages = [], [], []
+    for bp in break_points or []:
+        t = float(bp['time'] if isinstance(bp, dict) else bp)
+        if any(abs(t - s) < _EDGE_TOL for s in seen):
+            messages.append(f"Duplicate break point at {t} dropped")
+            continue
+        seen.append(t)
+        out.append(bp)
+    return out, messages
 
 
 def resolve_windows(params):
