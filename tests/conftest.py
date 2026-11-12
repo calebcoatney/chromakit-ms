@@ -38,3 +38,16 @@ def _no_update_check(monkeypatch):
     """Tests never call GitHub or auto-load the user's saved MS library."""
     monkeypatch.setenv("CHROMAKIT_NO_UPDATE_CHECK", "1")
     monkeypatch.setenv("CHROMAKIT_NO_MS_AUTOLOAD", "1")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_batch_settings(tmp_path, monkeypatch):
+    """Tests that build BatchJobDialog never touch the user's real QSettings."""
+    try:
+        from PySide6.QtCore import QSettings
+        from ui.dialogs import batch_job_dialog
+    except ImportError:  # non-Qt environment
+        return
+    ini = str(tmp_path / "batch_dialog_settings.ini")
+    monkeypatch.setattr(batch_job_dialog, "_settings",
+                        lambda: QSettings(ini, QSettings.IniFormat))

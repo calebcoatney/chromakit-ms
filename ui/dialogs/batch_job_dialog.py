@@ -1,12 +1,25 @@
+import json
+import logging
 import os
 
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
                               QListWidget, QFileDialog, QMenu, QAbstractItemView,
                               QCheckBox, QGroupBox, QFormLayout, QSpinBox, QMessageBox,
-                              QComboBox, QLineEdit, QWidget)
-from PySide6.QtCore import Qt, Signal, QSize
+                              QComboBox, QLineEdit, QWidget, QListWidgetItem)
+from PySide6.QtCore import Qt, Signal, QSize, QSettings
 
-MAX_DETECTOR_RUNS = 2
+logger = logging.getLogger(__name__)
+
+MAX_DETECTOR_RUNS = 4
+INSTRUMENT_TAGS = ("", "GC1", "GC2")
+SETUP_VERSION = 1
+SETUP_SETTINGS_KEY = "batch/detector_setup"
+
+
+def _settings():
+    """The app's QSettings; tests monkeypatch this so they never touch real settings."""
+    return QSettings("CalebCoatney", "ChromaKit")
+
 
 class BatchJobDialog(QDialog):
     """Dialog for setting up a batch processing job."""
@@ -22,6 +35,7 @@ class BatchJobDialog(QDialog):
         
         # Initialize directories list
         self.directories = []
+        self.directory_instruments = {}  # folder path (as in self.directories) -> "GC1"/"GC2"/""
         
         # Setup UI
         self.setup_ui()
@@ -41,6 +55,11 @@ class BatchJobDialog(QDialog):
         self.directory_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.directory_list.customContextMenuRequested.connect(self.show_context_menu)
         layout.addWidget(self.directory_list)
+
+        self.tags_inert_hint = QLabel(
+            "Instrument tags apply only when a detector row has an instrument.")
+        self.tags_inert_hint.setWordWrap(True)
+        layout.addWidget(self.tags_inert_hint)
         
         # Directory buttons
         dir_button_layout = QHBoxLayout()
@@ -52,6 +71,18 @@ class BatchJobDialog(QDialog):
         remove_dir_button = QPushButton("Remove Selected")
         remove_dir_button.clicked.connect(self.remove_selected_directories)
         dir_button_layout.addWidget(remove_dir_button)
+
+        instrument_label = QLabel("Instrument:")
+        dir_button_layout.addWidget(instrument_label)
+        self.instrument_set_combo = QComboBox()
+        self._fill_instrument_combo(self.instrument_set_combo)
+        self.instrument_set_combo.setAccessibleName("Instrument for selected folders")
+        self.instrument_set_combo.setToolTip(
+            "Tag the selected folders as GC1 or GC2. Tagged folders are processed with "
+            "that instrument's detector rows and can be merged into one GC1&2 workbook.")
+        instrument_label.setBuddy(self.instrument_set_combo)
+        self.instrument_set_combo.activated.connect(self._apply_instrument_to_selection)
+        dir_button_layout.addWidget(self.instrument_set_combo)
         
         dir_button_layout.addStretch()
         layout.addLayout(dir_button_layout)
@@ -132,6 +163,8 @@ class BatchJobDialog(QDialog):
         
         # Add file group to main layout
         layout.addWidget(file_group)
+
+        layout.addLayout(self._build_workbook_row())
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -150,6 +183,64 @@ class BatchJobDialog(QDialog):
         
         layout.addLayout(button_layout)
     
+    @staticmethod
+    def _fill_instrument_combo(combo):
+        for tag in INSTRUMENT_TAGS:
+            combo.addItem(tag or "(none)", tag)
+
+    def _build_workbook_row(self):
+        row = QHBoxLayout()
+        label = QLabel("Output workbook:")
+        self.workbook_edit = QLineEdit()
+        self.workbook_edit.setPlaceholderText("GC1&2 paste workbook (.xlsx); needs a GC1 and a GC2 folder")
+        self.workbook_edit.setAccessibleName("Output workbook")
+        self.workbook_edit.setToolTip(
+            "Where to write the paired GC1 and GC2 results. Needs a tagged folder, a ticked "
+            "\"Process each detector below\" box with at least one detector row that has an "
+            "instrument, and JSON export during batch.")
+        label.setBuddy(self.workbook_edit)
+        self.workbook_browse = QPushButton("Browse...")
+        self.workbook_browse.setAccessibleName("Browse for output workbook")
+        self.workbook_browse.clicked.connect(self._browse_workbook)
+        row.addWidget(label)
+        row.addWidget(self.workbook_edit, 1)
+        row.addWidget(self.workbook_browse)
+        self.per_detector_check.toggled.connect(self._update_workbook_state)
+        for inst_combo, (combo, method_edit) in zip(self.instrument_combos, self.detector_rows):
+            inst_combo.currentIndexChanged.connect(self._update_workbook_state)
+            combo.currentTextChanged.connect(self._update_workbook_state)
+            method_edit.textChanged.connect(self._update_workbook_state)
+        self._update_workbook_state()
+        return row
+
+    def _browse_workbook(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Output Workbook", self.workbook_edit.text(), "Excel workbook (*.xlsx)")
+        if path:
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
+            self.workbook_edit.setText(path)
+
+    def _update_workbook_state(self):
+        """Enable the workbook field when a folder is tagged; prefill it when both tags exist."""
+        tagged = (any(self.directory_instruments.get(d) for d in self.directories)
+                  and self._gc12_mode())
+        self.workbook_edit.setEnabled(tagged)
+        self.workbook_browse.setEnabled(tagged)
+        self.tags_inert_hint.setVisible(not self._gc12_mode())
+        if self.workbook_edit.text().strip():
+            return
+        first = {}
+        for d in self.directories:
+            tag = self.directory_instruments.get(d, "")
+            if tag and tag not in first:
+                first[tag] = d
+        if "GC1" in first and "GC2" in first:
+            gc1 = first["GC1"]
+            name = os.path.basename(gc1.rstrip("/\\"))
+            parent = os.path.dirname(gc1.rstrip("/\\"))
+            self.workbook_edit.setText(os.path.join(parent, f"{name} GC1&2.xlsx"))
+
     def _build_detector_group(self):
         """Per-detector runs: each detector channel processed with its own method."""
         group = QGroupBox("Detectors and Methods")
@@ -165,32 +256,202 @@ class BatchJobDialog(QDialog):
         group_layout.addWidget(self.per_detector_check)
 
         self.detector_rows = []
+        self.instrument_combos = []
         rows_widget = QWidget()
         form = QFormLayout(rows_widget)
         form.setContentsMargins(0, 0, 0, 0)
         for n in range(1, MAX_DETECTOR_RUNS + 1):
+            instrument_combo = QComboBox()
+            self._fill_instrument_combo(instrument_combo)
+            instrument_combo.setAccessibleName(f"Instrument for detector {n}")
+            instrument_combo.setToolTip("GC1 or GC2; blank for a folder with no instrument tag")
             detector_combo = QComboBox()
+            detector_combo.setAccessibleName(f"Detector {n} channel")
             detector_combo.setEditable(True)
             detector_combo.setMinimumWidth(110)
             detector_combo.setToolTip("Detector channel name, e.g. FID1A")
             method_edit = QLineEdit()
+            method_edit.setAccessibleName(f"Detector {n} method file")
             method_edit.setPlaceholderText("Method file (.chromethod); blank = current settings")
             browse = QPushButton("Browse...")
+            browse.setAccessibleName(f"Browse for detector {n} method")
             browse.clicked.connect(
                 lambda _=False, c=detector_combo, e=method_edit: self._browse_method(c, e))
             row = QHBoxLayout()
+            row.addWidget(instrument_combo)
             row.addWidget(detector_combo)
             row.addWidget(method_edit, 1)
             row.addWidget(browse)
             form.addRow(f"Detector {n}:", row)
             self.detector_rows.append((detector_combo, method_edit))
+            self.instrument_combos.append(instrument_combo)
         group_layout.addWidget(rows_widget)
+
+        setup_row = QHBoxLayout()
+        save_setup = QPushButton("Save setup...")
+        save_setup.setToolTip("Save these rows (instrument, detector, method) to a file")
+        save_setup.clicked.connect(self._save_setup_dialog)
+        load_setup = QPushButton("Load setup...")
+        load_setup.setToolTip("Fill these rows from a saved setup file")
+        load_setup.clicked.connect(self._load_setup_dialog)
+        setup_row.addWidget(save_setup)
+        setup_row.addWidget(load_setup)
+        setup_row.addStretch()
+        group_layout.addLayout(setup_row)
 
         rows_widget.setEnabled(False)
         self.per_detector_check.toggled.connect(rows_widget.setEnabled)
         self._refresh_detector_choices()
+        self._restore_remembered_setup()
         self._prefill_first_row_from_main_window()
         return group
+
+    # ---- setup rows: remembered, saved and loaded ----
+
+    def get_setup_rows(self):
+        """Raw rows as typed: [{'instrument', 'detector', 'method_path'}], blanks skipped."""
+        rows = []
+        for inst_combo, (combo, method_edit) in zip(self.instrument_combos, self.detector_rows):
+            detector = combo.currentText().strip()
+            method_path = method_edit.text().strip()
+            if not detector and not method_path:
+                continue
+            rows.append({'instrument': inst_combo.currentData() or "",
+                         'detector': detector,
+                         'method_path': method_path or None})
+        return rows
+
+    @staticmethod
+    def _parse_setup(data):
+        """Validate decoded setup JSON and return its rows; raises ValueError."""
+        if not isinstance(data, dict) or data.get("version") != SETUP_VERSION:
+            version = data.get("version") if isinstance(data, dict) else None
+            raise ValueError(f"Unsupported setup version: {version!r} (expected {SETUP_VERSION}).")
+        rows = data.get("rows")
+        if not isinstance(rows, list):
+            raise ValueError("Setup file has no list of rows.")
+        if len(rows) > MAX_DETECTOR_RUNS:
+            raise ValueError(f"Setup has {len(rows)} rows; at most {MAX_DETECTOR_RUNS} are supported.")
+        parsed = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("Setup row is not an object.")
+            instrument = row.get("instrument", "")
+            if instrument not in INSTRUMENT_TAGS:
+                raise ValueError(f"Setup row has unknown instrument {instrument!r}.")
+            parsed.append({'instrument': instrument,
+                           'detector': str(row.get("detector") or ""),
+                           'method_path': row.get("method_path") or None})
+        return parsed
+
+    def _apply_rows(self, rows):
+        for i, (inst_combo, (combo, method_edit)) in enumerate(
+                zip(self.instrument_combos, self.detector_rows)):
+            row = rows[i] if i < len(rows) else {'instrument': "", 'detector': "", 'method_path': None}
+            inst_combo.setCurrentIndex(max(0, inst_combo.findData(row['instrument'])))
+            combo.setCurrentText(row['detector'])
+            method_edit.setText(row['method_path'] or "")
+
+    def _setup_payload(self):
+        return {"version": SETUP_VERSION, "rows": self.get_setup_rows()}
+
+    def save_setup(self, path):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self._setup_payload(), f, indent=2)
+
+    def load_setup(self, path):
+        with open(path, encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Setup file is not valid JSON: {e}")
+        self._apply_rows(self._parse_setup(data))
+
+    def _save_setup_dialog(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Setup", "", "Detector setup (*.json)")
+        if not path:
+            return
+        try:
+            self.save_setup(path)
+        except OSError as e:
+            QMessageBox.warning(self, "Save Setup", f"Could not save the setup:\n{e}")
+
+    def _load_setup_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Setup", "", "Detector setup (*.json)")
+        if not path:
+            return
+        try:
+            self.load_setup(path)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Load Setup", f"Could not load the setup:\n{e}")
+            return
+        self.per_detector_check.setChecked(True)
+
+    def _restore_remembered_setup(self):
+        raw = _settings().value(SETUP_SETTINGS_KEY)
+        if not raw:
+            return
+        try:
+            self._apply_rows(self._parse_setup(json.loads(raw)))
+        except (ValueError, TypeError) as e:
+            logger.warning("Ignoring remembered batch detector setup: %s", e)
+
+    def _remember_setup(self):
+        if self.per_detector_check.isChecked() and self.get_setup_rows():
+            _settings().setValue(SETUP_SETTINGS_KEY, json.dumps(self._setup_payload()))
+
+    # ---- instrument tags on folders ----
+
+    @staticmethod
+    def guess_instrument(path):
+        """'GC1' or 'GC2' when the folder path, else its first .C child's name, names exactly one."""
+        def one_of(text):
+            text = text.upper()
+            found = [t for t in ("GC1", "GC2") if t in text]
+            return found[0] if len(found) == 1 else ""
+        tag = one_of(path)
+        if tag:
+            return tag
+        try:
+            names = sorted(os.listdir(path))
+        except OSError:
+            return ""
+        for name in names:
+            if name.endswith('.C') and os.path.isdir(os.path.join(path, name)):
+                return one_of(name)
+        return ""
+
+    def set_directory_instrument(self, path, tag):
+        if tag not in INSTRUMENT_TAGS:
+            raise ValueError(f"Unknown instrument tag {tag!r}")
+        if path not in self.directories:
+            raise ValueError(f"Directory not in the list: {path}")
+        self.directory_instruments[path] = tag
+        self._refresh_item_text(path)
+        self._update_workbook_state()
+
+    def _refresh_item_text(self, path):
+        tag = self.directory_instruments.get(path, "")
+        for i in range(self.directory_list.count()):
+            item = self.directory_list.item(i)
+            if item.data(Qt.UserRole) == path:
+                item.setText(f"{tag} \u2014 {path}" if tag else path)
+
+    def _apply_instrument_to_selection(self, index):
+        tag = self.instrument_set_combo.itemData(index) or ""
+        for item in self.directory_list.selectedItems():
+            self.set_directory_instrument(item.data(Qt.UserRole), tag)
+
+    def _append_directory(self, directory):
+        """Add a folder to the list, tagging it when its name says which instrument."""
+        self.directories.append(directory)
+        item = QListWidgetItem(directory)
+        item.setData(Qt.UserRole, directory)
+        self.directory_list.addItem(item)
+        self.directory_instruments[directory] = ""
+        self.set_directory_instrument(directory, self.guess_instrument(directory))
 
     def _prefill_first_row_from_main_window(self):
         """Offer the saved method's detector and path in the first row.
@@ -258,15 +519,18 @@ class BatchJobDialog(QDialog):
             combo.blockSignals(False)
 
     def get_detector_runs(self):
-        """Return [{'detector', 'method_path'}] for filled-in rows (empty when unchecked).
+        """Return [{'instrument', 'detector', 'method_path'}] for filled-in rows.
 
-        Raises ValueError describing the first problem found.
+        Empty when unchecked and no folder is tagged. Raises ValueError describing
+        the first problem found.
         """
         if not self.per_detector_check.isChecked():
             return []
         from logic.method import ChromaMethod
         runs = []
-        for n, (combo, method_edit) in enumerate(self.detector_rows, start=1):
+        for n, (inst_combo, (combo, method_edit)) in enumerate(
+                zip(self.instrument_combos, self.detector_rows), start=1):
+            instrument = inst_combo.currentData() or ""
             detector = combo.currentText().strip()
             method_path = method_edit.text().strip()
             if not detector and not method_path:
@@ -281,13 +545,79 @@ class BatchJobDialog(QDialog):
                 detector = detector or (method.detector or "")
             if not detector:
                 raise ValueError(f"Detector {n}: enter a detector channel name.")
-            if any(r['detector'] == detector for r in runs):
-                raise ValueError(f"Detector {detector} is listed more than once.")
-            runs.append({'detector': detector, 'method_path': method_path or None})
+            if any(r['instrument'] == instrument and r['detector'] == detector for r in runs):
+                label = f"{instrument} {detector}" if instrument else f"Detector {detector}"
+                raise ValueError(f"{label} is listed more than once.")
+            runs.append({'instrument': instrument, 'detector': detector,
+                         'method_path': method_path or None})
+        if runs and not any(r['instrument'] for r in runs):
+            return runs  # PR #5 job: tags don't apply without an instrument on a row
+        tagged = [(d, self.directory_instruments.get(d, "")) for d in self.directories]
+        tagged = [(d, tag) for d, tag in tagged if tag]
+        for directory, tag in tagged:
+            if not any(r['instrument'] == tag for r in runs):
+                name = os.path.basename(directory.rstrip("/\\")) or directory
+                raise ValueError(f"Folder {name} is tagged {tag} but no detector row is for {tag}.")
+        tags_in_use = {tag for _, tag in tagged}
+        if not any(not r['instrument'] for r in runs):
+            for directory in self.directories:
+                if not self.directory_instruments.get(directory, ""):
+                    name = os.path.basename(directory.rstrip("/\\")) or directory
+                    raise ValueError(f"Folder {name} has no instrument tag; tag it GC1 or GC2.")
+        for r in runs:
+            if r['instrument'] and r['instrument'] not in tags_in_use:
+                raise ValueError(f"The {r['instrument']} {r['detector']} row has no folder tagged "
+                                 f"{r['instrument']}.")
         if not runs:
             raise ValueError("Enter at least one detector, or uncheck "
                              "\"Process each detector below with its own method\".")
         return runs
+
+    def _gc12_mode(self):
+        """Tags take effect only when the per-detector box is ticked and a filled row has an instrument."""
+        return (self.per_detector_check.isChecked()
+                and any(r['instrument'] for r in self.get_setup_rows()))
+
+    def get_workbook_path(self):
+        """The GC1&2 workbook path, or None when the field is off or empty.
+
+        Raises ValueError when the job can't produce it.
+        """
+        path = self.workbook_edit.text().strip()
+        if not self._gc12_mode() or not self.workbook_edit.isEnabled() or not path:
+            return None
+        tags = {self.directory_instruments.get(d, "") for d in self.directories}
+        for tag in ("GC1", "GC2"):
+            if tag not in tags:
+                raise ValueError(f"An output workbook needs both instruments, but no folder is "
+                                 f"tagged {tag}.")
+        export_manager = getattr(self.parent(), "export_manager", None)
+        if export_manager is not None and not export_manager.should_export_json('batch'):
+            raise ValueError("Turn on JSON export during batch (Export Settings) "
+                             "to write the GC1&2 workbook.")
+        rows = self.get_setup_rows()
+        for tag in ("GC1", "GC2"):
+            count = sum(1 for r in rows if r['instrument'] == tag)
+            if count != 2:
+                raise ValueError(f"The GC1&2 workbook needs exactly 2 detector rows per instrument, "
+                                 f"but {tag} has {count}.")
+        self._check_workbook_path(path)
+        return path
+
+    @staticmethod
+    def _check_workbook_path(path):
+        if not os.path.isabs(path):
+            raise ValueError(f"The output workbook path must be absolute:\n{path}")
+        if not path.lower().endswith(".xlsx"):
+            raise ValueError(f"The output workbook must be an .xlsx file:\n{path}")
+        if not os.path.isdir(os.path.dirname(path)):
+            raise ValueError(f"The output workbook's folder does not exist:\n{os.path.dirname(path)}")
+
+    def _confirm_overwrite(self, path):
+        """Ask before replacing an existing workbook (tests monkeypatch this)."""
+        return QMessageBox.question(
+            self, "Output Workbook", f"{path}\nalready exists. Overwrite it?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
 
     def add_directory(self):
         """Add a directory to the list."""
@@ -327,8 +657,7 @@ class BatchJobDialog(QDialog):
                     return
             
             # Add to the list
-            self.directories.append(directory)
-            self.directory_list.addItem(directory)
+            self._append_directory(directory)
             self._refresh_detector_choices()
             
             # Enable start button if we have directories
@@ -342,11 +671,12 @@ class BatchJobDialog(QDialog):
             return
         
         # Get list of directories to remove
-        to_remove = [item.text() for item in selected_items]
+        to_remove = [item.data(Qt.UserRole) for item in selected_items]
         
         # Remove from our list
         for directory in to_remove:
             self.directories.remove(directory)
+            self.directory_instruments.pop(directory, None)
         
         # Remove from the widget
         for item in selected_items:
@@ -355,6 +685,7 @@ class BatchJobDialog(QDialog):
         
         # Disable start button if no directories left
         self.start_button.setEnabled(len(self.directories) > 0)
+        self._update_workbook_state()
     
     def show_context_menu(self, position):
         """Show context menu for the directory list."""
@@ -363,6 +694,13 @@ class BatchJobDialog(QDialog):
         remove_action = menu.addAction("Remove")
         remove_action.triggered.connect(self.remove_selected_directories)
         
+        menu.addSeparator()
+        for tag in INSTRUMENT_TAGS:
+            action = menu.addAction(f"Set instrument: {tag}" if tag else "Clear instrument tag")
+            action.triggered.connect(
+                lambda _=False, t=tag: [self.set_directory_instrument(i.data(Qt.UserRole), t)
+                                        for i in self.directory_list.selectedItems()])
+
         menu.exec_(self.directory_list.mapToGlobal(position))
     
     def on_start_processing(self):
@@ -380,6 +718,13 @@ class BatchJobDialog(QDialog):
         except ValueError as e:
             QMessageBox.warning(self, "Detectors and Methods", str(e))
             return
+        try:
+            workbook = self.get_workbook_path()
+        except ValueError as e:
+            QMessageBox.warning(self, "Output Workbook", str(e))
+            return
+        if workbook and os.path.exists(workbook) and not self._confirm_overwrite(workbook):
+            return
 
         # Gather options
         options = {
@@ -393,7 +738,13 @@ class BatchJobDialog(QDialog):
             'skip_ui_updates': self.skip_ui_check.isChecked(),
             'apply_manual_overrides': self.manual_overrides_check.isChecked(),
             'detector_runs': detector_runs,
+            'directory_instruments': {
+                d: (self.directory_instruments.get(d, "") if self._gc12_mode() else "")
+                for d in self.directories},
+            'gc12_workbook': workbook,
+            'gc12_rows': [dict(r) for r in detector_runs],
         }
+        self._remember_setup()
         
         # Emit signal with directories and options
         self.start_batch.emit(self.directories, options)

@@ -22,16 +22,19 @@ class AutomationWorkerSignals(QObject):
     file_started = Signal(str, int, int)  # Filename, file index, total files
     file_progress = Signal(str, str, int)  # Filename, step, percent
     file_completed = Signal(str, bool, str)  # Filename, success, message
+    run_completed = Signal(str, str, bool, str)  # c_folder_path, detector, success, message
     log_message = Signal(str)  # Log message
     finished = Signal()  # Emitted when all processing is complete
     error = Signal(str)  # Error message
     overall_progress = Signal(int, int, int)  # Current file index, total files, overall percentage
 
-def build_detector_runs(batch_opts):
+def build_detector_runs(batch_opts, instrument: str = ""):
     """Return the runs to perform on every file in a batch.
 
-    ``batch_opts['detector_runs']`` is a list of ``{'detector': str,
-    'method_path': str | None}``. Each entry becomes one run that loads that
+    ``batch_opts['detector_runs']`` is a list of ``{'instrument': str,
+    'detector': str, 'method_path': str | None}``. Only rows whose
+    ``instrument`` (missing => ``""``) equals ``instrument`` are used; channel
+    identity is (instrument, detector), as both GCs have FID1A. Each entry becomes one run that loads that
     detector channel and processes it with that method (no method path =>
     the app's current settings). A blank detector falls back to the method's
     own ``detector`` field.
@@ -43,7 +46,11 @@ def build_detector_runs(batch_opts):
 
     runs = []
     seen = set()
-    for entry in batch_opts.get('detector_runs') or []:
+    rows = batch_opts.get('detector_runs') or []
+    rows_here = [e for e in rows if (e.get('instrument') or "") == instrument]
+    if rows and not rows_here:
+        raise ValueError(f"No detector rows for instrument {instrument or '(untagged)'}")
+    for entry in rows_here:
         method_path = (entry.get('method_path') or '').strip() or None
         method = ChromaMethod.from_file(method_path) if method_path else None
         detector = (entry.get('detector') or '').strip() or (method.detector if method else None)
@@ -51,13 +58,13 @@ def build_detector_runs(batch_opts):
             raise ValueError(
                 f"No detector given for method {method_path or '(current settings)'}"
             )
-        if detector in seen:
+        if (instrument, detector) in seen:
             raise ValueError(f"Detector {detector} is listed more than once")
-        seen.add(detector)
-        runs.append({'detector': detector, 'method': method,
+        seen.add((instrument, detector))
+        runs.append({'instrument': instrument, 'detector': detector, 'method': method,
                      'method_path': method_path, 'explicit': True})
     if not runs:
-        runs.append({'detector': None, 'method': None,
+        runs.append({'instrument': None, 'detector': None, 'method': None,
                      'method_path': None, 'explicit': False})
     return runs
 
@@ -102,6 +109,8 @@ class AutomationWorker(QRunnable):
         self._skip_ui_updates: bool = True   # Default: skip renders for speed
         self._time_steps: bool = False        # Default: no timing
         self._current_params = None           # Pre-fetched per-file in _load_file
+        self._instrument = ""                  # Tag of this folder ("GC1"/"GC2"/"")
+        self._run_detector = ""                # Detector of the run in progress ("" if not explicit)
 
     @Slot()
     def run(self):
@@ -130,7 +139,10 @@ class AutomationWorker(QRunnable):
             # One run per configured detector (each with its own method), or a
             # single run on the detector the user has selected in the app.
             try:
-                runs = build_detector_runs(batch_opts)
+                instrument = (batch_opts.get('directory_instruments') or {}).get(
+                    self.directory_path, "")
+                self._instrument = instrument
+                runs = build_detector_runs(batch_opts, instrument)
             except Exception as e:
                 self.signals.log_message.emit(f"Could not set up detector runs: {e}")
                 self.signals.error.emit(str(e))
@@ -152,7 +164,7 @@ class AutomationWorker(QRunnable):
             if runs[0]['explicit']:
                 self.signals.log_message.emit(
                     "Detector runs: " + "; ".join(
-                        f"{r['detector']} with "
+                        f"{(r['instrument'] + ' ') if r['instrument'] else ''}{r['detector']} with "
                         f"{os.path.basename(r['method_path']) if r['method_path'] else 'current settings'}"
                         for r in runs
                     )
@@ -195,7 +207,9 @@ class AutomationWorker(QRunnable):
                     if self.cancelled:
                         break
                     self.current_file_index = i * len(runs) + r
-                    label = f"{filename} [{run['detector']}]" if run['explicit'] else filename
+                    tag = f"{run['instrument']} " if run['instrument'] else ""
+                    label = f"{filename} [{tag}{run['detector']}]" if run['explicit'] else filename
+                    self._run_detector = run['detector'] if run['explicit'] else ""
                     position = self.current_file_index + 1
                     self.signals.file_started.emit(label, position, self.total_files)
                     self.signals.log_message.emit(f"Starting file {position}/{self.total_files}: {label}")
@@ -206,7 +220,7 @@ class AutomationWorker(QRunnable):
                         msg = (f"Detector {requested} not found in {filename} "
                                f"(available: {', '.join(available_detectors) or 'none'}) - skipping")
                         self.signals.log_message.emit(msg)
-                        self.signals.file_completed.emit(label, False, msg)
+                        self._complete(label, file_path, self._run_detector, False, msg)
                         continue
 
                     self._process_file(file_path, label, signal_type, profile_stages,
@@ -226,6 +240,11 @@ class AutomationWorker(QRunnable):
             self.signals.error.emit(error_msg)
             self.signals.log_message.emit(error_msg)
 
+    def _complete(self, label, file_path, detector, ok, msg):
+        """Report one (file, run) outcome to both the per-label and per-run signals."""
+        self.signals.file_completed.emit(label, ok, msg)
+        self.signals.run_completed.emit(file_path, detector, ok, msg)
+
     def _process_file(self, file_path, filename, signal_type, profile_stages,
                       detector=None, method=None):
         """Load, integrate, save and (optionally) MS-search one file for one detector run."""
@@ -237,7 +256,7 @@ class AutomationWorker(QRunnable):
             t_load = time.perf_counter() - t0
 
             if not success or self.cancelled:
-                self.signals.file_completed.emit(filename, False, "Failed to load file")
+                self._complete(filename, file_path, self._run_detector, False, "Failed to load file")
                 return
 
             # Step 2: Process and integrate - 40% of one file's progress
@@ -246,12 +265,13 @@ class AutomationWorker(QRunnable):
             t_process = time.perf_counter() - t1
 
             if not success or self.cancelled:
-                self.signals.file_completed.emit(filename, False, "Failed to integrate")
+                self._complete(filename, file_path, self._run_detector, False, "Failed to integrate")
                 return
 
             # Step 2.5: Save integration results to JSON - 50% of one file's progress
             t2 = time.perf_counter()
             self._update_directory_progress(filename, "Saving integration results", 50)
+            json_saved = True  # nothing to save counts as saved: untagged jobs are unaffected
             if hasattr(self.app, 'integrated_peaks') and self.app.integrated_peaks:
                 current_dir = self.app.data_handler.current_directory_path
                 integration_results = {'peaks': self.app.integrated_peaks}
@@ -285,7 +305,7 @@ class AutomationWorker(QRunnable):
                     t_deconv = time.perf_counter() - t_dc
 
                     if not dc_ok or self.cancelled:
-                        self.signals.file_completed.emit(filename, False, "Cancelled during deconvolution")
+                        self._complete(filename, file_path, self._run_detector, False, "Cancelled during deconvolution")
                         return
                 elif deconv_enabled:
                     self.signals.log_message.emit(
@@ -300,7 +320,7 @@ class AutomationWorker(QRunnable):
                 t_ms = time.perf_counter() - t3
 
                 if not success or self.cancelled:
-                    self.signals.file_completed.emit(filename, False, "Failed to run MS search")
+                    self._complete(filename, file_path, self._run_detector, False, "Failed to run MS search")
                     return
             elif ms_search_enabled:
                 self.signals.log_message.emit(
@@ -323,13 +343,20 @@ class AutomationWorker(QRunnable):
 
             # File completed successfully
             self._update_directory_progress(filename, "Completed", 100)
-            self.signals.file_completed.emit(filename, True, "Processing completed")
+            if json_saved:
+                self._complete(filename, file_path, self._run_detector, True, "Processing completed")
+            else:
+                # file_completed is unchanged; the per-run record must not let the
+                # workbook trust an older result JSON.
+                self.signals.file_completed.emit(filename, True, "Processing completed")
+                self.signals.run_completed.emit(file_path, self._run_detector, False,
+                                                "result JSON not saved")
             self.signals.log_message.emit(f"Completed processing {filename}")
 
         except Exception as e:
             error_msg = f"Error processing {filename}: {str(e)}"
             self.signals.log_message.emit(error_msg)
-            self.signals.file_completed.emit(filename, False, error_msg)
+            self._complete(filename, file_path, self._run_detector, False, error_msg)
 
     @staticmethod
     def _format_timing_table(timings: list[dict]) -> str:
@@ -1075,7 +1102,10 @@ class AutomationWorker(QRunnable):
             
             # Fallback to original method if new one fails
             try:
-                return self._save_integration_json_no_ui_fallback(integration_results, data_dir_path)
+                # The fallback writes "<dir> - Unknown.json", not the per-detector file
+                # the GC1&2 workbook reads, so the expected JSON still counts as not saved.
+                self._save_integration_json_no_ui_fallback(integration_results, data_dir_path)
+                return False
             except Exception as e2:
                 self.signals.log_message.emit(f"Fallback method also failed: {str(e2)}")
                 return False
