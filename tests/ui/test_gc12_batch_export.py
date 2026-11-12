@@ -4,10 +4,22 @@ pytest.importorskip('pytestqt')
 from logic import gc12_workbook
 from ui.app import ChromaKitApp
 
+_REAL_WARN = ChromaKitApp._warn_workbook_failed
+
 
 class _Dialog:
     def __init__(self):
         self.lines = []
+        self.directory_status = {}
+
+    def update_directory_status(self, *a, **k):
+        pass
+
+    def update_overall_progress(self, *a, **k):
+        pass
+
+    def update_file_progress(self, *a, **k):
+        pass
 
     def add_log_message(self, msg):
         self.lines.append(msg)
@@ -16,6 +28,15 @@ class _Dialog:
 class _Summary:
     def message(self):
         return "1 pair, summary text"
+
+
+@pytest.fixture(autouse=True)
+def warned(monkeypatch):
+    """Never open a real message box; record what would have been shown."""
+    calls = []
+    monkeypatch.setattr(ChromaKitApp, "_warn_workbook_failed",
+                        lambda self, path, error: calls.append((path, str(error))))
+    return calls
 
 
 def _make(qtbot, options, cancelled=False):
@@ -96,3 +117,53 @@ def test_export_error_is_logged_not_raised(qtbot, monkeypatch):
     app._finish_gc12_workbook()
     assert app.batch_dialog.lines == ["ERROR writing GC1&2 workbook: bad manifest"]
     assert "bad manifest" in app.status_bar.currentMessage()
+
+
+def test_write_failure_warns_with_path_and_error(qtbot, monkeypatch, warned):
+    app = _make(qtbot, dict(GC12_OPTIONS))
+    monkeypatch.setattr(gc12_workbook, "collect_injections", lambda *a, **k: [])
+    monkeypatch.setattr(gc12_workbook, "pair_injections", lambda *a: [])
+
+    def locked(*a, **k):
+        raise PermissionError("file is open in Excel")
+
+    monkeypatch.setattr(gc12_workbook, "write_paired_workbook", locked)
+    app._finish_gc12_workbook()
+    assert warned == [("/out/paired.xlsx", "file is open in Excel")]
+
+
+def test_warning_dialog_names_path_and_says_json_saved(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: shown.append(text))
+    _REAL_WARN(app, "/out/paired.xlsx", PermissionError("locked"))
+    assert "/out/paired.xlsx" in shown[0] and "locked" in shown[0]
+    assert "per-channel JSON results are saved" in shown[0]
+
+
+def test_run_completed_signal_populates_records(qtbot, monkeypatch):
+    from PySide6.QtCore import QThreadPool
+
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    app.batch_dialog = _Dialog()
+    app.batch_directories = ["/d/one"]
+    started = []
+
+    class _Pool:
+        def start(self, worker):
+            started.append(worker)
+
+    monkeypatch.setattr(QThreadPool, "globalInstance", staticmethod(lambda: _Pool()))
+    app.process_next_batch_directory()
+    assert len(started) == 1
+    started[0].signals.run_completed.emit("/d/one/S1.C", "FID1A", False, "result JSON not saved")
+    assert app._gc12_records == {("/d/one/S1.C", "FID1A"): (False, "result JSON not saved")}
+
+
+def test_batch_state_initialised_before_any_job(qtbot):
+    app = ChromaKitApp()
+    qtbot.addWidget(app)
+    assert app._gc12_records == {} and app._batch_cancelled is False

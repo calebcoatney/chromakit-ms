@@ -233,6 +233,9 @@ def test_workbook_needs_both_instruments(dialog, tmp_path):
     with pytest.raises(ValueError, match="GC2"):
         dialog.get_workbook_path()
     _add(dialog, _folder(tmp_path, "g2"), "GC2")
+    _row(dialog, 1, "GC1", "TCD3C")
+    _row(dialog, 2, "GC2", "FID1A")
+    _row(dialog, 3, "GC2", "FID2B")
     assert dialog.get_workbook_path() == str(tmp_path / "out.xlsx")
 
 
@@ -268,7 +271,9 @@ def test_options_carry_directory_instruments_and_workbook(dialog, tmp_path):
     dialog.workbook_edit.setText(out)
     dialog.per_detector_check.setChecked(True)
     _row(dialog, 0, "GC1", "FID1A")
-    _row(dialog, 1, "GC2", "FID1A")
+    _row(dialog, 1, "GC1", "TCD3C")
+    _row(dialog, 2, "GC2", "FID1A")
+    _row(dialog, 3, "GC2", "FID2B")
     got = []
     dialog.start_batch.connect(lambda dirs, opts: got.append((dirs, opts)))
     dialog.on_start_processing()
@@ -278,7 +283,9 @@ def test_options_carry_directory_instruments_and_workbook(dialog, tmp_path):
     assert opts['gc12_workbook'] == out
     assert opts['detector_runs'] == opts['gc12_rows'] == [
         {'instrument': 'GC1', 'detector': 'FID1A', 'method_path': None},
+        {'instrument': 'GC1', 'detector': 'TCD3C', 'method_path': None},
         {'instrument': 'GC2', 'detector': 'FID1A', 'method_path': None},
+        {'instrument': 'GC2', 'detector': 'FID2B', 'method_path': None},
     ]
 
 
@@ -320,7 +327,9 @@ def test_setup_remembered_between_dialogs(qtbot, tmp_path):
     d1.workbook_edit.setText(str(tmp_path / "o.xlsx"))
     d1.per_detector_check.setChecked(True)
     _row(d1, 0, "GC1", "FID1A")
-    _row(d1, 1, "GC2", "FID1A")
+    _row(d1, 1, "GC1", "TCD3C")
+    _row(d1, 2, "GC2", "FID1A")
+    _row(d1, 3, "GC2", "FID2B")
     d1.on_start_processing()
     d2 = BatchJobDialog()
     qtbot.addWidget(d2)
@@ -390,3 +399,126 @@ def test_filled_rows_are_not_used_when_box_unchecked(dialog, tmp_path):
     assert not dialog.per_detector_check.isChecked()
     assert dialog.get_detector_runs() == []
     assert _start(dialog)['detector_runs'] == []
+
+
+# ---- final-review fixes -------------------------------------------------
+
+@pytest.fixture
+def ready(dialog, tmp_path):
+    """A valid GC1&2 setup: two folders, two rows per instrument, workbook path set."""
+    _add(dialog, _folder(tmp_path, "g1"), "GC1")
+    _add(dialog, _folder(tmp_path, "g2"), "GC2")
+    dialog.per_detector_check.setChecked(True)
+    for i, (tag, det) in enumerate([("GC1", "FID1A"), ("GC1", "TCD3C"),
+                                    ("GC2", "FID1A"), ("GC2", "FID2B")]):
+        _row(dialog, i, tag, det)
+    dialog.workbook_edit.setText(str(tmp_path / "out.xlsx"))
+    return dialog
+
+
+@pytest.fixture
+def boxes(monkeypatch):
+    """Record QMessageBox.warning calls so no test blocks on a modal."""
+    from PySide6.QtWidgets import QMessageBox
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda parent, title, text, *a: shown.append((title, text)))
+    return shown
+
+
+def _press_start(d):
+    got = []
+    d.start_batch.connect(lambda dirs, opts: got.append(opts))
+    d.on_start_processing()
+    return got
+
+
+@pytest.mark.parametrize("make_path, fragment", [
+    (lambda t: "out.xlsx", "absolute"),
+    (lambda t: str(t / "out.csv"), ".xlsx"),
+    (lambda t: str(t / "nope" / "out.xlsx"), "folder does not exist"),
+])
+def test_start_refuses_bad_workbook_path(ready, tmp_path, boxes, make_path, fragment):
+    ready.workbook_edit.setText(make_path(tmp_path))
+    assert _press_start(ready) == []
+    assert boxes and fragment in boxes[0][1]
+
+
+def test_uppercase_xlsx_extension_is_accepted(ready, tmp_path):
+    ready.workbook_edit.setText(str(tmp_path / "OUT.XLSX"))
+    assert len(_press_start(ready)) == 1
+
+
+def test_existing_workbook_overwrite_confirmed_starts(ready, tmp_path, monkeypatch):
+    (tmp_path / "out.xlsx").write_text("old")
+    asked = []
+    monkeypatch.setattr(ready, "_confirm_overwrite", lambda p: asked.append(p) or True)
+    assert len(_press_start(ready)) == 1
+    assert asked == [str(tmp_path / "out.xlsx")]
+
+
+def test_existing_workbook_overwrite_declined_does_not_press_start(ready, tmp_path, monkeypatch):
+    (tmp_path / "out.xlsx").write_text("old")
+    monkeypatch.setattr(ready, "_confirm_overwrite", lambda p: False)
+    assert _press_start(ready) == []
+
+
+def test_new_workbook_does_not_ask_to_overwrite(ready, monkeypatch):
+    monkeypatch.setattr(ready, "_confirm_overwrite",
+                        lambda p: pytest.fail("no file exists yet"))
+    assert len(_press_start(ready)) == 1
+
+
+@pytest.mark.parametrize("extra", [[], [("GC1", "FID2B")]])
+def test_workbook_mode_needs_exactly_two_rows_per_instrument(ready, extra, boxes):
+    if extra:
+        _row(ready, 3, "GC1", "FID2B")  # GC1 now 3 rows, GC2 only 1
+    else:
+        _row(ready, 3, "", "")  # GC2 down to 1 row
+    assert _press_start(ready) == []
+    assert boxes[0][0] == "Output Workbook"
+    assert "exactly 2" in boxes[0][1] and ("GC1 has 3" in boxes[0][1] or "GC2 has 1" in boxes[0][1])
+
+
+def test_three_rows_for_one_instrument_named_in_message(dialog, tmp_path):
+    _add(dialog, _folder(tmp_path, "g1"), "GC1")
+    _add(dialog, _folder(tmp_path, "g2"), "GC2")
+    dialog.per_detector_check.setChecked(True)
+    for i, (tag, det) in enumerate([("GC1", "FID1A"), ("GC1", "TCD3C"), ("GC1", "FID2B"),
+                                    ("GC2", "FID1A")]):
+        _row(dialog, i, tag, det)
+    dialog.workbook_edit.setText(str(tmp_path / "out.xlsx"))
+    with pytest.raises(ValueError, match="GC1 has 3"):
+        dialog.get_workbook_path()
+
+
+def test_untagged_folder_without_untagged_row_refused(dialog, tmp_path, boxes):
+    _add(dialog, _folder(tmp_path, "g1"), "GC1")
+    _add(dialog, _folder(tmp_path, "mystery"))
+    dialog.per_detector_check.setChecked(True)
+    _row(dialog, 0, "GC1", "FID1A")
+    with pytest.raises(ValueError) as e:
+        dialog.get_detector_runs()
+    assert str(e.value) == "Folder mystery has no instrument tag; tag it GC1 or GC2."
+    assert _press_start(dialog) == []
+    assert boxes[0][0] == "Detectors and Methods"
+
+
+def test_untagged_folder_with_untagged_row_is_fine(dialog, tmp_path):
+    _add(dialog, _folder(tmp_path, "g1"), "GC1")
+    _add(dialog, _folder(tmp_path, "mystery"))
+    dialog.per_detector_check.setChecked(True)
+    _row(dialog, 0, "GC1", "FID1A")
+    _row(dialog, 1, "", "FID1A")
+    assert len(dialog.get_detector_runs()) == 2
+
+
+def test_inert_tags_hint_toggles_with_gc12_mode(dialog, tmp_path):
+    assert not dialog.tags_inert_hint.isHidden()
+    _add(dialog, _folder(tmp_path, "g1"), "GC1")
+    dialog.per_detector_check.setChecked(True)
+    assert not dialog.tags_inert_hint.isHidden()  # no row has an instrument yet
+    _row(dialog, 0, "GC1", "FID1A")
+    assert dialog.tags_inert_hint.isHidden()
+    dialog.per_detector_check.setChecked(False)
+    assert not dialog.tags_inert_hint.isHidden()

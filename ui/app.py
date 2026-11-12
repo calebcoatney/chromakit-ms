@@ -62,6 +62,10 @@ class ChromaKitApp(QMainWindow):
         self.resize(1600, 800)
         self.setWindowIcon(QIcon(ICON_PATH))
         
+        # Batch state (set per job by start_batch_processing)
+        self._gc12_records = {}
+        self._batch_cancelled = False
+
         # Initialize processor
         self.processor = ChromatogramProcessor()
         
@@ -4586,7 +4590,15 @@ class ChromaKitApp(QMainWindow):
             line = f"ERROR writing GC1&2 workbook: {e}"
             self.batch_dialog.add_log_message(line)
             self.status_bar.showMessage(line)
+            self._warn_workbook_failed(path, e)
             return line
+
+    def _warn_workbook_failed(self, path, error):
+        """Tell the user the workbook was not written (tests monkeypatch this)."""
+        QMessageBox.warning(
+            self, "GC1&2 Workbook",
+            f"Could not write the GC1&2 workbook:\n{path}\n\n{error}\n\n"
+            "The per-channel JSON results are saved.")
 
     def on_batch_directory_completed(self, directory, success):
         """Handle completion of a batch directory."""

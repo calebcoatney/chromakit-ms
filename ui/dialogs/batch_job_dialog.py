@@ -55,6 +55,11 @@ class BatchJobDialog(QDialog):
         self.directory_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.directory_list.customContextMenuRequested.connect(self.show_context_menu)
         layout.addWidget(self.directory_list)
+
+        self.tags_inert_hint = QLabel(
+            "Instrument tags apply only when a detector row has an instrument.")
+        self.tags_inert_hint.setWordWrap(True)
+        layout.addWidget(self.tags_inert_hint)
         
         # Directory buttons
         dir_button_layout = QHBoxLayout()
@@ -222,6 +227,7 @@ class BatchJobDialog(QDialog):
                   and self._gc12_mode())
         self.workbook_edit.setEnabled(tagged)
         self.workbook_browse.setEnabled(tagged)
+        self.tags_inert_hint.setVisible(not self._gc12_mode())
         if self.workbook_edit.text().strip():
             return
         first = {}
@@ -553,6 +559,11 @@ class BatchJobDialog(QDialog):
                 name = os.path.basename(directory.rstrip("/\\")) or directory
                 raise ValueError(f"Folder {name} is tagged {tag} but no detector row is for {tag}.")
         tags_in_use = {tag for _, tag in tagged}
+        if not any(not r['instrument'] for r in runs):
+            for directory in self.directories:
+                if not self.directory_instruments.get(directory, ""):
+                    name = os.path.basename(directory.rstrip("/\\")) or directory
+                    raise ValueError(f"Folder {name} has no instrument tag; tag it GC1 or GC2.")
         for r in runs:
             if r['instrument'] and r['instrument'] not in tags_in_use:
                 raise ValueError(f"The {r['instrument']} {r['detector']} row has no folder tagged "
@@ -584,7 +595,29 @@ class BatchJobDialog(QDialog):
         if export_manager is not None and not export_manager.should_export_json('batch'):
             raise ValueError("Turn on JSON export during batch (Export Settings) "
                              "to write the GC1&2 workbook.")
+        rows = self.get_setup_rows()
+        for tag in ("GC1", "GC2"):
+            count = sum(1 for r in rows if r['instrument'] == tag)
+            if count != 2:
+                raise ValueError(f"The GC1&2 workbook needs exactly 2 detector rows per instrument, "
+                                 f"but {tag} has {count}.")
+        self._check_workbook_path(path)
         return path
+
+    @staticmethod
+    def _check_workbook_path(path):
+        if not os.path.isabs(path):
+            raise ValueError(f"The output workbook path must be absolute:\n{path}")
+        if not path.lower().endswith(".xlsx"):
+            raise ValueError(f"The output workbook must be an .xlsx file:\n{path}")
+        if not os.path.isdir(os.path.dirname(path)):
+            raise ValueError(f"The output workbook's folder does not exist:\n{os.path.dirname(path)}")
+
+    def _confirm_overwrite(self, path):
+        """Ask before replacing an existing workbook (tests monkeypatch this)."""
+        return QMessageBox.question(
+            self, "Output Workbook", f"{path}\nalready exists. Overwrite it?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
 
     def add_directory(self):
         """Add a directory to the list."""
@@ -689,6 +722,8 @@ class BatchJobDialog(QDialog):
             workbook = self.get_workbook_path()
         except ValueError as e:
             QMessageBox.warning(self, "Output Workbook", str(e))
+            return
+        if workbook and os.path.exists(workbook) and not self._confirm_overwrite(workbook):
             return
 
         # Gather options
