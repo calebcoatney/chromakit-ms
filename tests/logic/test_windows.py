@@ -139,3 +139,22 @@ def test_section_overrides_latest_at_or_before():
     assert W.section_overrides(100, idx, bps) == {'lambda': 1e3}
     assert W.section_overrides(299, idx, bps) == {'lambda': 1e3}
     assert W.section_overrides(300, idx, bps) == {}
+
+
+def test_resolve_windows_does_not_share_caller_subdicts():
+    src = [win('w1', 1, 2, peaks={'min_width': 0.1}, events=[{'t': 1}])]
+    wins, _ = W.resolve_windows({'peaks': {}, 'peak_windows': src})
+    wins[0]['peaks']['min_width'] = 9
+    wins[0]['events'].append({'t': 2})
+    assert src[0]['peaks'] == {'min_width': 0.1}
+    assert src[0]['events'] == [{'t': 1}]
+
+
+def test_break_point_overrides_do_not_share_caller_dicts():
+    bps = [{'time': 1.0, 'overrides': {'fastchrom': {'half_window': 10}}}]
+    out = W.resolve_break_points([], bps)
+    out[0]['overrides']['fastchrom']['half_window'] = 99
+    assert bps[0]['overrides']['fastchrom']['half_window'] == 10
+    sec = W.section_overrides(0, [0], out)
+    sec['fastchrom']['half_window'] = 7
+    assert out[0]['overrides']['fastchrom']['half_window'] == 99

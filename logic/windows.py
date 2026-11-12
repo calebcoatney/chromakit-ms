@@ -65,7 +65,7 @@ def windows_from_range_filters(range_filters):
 def resolve_windows(params):
     """Return ``(sorted validated windows, outside_windows mode)`` for params."""
     if 'peak_windows' in params:
-        windows = [dict(w) for w in (params['peak_windows'] or [])]
+        windows = copy.deepcopy(list(params['peak_windows'] or []))
     else:
         windows, messages = windows_from_range_filters(
             (params.get('peaks') or {}).get('range_filters'))
@@ -146,7 +146,7 @@ def resolve_break_points(windows, break_points):
         if isinstance(bp, dict):
             item = {'time': float(bp['time']),
                     'tolerance': bp.get('tolerance'),
-                    'overrides': bp.get('overrides') or {},
+                    'overrides': copy.deepcopy(bp.get('overrides') or {}),
                     'anchor': bp.get('anchor')}
         else:
             item = {'time': float(bp), 'tolerance': None,
@@ -173,4 +173,4 @@ def section_overrides(seg_start_idx, bp_indices, break_points):
     for i, idx in enumerate(bp_indices):
         if idx <= seg_start_idx and (best is None or idx > bp_indices[best]):
             best = i
-    return dict(break_points[best].get('overrides') or {}) if best is not None else {}
+    return copy.deepcopy(break_points[best].get('overrides') or {}) if best is not None else {}
