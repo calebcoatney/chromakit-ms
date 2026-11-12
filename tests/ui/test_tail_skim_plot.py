@@ -63,6 +63,13 @@ def test_results_without_shade_keys_still_shade(qtbot):
     assert len([c for c in plot.chromatogram_ax.collections if hasattr(c, 'peak_number')]) == len(result['peaks'])
 
 
+def _auto_peaks(*pair_args):
+    from tests.logic.tail_skim_signals import emg_pair
+    pair = emg_pair(*pair_args)
+    return Integrator.integrate(processed_from(pair, rider={'rider_integration': 'auto'}),
+                                verbose=False)['peaks']
+
+
 def test_quality_text():
     from ui.app import _quality_text
     _, result = _scenario()
@@ -70,10 +77,13 @@ def test_quality_text():
     parent = [p for p in result['peaks'] if p.skim_children][0]
     assert _quality_text(rider)[0] == f"Skimmed from #{parent.peak_number}"
     assert _quality_text(parent)[0] == f"Riders: #{rider.peak_number}"
-    split = SimpleNamespace(skim_parent=1, skim_children=None, skim_decision={'decision': 'split'},
-                            skim_near_threshold=True)
-    assert _quality_text(split)[0] == "Split (rule) · near threshold"
-    ok = SimpleNamespace()
-    assert _quality_text(ok)[0] == "OK"
+    # real children the rule split: skim_parent is None, skim_decision says split
+    split = _auto_peaks(0.002, 0.002, 4.0, 0.035)[-1]
+    assert split.skim_parent is None and split.skim_decision['decision'] == 'split'
+    assert _quality_text(split)[0] == "Split (rule)"
+    near = _auto_peaks(0.06, 0.06, 2.8, 0.12)[-1]
+    assert near.skim_decision['decision'] == 'split' and near.skim_near_threshold
+    assert _quality_text(near)[0] == "Split (rule) · near threshold"
+    assert _quality_text(SimpleNamespace())[0] == "OK"
     sat = SimpleNamespace(is_saturated=True, is_convoluted=True, skim_parent=2)
     assert _quality_text(sat)[0] == "⚠️ SATURATED"

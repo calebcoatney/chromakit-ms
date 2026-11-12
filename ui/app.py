@@ -42,7 +42,6 @@ from logic.data_handler import DataHandler
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resources", "file.ico")
 
 
-
 def _quality_text(peak):
     """Peak-table quality text and colour: saturated, then check, then skim, then OK."""
     if getattr(peak, 'is_saturated', False):
@@ -53,11 +52,10 @@ def _quality_text(peak):
     skim_children = getattr(peak, 'skim_children', None)
     decision = getattr(peak, 'skim_decision', None)
     text = None
-    if skim_parent is not None:
-        if decision and decision.get('decision') == 'split':
-            text = "Split (rule)"
-        else:
-            text = f"Skimmed from #{skim_parent}"
+    if decision is not None and decision.get('decision') == 'split':
+        text = "Split (rule)"
+    elif skim_parent is not None:
+        text = f"Skimmed from #{skim_parent}"
     elif skim_children:
         text = "Riders: " + ", ".join(f"#{n}" for n in skim_children)
     if text is None:
