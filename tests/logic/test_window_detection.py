@@ -285,3 +285,16 @@ def test_no_smoothing_override_matches_parity():
     params2['peak_windows'] = []
     without, _ = _run(x, y, params2)
     assert np.array_equal(with_w['smoothed_y'], without['smoothed_y'])
+
+
+def test_touching_windows_smoothing_has_no_step_at_shared_edge():
+    x = np.linspace(0, 10, 6001)
+    y = _gauss(x, 5.0, 0.01, 100.0)  # heavy smoothing flattens it, raw keeps it
+    heavy = {'enabled': True, 'method': 'savgol', 'savgol_window': 201, 'savgol_polyorder': 2}
+    params = _params([win('w1', 2.0, 5.0, smoothing=heavy), win('w2', 5.0, 8.0)])
+    processed, _ = _run(x, y, params)
+    s = processed['smoothed_y']
+    edge = int(np.flatnonzero(x >= 5.0)[0])
+    # the later window ramps from the earlier trace: jumps are small steps of
+    # the trace difference, never the full difference at once
+    assert np.abs(np.diff(s[edge - 5:edge + 5])).max() < 5.0

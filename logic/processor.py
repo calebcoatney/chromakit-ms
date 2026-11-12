@@ -9,7 +9,7 @@ from pybaselines import Baseline
 
 from logic.windows import (apex_clamp, blend_points, merge_overrides, overrides_any,
                            resolve_break_points, resolve_windows, section_overrides,
-                           stitch_smoothed, window_at, window_params)
+                           shared_edge_neighbour, stitch_smoothed, window_at, window_params)
 
 logger = logging.getLogger(__name__)
 
@@ -470,23 +470,32 @@ class ChromatogramProcessor:
         smoothed_y = base_smoothed
         window_traces = {}
         pieces = []
+        def _smoothing_of(w):
+            return window_params(params, w)['smoothing']
+
+        differs = {w['id']: _smoothing_of(w) != params['smoothing'] for w in windows}
         for w in windows:
-            w_smoothing = window_params(params, w)['smoothing']
-            if w_smoothing == params['smoothing']:
+            earlier = shared_edge_neighbour(windows, w, 'start')
+            # A window touching a differing earlier window joins the stitch even
+            # on the global smoothing, so it can ramp away from that trace.
+            if not differs[w['id']] and not (earlier and differs[earlier['id']]):
                 continue
             in_w = (x_values >= w['start']) & (x_values <= w['end'])
             if not in_w.any():
                 continue
-            trace = self._smooth_full(y_values, w_smoothing)
-            window_traces[w['id']] = trace
+            w_smoothing = _smoothing_of(w)
+            if differs[w['id']]:
+                trace = self._smooth_full(y_values, w_smoothing)
+                window_traces[w['id']] = trace
+            else:
+                trace = base_smoothed
             n_w = int(in_w.sum())
-            sides = []
-            for edge, other_edge in (('start', 'end'), ('end', 'start')):
-                nb = next((window_params(params, o)['smoothing'] for o in windows
-                           if o is not w and abs(o[other_edge] - w[edge]) < 1e-9),
-                          params['smoothing'])
-                sides.append(blend_points(nb, w_smoothing, n_w))
-            pieces.append((w, trace, sides[0], sides[1]))
+            # Only the later window blends at a shared edge: its left k.
+            nb_left = _smoothing_of(earlier) if earlier else params['smoothing']
+            k_left = blend_points(nb_left, w_smoothing, n_w)
+            k_right = (0 if shared_edge_neighbour(windows, w, 'end')
+                       else blend_points(params['smoothing'], w_smoothing, n_w))
+            pieces.append((w, trace, k_left, k_right))
         if pieces:
             smoothed_y = stitch_smoothed(x_values, base_smoothed, pieces)
 

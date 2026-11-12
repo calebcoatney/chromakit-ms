@@ -212,3 +212,17 @@ def test_blend_points_rules():
     assert W.blend_points(off, off, 1000) == 0
     assert W.blend_points(off, whit, 1000) == 11
     assert W.blend_points(sav21, whit, 40) == 10
+
+
+def test_stitch_touching_windows_blend_only_in_later_window():
+    x = np.linspace(0, 10, 1001)
+    base = np.zeros_like(x)
+    A, B, k = np.full_like(x, 1.0), np.full_like(x, 3.0), 10
+    w1, w2 = win('w1', 2, 5), win('w2', 5, 8)
+    out = W.stitch_smoothed(x, base, [(w1, A, 10, 10), (w2, B, 10, 10)])
+    edge = int(np.flatnonzero(x >= 5)[0])
+    assert np.abs(np.diff(out[edge - k:edge + k + 1])).max() <= abs(3.0 - 1.0) / (k + 1) + 1e-9
+    earlier = (x >= 2) & (x < 5)
+    # earlier window's end is pure A right up to the shared edge
+    assert np.all(out[earlier & (x > 2.2)] == 1.0)
+    assert out[edge - 1] == 1.0

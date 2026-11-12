@@ -189,21 +189,34 @@ def blend_points(a, b, n_window):
     return min(k, n_window // 4)
 
 
+def shared_edge_neighbour(windows, window, edge):
+    """The window touching ``window`` at ``edge`` ('start' or 'end'), else None."""
+    other = 'end' if edge == 'start' else 'start'
+    for o in windows:
+        if o is not window and abs(o[other] - window[edge]) < _EDGE_TOL:
+            return o
+    return None
+
+
 def stitch_smoothed(x, base, pieces):
     """One smoothed trace from full-trace smoothings, blended at window edges.
 
     ``pieces`` is a list of ``(window, full_trace, k_left, k_right)``. Inside a
     window the result is its trace, outside every window it is ``base``. On the
-    first/last k samples inside an edge the value moves linearly from the
-    neighbour's trace (the touching window's, else base) to the window's own:
+    first/last k samples inside a free edge the value moves linearly from the
+    neighbour (``base``) to the window's own trace:
     ``(1 - w) * neighbour + w * own`` with ``w = (j + 1) / (k + 1)``, j counting
-    inward. Samples are found by value, so descending axes work.
+    inward. At a shared edge only the later window blends (its ``k_left``, from
+    the earlier window's trace); the earlier window's end stays pure and its
+    ``k_right`` is ignored, so the trace is continuous. Samples are found by
+    value, so descending axes work.
     """
     import numpy as np
 
     x = np.asarray(x)
     out = np.array(base, dtype=float, copy=True)
-    masks = [(x >= w['start']) & (x <= w['end']) for w, _, _, _ in pieces]
+    wins = [w for w, _, _, _ in pieces]
+    masks = [(x >= w['start']) & (x <= w['end']) for w in wins]
     for mask, (_, trace, _, _) in zip(masks, pieces):
         out[mask] = np.asarray(trace)[mask]
     for mask, (w, trace, k_left, k_right) in zip(masks, pieces):
@@ -213,17 +226,15 @@ def stitch_smoothed(x, base, pieces):
         idx = idx[np.argsort(x[idx], kind='stable')]  # ascending value: start edge first
         own = np.asarray(trace)
         for edge, k, at_start in (('start', k_left, True), ('end', k_right, False)):
+            neighbour = shared_edge_neighbour(wins, w, edge)
+            if neighbour is not None and not at_start:
+                continue  # the later window owns the blend at a shared edge
             k = min(k, idx.size // 2)
             if k <= 0:
                 continue
             nb = base
-            for o, otrace, _, _ in pieces:
-                if o is w:
-                    continue
-                other = o['end'] if at_start else o['start']
-                if abs(other - w[edge]) < _EDGE_TOL:
-                    nb = otrace
-                    break
+            if neighbour is not None:
+                nb = pieces[wins.index(neighbour)][1]
             nb = np.asarray(nb)
             sel = idx[:k] if at_start else idx[::-1][:k]  # j counts inward
             wt = (np.arange(k) + 1.0) / (k + 1.0)
