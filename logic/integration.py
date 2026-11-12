@@ -700,20 +700,24 @@ class Integrator:
 
     @staticmethod
     def _net_parent_areas(peaks_list, peak_at, integrated_areas, skims, riders_of, x, signal, area_factor):
-        """Take each reported parent's riders' areas off its area, keeping ``integrated_areas`` in step.
+        """Take each reported parent's riders' skim areas off its area, keeping ``integrated_areas`` in step.
 
-        A rider outside every window is not reported but is still skimmed and subtracted (spec,
-        Interface with piecewise methods). Returns ``{parent apex: (area before skim, skimmed area)}``.
+        A parent is charged only the part of each rider's skim area (signal above the skim curve) that
+        lies inside its own integrated span, so a parent clamped at a window edge short of its rider
+        is charged less, or nothing. A rider outside every window is not reported but is still skimmed
+        and subtracted (spec, Interface with piecewise methods). Returns
+        ``{parent apex: (area before skim, skimmed area)}``.
         """
         totals = {}
         for parent, riders in riders_of.items():
             peak = peak_at.get(parent)
             if peak is None:
                 continue  # parent outside every window: nothing to subtract from
-            skimmed = sum(peak_at[c].area if c in peak_at
-                          else Integrator._skim_area(x, signal, skims[c], skims[c].call.a, skims[c].b,
-                                                     area_factor)
-                          for c in riders)
+            skimmed = 0.0
+            for c in riders:
+                lo, hi = max(skims[c].call.a, peak.start_index), min(skims[c].b, peak.end_index)
+                if hi > lo:  # no overlap (or a single sample) holds no area
+                    skimmed += Integrator._skim_area(x, signal, skims[c], lo, hi, area_factor)
             totals[parent] = (peak.area, skimmed)
             peak.area = peak.area - skimmed
             integrated_areas[next(k for k, p in enumerate(peaks_list) if p is peak)] = peak.area

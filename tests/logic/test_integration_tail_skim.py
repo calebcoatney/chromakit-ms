@@ -368,3 +368,50 @@ def test_detector_shoulders_do_not_break_integration(mode):
     assert sum(1 for m in processed['peak_metadata'] if m.get('is_shoulder')) > 0
     result = integrate(processed)
     assert len(result['peaks']) == len(processed['peaks_x'])
+
+
+# --- parent clamped short of its rider --------------------------------------------------------------
+
+def _shaded(result, k):
+    from scipy.integrate import simpson
+    return simpson(result['shade_top_peaks'][k] - result['shade_floor_peaks'][k], x=result['x_peaks'][k])
+
+
+@pytest.mark.parametrize('edge', ['apex+0.01', 'apex+0.02', 'midway'])
+def test_parent_clamped_short_of_rider_nets_what_it_shades(edge):
+    """The final review's probe: a window edge between parent and rider. The parent is charged only
+    the part of the rider's skim area inside its own span, so its net area is the area it shades."""
+    pair = rider_on_tail(1.0, 3.0)
+    x, p, c = pair['x'], pair['apex'], pair['child_apex']
+    edge_t = {'apex+0.01': x[p] + 0.01, 'apex+0.02': x[p] + 0.02, 'midway': (x[p] + x[c]) / 2}[edge]
+    processed = processed_from(pair, rider=AUTO)
+    processed['peak_metadata'][0]['clamp'] = (None, float(edge_t))
+    processed['peak_metadata'][1]['clamp'] = (float(edge_t), None)
+    result = integrate(processed)
+    parent, rider = at(result, x, p), at(result, x, c)
+    assert rider.skim_parent == parent.peak_number
+    assert parent.area == pytest.approx(_shaded(result, result['peaks'].index(parent)), rel=1e-9)
+    assert parent.skimmed_area == 0
+    assert parent.area == parent.area_before_skim
+    assert rider.area == pytest.approx(pair['true_child_area'], rel=0.10)
+
+
+def test_parent_clamped_inside_rider_span_charged_its_part():
+    """A window edge inside the rider's span: the parent is charged the skim area left of the edge."""
+    pair = rider_on_tail(1.0, 3.0)
+    x, p, c = pair['x'], pair['apex'], pair['child_apex']
+    call, b, curve = skim_call(pair)
+    edge = (call.a + c) // 2
+    full = integrate(processed_from(pair, rider=AUTO))
+    processed = processed_from(pair, rider=AUTO)
+    processed['peak_metadata'][0]['clamp'] = (None, float(x[edge]))
+    processed['peak_metadata'][1]['clamp'] = (float(x[edge]), None)
+    result = integrate(processed)
+    parent, rider = at(result, x, p), at(result, x, c)
+    assert parent.end_index == edge and rider.start_index == edge
+    from scipy.integrate import simpson
+    left = simpson(pair['y'][call.a:edge + 1] - curve.s[:edge - call.a + 1], x=x[call.a:edge + 1])
+    assert parent.skimmed_area == pytest.approx(left, rel=1e-12)
+    assert 0 < parent.skimmed_area < at(full, x, c).area
+    assert parent.area + parent.skimmed_area == parent.area_before_skim
+    assert parent.area == pytest.approx(_shaded(result, result['peaks'].index(parent)), rel=1e-3)
