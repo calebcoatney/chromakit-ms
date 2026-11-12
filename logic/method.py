@@ -9,14 +9,18 @@ File format: JSON with .chromethod extension.
 Layer rule: this module is in logic/ and must NOT import from api/ or ui/.
 """
 from __future__ import annotations
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Literal, Optional
 
 import pandas as pd
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from logic.rf_quantitation import RF_UNITS
+
+
+logger = logging.getLogger(__name__)
 
 
 # ── Processing Parameter Sub-Models ────────────────────────────────────────────
@@ -36,14 +40,86 @@ class SmoothingParams(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class SmoothingOverrides(BaseModel):
+    """Per-window smoothing overrides: None means inherit the global value."""
+    enabled: Optional[bool] = None
+    method: Optional[str] = None
+    median_enabled: Optional[bool] = None
+    median_kernel: Optional[int] = Field(default=None, ge=3)
+    lambda_: Optional[float] = Field(default=None, alias="lambda")
+    diff_order: Optional[int] = Field(default=None, ge=1, le=2)
+    savgol_window: Optional[int] = Field(default=None, ge=3)
+    savgol_polyorder: Optional[int] = Field(default=None, ge=1)
+
+    model_config = {"populate_by_name": True}
+
+
+class PeakOverrides(BaseModel):
+    min_prominence: Optional[float] = None
+    min_width: Optional[float] = None
+
+
+class ShoulderOverrides(BaseModel):
+    enabled: Optional[bool] = None
+    sensitivity: Optional[int] = Field(default=None, ge=1, le=10)
+    window_length: Optional[int] = None
+    polyorder: Optional[int] = None
+    apex_distance: Optional[int] = None
+
+
+class NegativePeakOverrides(BaseModel):
+    enabled: Optional[bool] = None
+    min_prominence: Optional[float] = None
+
+
+class BaselineOverrides(BaseModel):
+    enabled: Optional[bool] = None
+    method: Optional[str] = None
+    lambda_: Optional[float] = Field(default=None, alias="lambda")
+    baseline_offset: Optional[float] = None
+    fastchrom: Optional["FastchromParams"] = None
+
+    model_config = {"populate_by_name": True}
+
+
+class WindowAnchor(BaseModel):
+    window_id: str
+    edge: Literal["start", "end"]
+
+
+class PeakWindow(BaseModel):
+    """An RT window with optional per-section parameter overrides."""
+    id: str
+    label: str = ""
+    start: float
+    end: float
+    smoothing: SmoothingOverrides = Field(default_factory=SmoothingOverrides)
+    peaks: PeakOverrides = Field(default_factory=PeakOverrides)
+    shoulders: ShoulderOverrides = Field(default_factory=ShoulderOverrides)
+    negative_peaks: NegativePeakOverrides = Field(default_factory=NegativePeakOverrides)
+    baseline: BaselineOverrides = Field(default_factory=BaselineOverrides)
+    events: List[dict] = Field(default_factory=list)
+
+    @field_validator("events")
+    @classmethod
+    def _validate_events(cls, v):
+        from logic.window_events import validate_event
+        return [validate_event(e) for e in v]
+
+
 class BreakPoint(BaseModel):
     time: float = Field(..., description="Break point time in minutes")
     tolerance: float = Field(default=0.1, description="Tolerance window around break point")
+    overrides: BaselineOverrides = Field(default_factory=BaselineOverrides)
+    anchor: Optional[WindowAnchor] = None
 
 
 class FastchromParams(BaseModel):
     half_window: Optional[int] = None
     smooth_half_window: Optional[int] = None
+
+
+BaselineOverrides.model_rebuild()
 
 
 class BaselineParams(BaseModel):
@@ -215,7 +291,7 @@ class ChromaMethod(BaseModel):
     """
 
     name: str
-    version: str = "1"
+    version: str = "2"
     signal_type: str = Field(..., description="Registered SignalProfileRegistry name")
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
@@ -228,6 +304,8 @@ class ChromaMethod(BaseModel):
     shoulders: ShoulderParams = Field(default_factory=ShoulderParams)
     gcxgc: GCxGCParams = Field(default_factory=GCxGCParams)
     integration: IntegrationSubParams = Field(default_factory=IntegrationSubParams)
+    peak_windows: List[PeakWindow] = Field(default_factory=list)
+    outside_windows: Literal["ignore", "global"] = "ignore"
     rt_table: List[RTTableEntry] = Field(default_factory=list)
     rf_table: List[RFTableEntry] = Field(default_factory=list)
     bands: List[BandWindow] = Field(
@@ -264,6 +342,43 @@ class ChromaMethod(BaseModel):
         default=None,
         description="Intended acquisition channel (e.g. 'TCD3C'). None => auto-detect.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_v1(cls, data):
+        """Methods without peak_windows (v1 files, GUI dicts) get windows from range_filters."""
+        if not isinstance(data, dict) or "peak_windows" in data:
+            return data
+        from logic.windows import windows_from_range_filters
+        data = dict(data)
+        peaks = data.get("peaks")
+        filters = peaks.get("range_filters") if isinstance(peaks, dict) else None
+        windows, messages = windows_from_range_filters(filters)
+        for msg in messages:
+            logger.warning("Method migration: %s", msg)
+        data["peak_windows"] = windows
+        data.setdefault("outside_windows", "ignore")
+        data["version"] = "2"
+        return data
+
+    @model_validator(mode="after")
+    def _sync_windows(self):
+        from logic.windows import resolve_break_points, validate_windows
+        self.peak_windows.sort(key=lambda w: w.start)
+        dumps = [w.model_dump(by_alias=True) for w in self.peak_windows]
+        validate_windows(dumps)
+        bps = self.baseline.break_points
+        if bps:
+            resolved = resolve_break_points(
+                dumps, [b.model_dump(by_alias=True) for b in bps])
+            # resolve_break_points returns the sorted, anchor-resolved list; the
+            # tolerance in each dump is the model's own value (never None).
+            self.baseline.break_points = [BreakPoint.model_validate(r) for r in resolved]
+        if self.outside_windows == "ignore":
+            self.peaks.range_filters = [[w.start, w.end] for w in self.peak_windows]
+        else:
+            self.peaks.range_filters = []
+        return self
 
     @field_validator("signal_type")
     @classmethod
