@@ -20,6 +20,34 @@ def test_tail_bend_separates_symmetric_from_tailing():
     assert tail_bend(sym['x'], sym['y'], sym['apex'], sym['valley']) > 1.10
 
 
+@pytest.mark.parametrize('kind, kw', [
+    ('tail', dict(parent_tau=0.03, child_tau=0.002, ratio=4, sep=0.08)),
+    ('sym', dict(parent_tau=0.002, child_tau=0.002, ratio=4, sep=0.05)),
+])
+def test_tail_bend_measured_on_a_coarse_grid(kind, kw):
+    # ChromaKit resamples every run to 10,000 points, so a narrow parent's fall can cross the band in
+    # three or four samples. The bend must still be measured, and match the bend at the full rate.
+    fine = emg_pair(**kw)
+    step = 6  # 0.05 s -> 0.3 s per sample
+    x, y = fine['x'][::step], fine['y'][::step]
+    lo = max(0, fine['apex'] // step - 2)
+    apex = lo + int(np.argmax(y[lo:lo + 5]))
+    valley = apex + int(np.argmin(y[apex:fine['child_apex'] // step + 1]))
+    coarse = tail_bend(x, y, apex, valley)
+    full = tail_bend(fine['x'], fine['y'], fine['apex'], fine['valley'])
+    assert np.isfinite(coarse)
+    assert abs(coarse - full) < 0.05
+    assert (coarse <= 1.10) == (kind == 'tail')
+
+
+def test_tail_bend_on_samples_when_the_back_side_has_a_gap():
+    # An MS-gated (NaN) sample is not rebuilt across: the bend comes from the samples, as before.
+    p = emg_pair(parent_tau=0.03, child_tau=0.002, ratio=4, sep=0.08)
+    y = p['y'].copy()
+    y[p['valley'] - 1] = np.nan
+    assert np.isfinite(tail_bend(p['x'], y, p['apex'], p['valley']))
+
+
 def test_tail_bend_nan_when_band_cannot_be_measured():
     x = np.linspace(0, 1, 50)
     y = np.exp(-x)
