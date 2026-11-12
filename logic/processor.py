@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -5,6 +6,10 @@ from scipy import signal, interpolate
 from scipy.signal import medfilt, savgol_filter, find_peaks
 from scipy.optimize import curve_fit
 from pybaselines import Baseline
+
+from logic.windows import merge_overrides, resolve_break_points, resolve_windows, section_overrides
+
+logger = logging.getLogger(__name__)
 
 
 # Minimum length a segment must have for pybaselines to be worth running on it.
@@ -117,7 +122,7 @@ def _build_baseline_segments(x, ms_range, break_points):
                         used_bps.add(b)
         dropped_bps = [b for b in bp_indices if b not in used_bps]
         if dropped_bps:
-            print(f"Warning: {len(dropped_bps)} break point(s) dropped because they fall outside the MS-on region")
+            logger.warning("%d break point(s) dropped because they fall outside the MS-on region", len(dropped_bps))
 
         segments = new_segments
 
@@ -125,7 +130,7 @@ def _build_baseline_segments(x, ms_range, break_points):
     final_segments = []
     for seg in segments:
         if seg.fit and (seg.end - seg.start) < MIN_SEGMENT_LEN:
-            print(f"Warning: segment [{seg.start}:{seg.end}] is too short ({seg.end - seg.start} < {MIN_SEGMENT_LEN}); demoting to fit=False")
+            logger.warning("segment [%d:%d] is too short (%d < %d); demoting to fit=False", seg.start, seg.end, seg.end - seg.start, MIN_SEGMENT_LEN)
             final_segments.append(_BaselineSegment(start=seg.start, end=seg.end, fit=False))
         else:
             final_segments.append(seg)
@@ -460,7 +465,12 @@ class ChromatogramProcessor:
         # STEP 2: Baseline correction (skippable via baseline.enabled=False).
         # When disabled, corrected_y IS the smoothed signal and baseline is zero,
         # so downstream (band integration, plotting) has a well-defined corrected_y.
-        if params['baseline'].get('enabled', True):
+        windows, _outside = resolve_windows(params)
+        resolved_breaks = resolve_break_points(
+            windows, params['baseline'].get('break_points', []))
+        any_section_enabled = any(
+            (b.get('overrides') or {}).get('enabled') is True for b in resolved_breaks)
+        if params['baseline'].get('enabled', True) or any_section_enabled:
             # Pass ms_range so the baseline is not fit through the solvent peak
             # (the pre-MS region of the FID is masked with NaN).
             baseline_y, baseline_corrected_y = self._apply_baseline_correction(
@@ -468,9 +478,10 @@ class ChromatogramProcessor:
                 method=params['baseline']['method'],
                 lam=params['baseline']['lambda'],
                 fastchrom_params=params['baseline'].get('fastchrom'),
-                break_points=params['baseline'].get('break_points', []),
+                break_points=resolved_breaks,
                 baseline_offset=params['baseline'].get('baseline_offset', 0.0),
                 ms_range=ms_range,
+                baseline_params=params['baseline'],
             )
         else:
             baseline_y = np.zeros_like(smoothed_y)
@@ -648,7 +659,7 @@ class ChromatogramProcessor:
             print(f"Smoothing failed: {str(e)}")
             return y
     
-    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0, ms_range=None):
+    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0, ms_range=None, baseline_params=None):
         """Apply baseline correction using the specified method.
         
         Signal is split into segments based on:
@@ -670,6 +681,11 @@ class ChromatogramProcessor:
             baseline_offset: Constant offset applied to the fitted baseline.
             ms_range: Optional (t_lo, t_hi) tuple of MS-detector-on time window.
                       Regions outside this window are not fitted.
+            baseline_params: Optional global baseline settings dict. When given,
+                each fit segment uses these merged with the overrides of the
+                latest break at or before the segment start (break_points must
+                then be resolved break dicts, see logic.windows). A segment
+                whose merged ``enabled`` is False gets a zero baseline.
         
         Returns:
             (baseline_y, corrected_y) — both full-length arrays matching len(y).
@@ -695,18 +711,37 @@ class ChromatogramProcessor:
         
         baseline_pieces = []
         corrected_pieces = []
-        
+
+        # Same argmin mapping as _build_baseline_segments. Breaks it drops (after the
+        # MS-on region) can never be at or before a fit segment's start, so they
+        # contribute nothing; a break in the masked pre-MS region is inherited by
+        # the first fit segment (spec 3.2).
+        bp_indices = []
+        if baseline_params is not None:
+            bp_indices = [int(np.argmin(np.abs(x - bp['time']))) for bp in (break_points or [])]
+
         for seg in segments:
             seg_y = y[seg.start:seg.end]
             if len(seg_y) == 0:
                 continue
             
             if seg.fit:
+                seg_method, seg_lam, seg_fc, seg_offset = method, lam, fastchrom_params, baseline_offset
+                if baseline_params is not None:
+                    cfg = merge_overrides(
+                        baseline_params,
+                        section_overrides(seg.start, bp_indices, break_points))
+                    if not cfg.get('enabled', True):
+                        baseline_pieces.append(np.zeros(len(seg_y)))
+                        corrected_pieces.append(np.copy(seg_y))
+                        continue
+                    seg_method, seg_lam = cfg['method'], cfg['lambda']
+                    seg_fc, seg_offset = cfg.get('fastchrom'), cfg.get('baseline_offset', 0.0)
                 print(f"  Baseline segment [{seg.start}:{seg.end}] (fit, length={len(seg_y)})")
                 seg_baseline, seg_corrected = self._apply_baseline_correction_single(
-                    seg_y, method=method, lam=lam,
-                    fastchrom_params=fastchrom_params,
-                    baseline_offset=baseline_offset,
+                    seg_y, method=seg_method, lam=seg_lam,
+                    fastchrom_params=seg_fc,
+                    baseline_offset=seg_offset,
                 )
             else:
                 print(f"  Baseline segment [{seg.start}:{seg.end}] (masked, NaN, length={len(seg_y)})")
