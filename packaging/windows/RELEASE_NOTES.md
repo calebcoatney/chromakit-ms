@@ -16,19 +16,24 @@ kept (they are stored outside the app folder).
 `ChromaKit.exe --self-test "%TEMP%\ck"` writes a check to `%TEMP%\ck\self-test.txt`.
 
 **Changes for existing users:**
-- **Load Method now applies the method** to the open file straight away. If the method was saved with a
-  different detector channel or signal factor, the file is reloaded on that channel. The status bar shows
-  `Method: <name>`, with `*` when it has unsaved changes.
-- **Save Method records the detector channel** that is open. The batch dialog fills its first per-detector
-  row from the saved method, and the JSON→Excel converter picks a saved format preset whose name contains
-  the files' detector (unless you already picked one or changed the format).
-- **Manual assignment overrides are off in batch runs** unless you tick **Apply manual assignment
-  overrides** in the batch dialog. An override with a stored spectrum that can't be compared (GC-only
-  data) is now skipped and logged instead of being applied on retention time alone. Re-export batches
-  from GC-only data if an unexpected compound name appeared among the Unknowns.
-- **GC-only files hide the MS controls** (MS tab, MS Search All, Deconvolve MS, MS baseline). A GC-only
-  file opened after a GC-MS file no longer reuses that file's MS time range, which could drop its peaks.
-- **Show Corrected Signal** and the toolbar **Home** button now fit the trace on screen.
-- **Enable Baseline Correction** checkbox in the baseline section.
-- Peaks next to the solvent delay keep their correct start or end.
-- The **Update available** button explains how to update for the way ChromaKit was installed.
+- **Save Method always asks where to save.** The dialog opens on the loaded method file, so saving over
+  it is still one click, but it is never silent. The method takes the name of the file you save to.
+  Before, Save wrote over the loaded file without asking, which could change a shared method.
+- **Tail skim** (new **Tail Skim** group in Parameters). A small peak riding the decaying tail of a
+  bigger one is skimmed off that tail (dashed red line, shaded) instead of cut straight down at the
+  valley; the bigger peak's area no longer includes it. Modes: *Automatic* (skim when the tail allows
+  it), *Always skim*, *Always split*. New sessions start on *Automatic*. **Methods saved before 0.2.3
+  open on *Always split*, so their results don't change** until you pick another mode and save.
+- **Enable Shoulder Detection has a new detector.** It finds peaks merged into a bigger one (shoulders)
+  or riding its tail, and keeps only those a peak-shape fit confirms. Off by default. If you had it on,
+  expect different shoulder peaks.
+- **GC1&2 batch.** In **Batch Process Directories…**, each folder is tagged GC1 or GC2 from its name or
+  its runs' names (right-click → **Set instrument** when they don't say). Tick **Process each detector below with its own method** and give
+  each detector row its instrument. The batch then pairs GC1 and GC2 injections by acquisition time and
+  writes one paste workbook (GC1 and GC2 sheets plus a Pairing sheet). **Save setup…** stores the rows
+  for next time. Batch reads `.C` folders: use **Tools → Batch Convert to .C…** first.
+- **Peak windows (first part).** Each **Peak Range Filters** row is now a peak window and each **Signal
+  Break Point** starts a baseline section; both can carry their own settings in the saved
+  `.chromethod`. For now those settings are edited in the file itself; controls in the app come later.
+  Methods without them work as before.
+- Export to CSV keeps every column when rows have different fields.
