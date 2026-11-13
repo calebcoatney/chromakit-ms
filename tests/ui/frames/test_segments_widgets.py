@@ -1,0 +1,379 @@
+"""ui.frames.segments: the Segments table and the segment editor (design §4.2)."""
+import copy
+
+import pytest
+from PySide6.QtCore import Qt
+pytest.importorskip('pytestqt')
+
+from logic import segments as S
+from logic.method import ChromaMethod
+from ui.frames.segments import SegmentEditor, SegmentsPanel
+
+SPEC_WINDOW = {'id': 'w1', 'label': 'late cluster', 'start': 12.55, 'end': 13.10,
+               'peaks': {'min_prominence': 0.02, 'min_width': 3}}
+SPEC_BREAKS = [
+    {'time': 12.55, 'anchor': {'window_id': 'w1', 'edge': 'start'}, 'overrides': {'lambda': 1e3}},
+    {'time': 12.85, 'overrides': {'lambda': 1e4}},
+    {'time': 13.10, 'anchor': {'window_id': 'w1', 'edge': 'end'}, 'overrides': {}},
+]
+SECTIONS = ('baseline',) + S.SEGMENT_SECTIONS
+
+
+def params_of(windows=(), breaks=None):
+    d = {'name': 't', 'signal_type': 'gc', 'peak_windows': list(windows)}
+    if breaks is not None:
+        d['baseline'] = {'break_points': breaks}
+    return ChromaMethod.model_validate(d).to_gui_params()
+
+
+@pytest.fixture
+def spec():
+    p = params_of([SPEC_WINDOW], SPEC_BREAKS)
+    return p, S.segments_view(p)['segments'][0]
+
+
+def make_editor(qtbot, params, record, deconvolution=False, is_new=False, resume=None):
+    inherited = {s: copy.deepcopy(params[s]) for s in SECTIONS}
+    if resume is None:
+        resume = S.resume_overrides(params, record['start'])
+    ed = SegmentEditor(record, inherited, resume, deconvolution, is_new)
+    qtbot.addWidget(ed)
+    return ed
+
+
+def type_into(edit, text):
+    edit.setText(text)
+    edit.editingFinished.emit()
+
+
+# ── SegmentsPanel ─────────────────────────────────────────────────────────────
+
+def make_panel(qtbot, params):
+    panel = SegmentsPanel()
+    qtbot.addWidget(panel)
+    panel.set_view(S.segments_view(params), 'asls λ 1e6 · prom 0.05', 'ignore')
+    return panel
+
+
+def test_panel_rows(qtbot, spec):
+    p, rec = spec
+    panel = make_panel(qtbot, p)
+    t = panel.table
+    assert t.rowCount() == 2
+    assert t.item(0, 0).text() == 'Whole run (defaults)'
+    assert t.item(0, 3).text() == 'asls λ 1e6 · prom 0.05'
+    assert t.item(1, 0).text() == 'late cluster'
+    assert (t.item(1, 1).text(), t.item(1, 2).text()) == ('12.55', '13.1')
+    assert t.item(1, 3).text() == S.summarize(rec) == 'λ 1e3→1e4 · prom 0.02 · width 3'
+
+
+def test_panel_set_editing_disables_table_and_buttons(qtbot, spec):
+    panel = make_panel(qtbot, spec[0])
+    panel.set_editing(True)
+    assert not panel.table.isEnabled()
+    assert not panel.add_button.isEnabled()
+    assert not panel.delete_button.isEnabled()
+    panel.set_editing(False)
+    assert panel.table.isEnabled() and panel.add_button.isEnabled()
+
+
+def test_panel_click_row_emits_open(qtbot, spec):
+    panel = make_panel(qtbot, spec[0])
+    with qtbot.waitSignal(panel.open_requested, timeout=500) as blocker:
+        panel.table.cellClicked.emit(1, 0)
+    assert blocker.args == ['w1']
+    with qtbot.waitSignal(panel.open_requested, timeout=500) as blocker:
+        panel.table.cellClicked.emit(0, 2)
+    assert blocker.args == ['']
+
+
+def test_panel_add_and_delete(qtbot, spec):
+    panel = make_panel(qtbot, spec[0])
+    with qtbot.waitSignal(panel.add_requested, timeout=500):
+        qtbot.mouseClick(panel.add_button, Qt.LeftButton)
+    panel.table.selectRow(0)
+    assert not panel.delete_button.isEnabled()  # Whole run can't be deleted
+    panel.table.selectRow(1)
+    assert panel.delete_button.isEnabled()
+    with qtbot.waitSignal(panel.delete_requested, timeout=500) as blocker:
+        qtbot.mouseClick(panel.delete_button, Qt.LeftButton)
+    assert blocker.args == ['w1']
+
+
+def test_panel_outside_combo(qtbot, spec):
+    panel = SegmentsPanel()
+    qtbot.addWidget(panel)
+    with qtbot.assertNotEmitted(panel.outside_changed):
+        panel.set_view(S.segments_view(spec[0]), '', 'global')
+    assert panel.outside_combo.currentData() == 'global'
+    panel.set_view(S.segments_view(spec[0]), '', 'ignore')
+    with qtbot.waitSignal(panel.outside_changed, timeout=500) as blocker:
+        panel.outside_combo.setCurrentIndex(panel.outside_combo.findData('global'))
+    assert blocker.args == ['global']
+
+
+def test_panel_row_warning_tooltip_survives_set_view(qtbot, spec):
+    panel = make_panel(qtbot, spec[0])
+    panel.set_row_warning('w1', 'Baseline change at 12.85 falls inside a peak')
+    assert panel.table.item(1, 0).toolTip() == 'Baseline change at 12.85 falls inside a peak'
+    panel.set_view(S.segments_view(spec[0]), '', 'ignore')
+    assert panel.table.item(1, 3).toolTip() == 'Baseline change at 12.85 falls inside a peak'
+    panel.set_row_warning('w1', None)
+    assert panel.table.item(1, 0).toolTip() == ''
+
+
+# ── SegmentEditor ─────────────────────────────────────────────────────────────
+
+def test_editor_roundtrips_spec_record(qtbot, spec):
+    p, rec = spec
+    before = copy.deepcopy(rec)
+    ed = make_editor(qtbot, p, rec)
+    assert rec == before
+    assert ed.record() == rec
+    S.apply_segment(p, ed.record())  # accepted as is
+
+
+def test_editor_no_preview_during_construction(qtbot, spec, monkeypatch):
+    p, rec = spec
+    calls = []  # every preview goes through _preview; a signal can't be connected before __init__
+    real = SegmentEditor._preview
+    monkeypatch.setattr(SegmentEditor, '_preview', lambda self: (calls.append(1), real(self)))
+    rec['partway'].append({'time': 12.95, 'overrides': {'baseline_offset': 1.0}})
+    rec['after'] = {'mode': 'custom', 'overrides': {'lambda': 1e5}}
+    ed = make_editor(qtbot, p, rec, deconvolution=True, is_new=True)
+    assert calls == []
+    type_into(ed.groups['peaks'].fields['min_height'].edit, '2')
+    assert calls == [1]
+
+
+def test_editor_typing_prominence_previews(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    field = ed.groups['peaks'].fields['min_prominence']
+    with qtbot.waitSignal(ed.preview_changed, timeout=500) as blocker:
+        type_into(field.edit, '0.5')
+    assert blocker.args[0]['peaks']['min_prominence'] == 0.5
+    assert ed.record()['peaks'] == {'min_prominence': 0.5, 'min_width': 3}
+
+
+def test_editor_untick_fresh_disables_baseline(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    assert ed.fresh_check.isChecked()
+    assert ed.fresh_check.text() == 'Start a fresh baseline at 12.55'
+    lam = ed.groups['baseline'].fields['lambda']
+    assert lam.isEnabled()
+    with qtbot.waitSignal(ed.preview_changed, timeout=500):
+        ed.fresh_check.setChecked(False)
+    assert not lam.isEnabled()
+    r = ed.record()
+    assert r['fresh_baseline'] is False and r['baseline'] == {}
+    ed.fresh_check.setChecked(True)  # values come back
+    assert ed.record()['baseline'] == {'lambda': 1e3}
+
+
+def test_editor_baseline_count_includes_partway_rows(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    assert ed.groups['baseline'].count_label.text() == '2 changes'
+    ed.fresh_check.setChecked(False)
+    assert ed.groups['baseline'].count_label.text() == '1 change'
+
+
+def test_editor_partway_rows(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    assert len(ed.partway.rows) == 1
+    row = ed.partway.rows[0]
+    assert set(row.fields) == {'enabled', 'method', 'lambda', 'baseline_offset'}
+    assert row.fields['lambda'].value() == 1e4
+    assert row.fields['method'].tag_label.text() == 'same as segment'
+    # inherited = the segment's effective baseline: own values over the whole-run baseline
+    assert row.fields['lambda'].edit.placeholderText() == '1000'
+    assert row.fields['baseline_offset'].edit.placeholderText() == f"{p['baseline']['baseline_offset']:g}"
+    with qtbot.waitSignal(ed.preview_changed, timeout=500) as blocker:
+        ed.add_partway(12.9)
+    assert len(ed.partway.rows) == 2
+    assert blocker.args[0]['partway'][1] == {'time': 12.9, 'overrides': {}}
+    with qtbot.waitSignal(ed.preview_changed, timeout=500) as blocker:
+        qtbot.mouseClick(ed.partway.rows[0].delete_button, Qt.LeftButton)
+    assert blocker.args[0]['partway'] == [{'time': 12.9, 'overrides': {}}]
+
+
+def test_editor_partway_inherits_resume_when_not_fresh(qtbot):
+    p = params_of([{'id': 'w1', 'label': '', 'start': 5.0, 'end': 8.0}],
+                  [{'time': 1.0, 'overrides': {'lambda': 1e5}},
+                   {'time': 6.0, 'overrides': {'lambda': 1e5, 'baseline_offset': 2.0}}])
+    rec = S.segments_view(p)['segments'][0]
+    assert rec['fresh_baseline'] is False
+    ed = make_editor(qtbot, p, rec)
+    row = ed.partway.rows[0]
+    assert row.fields['lambda'].edit.placeholderText() == '100000'
+    assert row.fields['baseline_offset'].value() == 2.0
+    assert ed.record() == rec
+
+
+def test_editor_change_at_adds_midpoint_row(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    with qtbot.waitSignal(ed.preview_changed, timeout=500) as blocker:
+        qtbot.mouseClick(ed.partway.add_button, Qt.LeftButton)
+    assert ed.partway.add_button.text() == '+ Change at…'
+    assert blocker.args[0]['partway'][-1]['time'] == pytest.approx((12.55 + 13.10) / 2)
+
+
+def test_editor_partway_time_edit_previews(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    with qtbot.waitSignal(ed.preview_changed, timeout=500) as blocker:
+        type_into(ed.partway.rows[0].time_edit, '12.95')
+    assert blocker.args[0]['partway'][0]['time'] == 12.95
+
+
+def test_editor_after_line(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    assert ed.after_label.text() == 'After 13.1 the whole-run baseline takes over again.'
+    assert ed.after_reset.isHidden()
+
+    custom = copy.deepcopy(rec)
+    custom['after'] = {'mode': 'custom', 'overrides': {'lambda': 1e5}}
+    ed2 = make_editor(qtbot, p, custom, resume={'lambda': 1e6})
+    assert ed2.after_label.text() == 'After 13.1: custom (λ 1e5)'
+    assert not ed2.after_reset.isHidden() and ed2.after_reset.text() == '↺'
+    assert ed2.record()['after'] == custom['after']
+    with qtbot.waitSignal(ed2.preview_changed, timeout=500) as blocker:
+        qtbot.mouseClick(ed2.after_reset, Qt.LeftButton)
+    assert blocker.args[0]['after'] == {'mode': 'resume', 'overrides': {'lambda': 1e6}}
+    assert ed2.after_label.text() == 'After 13.1 the whole-run baseline takes over again.'
+    assert ed2.after_reset.isHidden()
+
+
+def test_editor_deconvolution_disables_detection_groups(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec, deconvolution=True)
+    for section in ('peaks', 'shoulders', 'rider', 'negative_peaks'):
+        assert not ed.groups[section].isEnabled(), section
+    for section in ('baseline', 'smoothing'):
+        assert ed.groups[section].isEnabled(), section
+    assert not ed.deconv_note.isHidden()
+    assert ed.deconv_note.text() == 'deconvolution mode: segments filter only'
+    assert ed.record() == rec
+    plain = make_editor(qtbot, p, rec)
+    assert plain.deconv_note.isHidden()
+
+
+def test_editor_save_and_cancel(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    with qtbot.waitSignal(ed.save_requested, timeout=500) as blocker:
+        qtbot.mouseClick(ed.save_button, Qt.LeftButton)
+    assert blocker.args == [rec]
+    with qtbot.waitSignal(ed.cancel_requested, timeout=500):
+        qtbot.mouseClick(ed.cancel_button, Qt.LeftButton)
+
+
+def test_editor_errors_block_save_and_keep_last_valid(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    type_into(ed.groups['peaks'].fields['min_prominence'].edit, '0.5')
+    with qtbot.assertNotEmitted(ed.preview_changed):
+        type_into(ed.groups['peaks'].fields['min_width'].edit, 'abc')
+    assert ed.has_errors()
+    assert ed.record()['peaks'] == {'min_prominence': 0.5, 'min_width': 3}
+    with qtbot.assertNotEmitted(ed.save_requested):
+        qtbot.mouseClick(ed.save_button, Qt.LeftButton)
+    assert not ed.error_label.isHidden()
+    assert ed.error_label.text() == 'Fix the fields marked in red before saving'
+    with qtbot.waitSignal(ed.preview_changed, timeout=500):
+        type_into(ed.groups['peaks'].fields['min_width'].edit, '4')
+    assert not ed.has_errors()
+
+
+def test_editor_bad_span_text_is_an_error(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    with qtbot.assertNotEmitted(ed.preview_changed):
+        type_into(ed.from_edit, 'x')
+    assert ed.has_errors()
+    assert ed.record()['start'] == 12.55
+    with qtbot.waitSignal(ed.preview_changed, timeout=500) as blocker:
+        type_into(ed.from_edit, '12.6')
+    assert blocker.args[0]['start'] == 12.6
+
+
+def test_editor_set_span(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    seen = []
+    ed.preview_changed.connect(seen.append)
+    ed.set_span(12.5, 13.2)
+    assert len(seen) == 1
+    assert (seen[0]['start'], seen[0]['end']) == (12.5, 13.2)
+    assert (ed.from_edit.text(), ed.to_edit.text()) == ('12.5', '13.2')
+    assert ed.fresh_check.text() == 'Start a fresh baseline at 12.5'
+    assert ed.after_label.text().startswith('After 13.2 ')
+
+
+def test_editor_show_error_and_warnings(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    assert ed.error_label.isHidden() and ed.warning_label.isHidden()
+    ed.show_error("Segment 'late cluster' overlaps segment 'x'")
+    assert not ed.error_label.isHidden()
+    ed.show_error(None)
+    assert ed.error_label.isHidden()
+    ed.set_warnings(['one', 'two'])
+    assert not ed.warning_label.isHidden()
+    assert ed.warning_label.text() == '⚠ one\n⚠ two'
+    ed.set_warnings([])
+    assert ed.warning_label.isHidden()
+
+
+def test_editor_header_label(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    assert ed.title_label.text() == 'Segment: late cluster'
+    assert ed.label_edit.text() == 'late cluster'
+    new = S.new_segment(p, 1.0, 2.0)
+    ed2 = make_editor(qtbot, p, new, is_new=True)
+    assert ed2.title_label.text() == 'New segment'
+    with qtbot.waitSignal(ed2.preview_changed, timeout=500) as blocker:
+        type_into(ed2.label_edit, 'early lights')
+    assert blocker.args[0]['label'] == 'early lights'
+    assert ed2.title_label.text() == 'Segment: early lights'
+    assert ed2.record() == dict(new, label='early lights')
+    with qtbot.waitSignal(ed2.cancel_requested, timeout=500):
+        qtbot.mouseClick(ed2.cancel_button, Qt.LeftButton)
+
+
+def test_editor_hint_line(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    assert ed.hint_label.text() == ('Grey = same as the whole run. Type a value to change it '
+                                    'for this segment; ↺ puts it back.')
+
+
+def test_editor_group_order_and_titles(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    titles = [ed.groups[s].toggle_button.text()[2:] for s in ed.groups]
+    assert titles == ['Baseline', 'Peak detection', 'Smoothing', 'Shoulders', 'Tail skim',
+                      'Negative peaks']
+
+
+def test_editor_carries_keys_it_has_no_field_for(qtbot):
+    """A file may hold overrides the form doesn't show (asymmetry, skim_chain_min_tail): kept as is."""
+    p = params_of([{'id': 'w1', 'label': '', 'start': 5.0, 'end': 8.0,
+                    'rider': {'skim_chain_min_tail': 0.2, 'skim_model': 'tangent'}}],
+                  [{'time': 5.0, 'anchor': {'window_id': 'w1', 'edge': 'start'},
+                    'overrides': {'lambda': 1e3, 'asymmetry': 0.05}},
+                   {'time': 6.0, 'overrides': {'lambda': 1e3, 'asymmetry': 0.1}},
+                   {'time': 8.0, 'anchor': {'window_id': 'w1', 'edge': 'end'}, 'overrides': {}}])
+    rec = S.segments_view(p)['segments'][0]
+    assert rec['partway'][0]['overrides'] == {'asymmetry': 0.1}
+    ed = make_editor(qtbot, p, rec)
+    assert ed.record() == rec
+    type_into(ed.groups['rider'].fields['skim_height_ratio'].edit, '3')
+    assert ed.record()['rider'] == {'skim_chain_min_tail': 0.2, 'skim_model': 'tangent',
+                                    'skim_height_ratio': 3.0}

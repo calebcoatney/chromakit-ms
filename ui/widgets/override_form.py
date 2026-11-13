@@ -313,6 +313,10 @@ class OverrideGroup(QGroupBox):
         self._update_count()
         self.set_expanded(bool(self.values()))
 
+    def body_layout(self) -> QFormLayout:
+        """The collapsible body's form, for callers that add rows of their own."""
+        return self._body.layout()
+
     def set_expanded(self, expanded: bool) -> None:
         self._expanded = expanded
         self._body.setVisible(expanded)  # hides only; never disables
