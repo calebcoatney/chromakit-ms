@@ -283,3 +283,97 @@ def test_v1_method_view_is_whole_run_only():
     view = S.segments_view(p)
     assert view['segments'] == []
     assert [bp['time'] for bp in view['whole_run_breaks']] == [4.01]
+
+
+# ── controller rulings R5-R7 ───────────────────────────────────────────────────
+
+def test_whole_run_break_at_segment_end_is_not_duplicated():
+    p = params_of(breaks=[{'time': 2.0, 'overrides': {'lambda': 1e5}}])
+    whole = copy.deepcopy(bps(p)[0])
+    rec = S.new_segment(p, 1.0, 2.0)
+    rec['fresh_baseline'], rec['baseline'] = True, {'lambda': 1e3}
+    out = S.apply_segment(p, rec)
+    assert anchored(out, rec['id'], 'end') == []
+    assert whole in bps(out)
+    assert S.segments_view(out)['whole_run_breaks'] == [whole]
+    norm(out)
+
+
+def test_remove_touching_neighbour_with_unanchored_start():
+    p = params_of(
+        [{'id': 'A', 'start': 1.0, 'end': 2.0}, {'id': 'B', 'start': 2.0, 'end': 3.0}],
+        [{'time': 1.0, 'anchor': {'window_id': 'A', 'edge': 'start'}, 'overrides': {'lambda': 1e3}},
+         {'time': 2.0, 'overrides': {'lambda': 1e5}}])
+    b_start = copy.deepcopy(bps(p)[1])
+    out = S.remove_segment(p, 'B')
+    assert [w['id'] for w in out['peak_windows']] == ['A']
+    assert anchored(out, 'A', 'end') == []
+    assert b_start in bps(out)
+    assert S.segments_view(out)['whole_run_breaks'] == [b_start]
+    norm(out)
+
+
+def test_neighbour_fresh_start_drops_custom_end(caplog):
+    p = params_of(
+        [{'id': 'A', 'start': 1.0, 'end': 2.0}, {'id': 'B', 'start': 2.0, 'end': 3.0}],
+        [{'time': 1.0, 'anchor': {'window_id': 'A', 'edge': 'start'}, 'overrides': {'lambda': 1e3}},
+         {'time': 2.0, 'anchor': {'window_id': 'A', 'edge': 'end'}, 'overrides': {'lambda': 1e7}}])
+    assert seg(p, 'A')['after']['mode'] == 'custom'
+    rec = seg(p, 'B')
+    rec['fresh_baseline'], rec['baseline'] = True, {'lambda': 1e4}
+    with caplog.at_level('INFO', logger='logic.segments'):
+        out = S.apply_segment(p, rec)
+    assert anchored(out, 'A', 'end') == []
+    assert [stripped(bp) for bp in anchored(out, 'B', 'start')] == [{'lambda': 1e4}]
+    assert any('2' in r.getMessage() and 'dropped' in r.getMessage() for r in caplog.records)
+    norm(out)
+
+
+def test_edit_other_segment_leaves_foreign_segment_without_end_break():
+    p = params_of(
+        [{'id': 'w1', 'start': 2.0, 'end': 3.0}, {'id': 'w2', 'start': 5.0, 'end': 6.0}],
+        [{'time': 2.0, 'anchor': {'window_id': 'w1', 'edge': 'start'}, 'overrides': {'lambda': 1e3}}])
+    w1_breaks = copy.deepcopy(bps(p))
+    rec = seg(p, 'w2')
+    rec['peaks'] = {'min_width': 5}
+    out = S.apply_segment(p, rec)
+    assert bps(out) == w1_breaks
+    assert seg(out, 'w1')['after']['mode'] == 'none'
+    # a fresh baseline on w2 does not touch w1 either
+    rec['fresh_baseline'], rec['baseline'] = True, {'lambda': 1e4}
+    out2 = S.apply_segment(p, rec)
+    assert [bp for bp in bps(out2) if bp.get('anchor', {}) and bp['anchor']['window_id'] == 'w1'] \
+        == w1_breaks
+    assert seg(out2, 'w1')['after']['mode'] == 'none'
+
+
+def test_after_none_kept_when_segment_already_had_a_baseline():
+    p = params_of(
+        [{'id': 'w1', 'start': 2.0, 'end': 3.0}],
+        [{'time': 2.0, 'anchor': {'window_id': 'w1', 'edge': 'start'}, 'overrides': {'lambda': 1e3}}])
+    rec = seg(p, 'w1')
+    rec['partway'] = [{'time': 2.5, 'overrides': {'lambda': 1e4}}]
+    out = S.apply_segment(p, rec)
+    assert anchored(out, 'w1', 'end') == []
+    rec = seg(out, 'w1')
+    rec['after'] = {'mode': 'resume', 'overrides': {}}
+    assert len(anchored(S.apply_segment(out, rec), 'w1', 'end')) == 1
+
+
+def test_set_whole_run_breaks_updates_only_resume_end_breaks():
+    p = params_of(
+        [{'id': 'A', 'start': 2.0, 'end': 3.0}, {'id': 'B', 'start': 5.0, 'end': 6.0},
+         {'id': 'C', 'start': 8.0, 'end': 9.0}],
+        [{'time': 1.0, 'overrides': {'lambda': 1e5}},
+         {'time': 2.0, 'anchor': {'window_id': 'A', 'edge': 'start'}, 'overrides': {'lambda': 1e3}},
+         {'time': 3.0, 'anchor': {'window_id': 'A', 'edge': 'end'}, 'overrides': {'lambda': 1e5}},
+         {'time': 5.0, 'anchor': {'window_id': 'B', 'edge': 'start'}, 'overrides': {'lambda': 1e3}},
+         {'time': 6.0, 'anchor': {'window_id': 'B', 'edge': 'end'}, 'overrides': {'lambda': 1e7}},
+         {'time': 8.0, 'anchor': {'window_id': 'C', 'edge': 'start'}, 'overrides': {'lambda': 1e3}}])
+    custom = copy.deepcopy(anchored(p, 'B', 'end'))
+    out = S.set_whole_run_breaks(p, [{'time': 1.0, 'tolerance': 0.1,
+                                      'overrides': {'lambda': 1e6}, 'anchor': None}])
+    assert [stripped(bp) for bp in anchored(out, 'A', 'end')] == [{'lambda': 1e6}]
+    assert anchored(out, 'B', 'end') == custom
+    assert anchored(out, 'C', 'end') == []
+    assert len(bps(out)) == len(bps(p))

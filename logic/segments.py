@@ -18,8 +18,11 @@ in ``params['baseline']['break_points']`` (may be None), override keys by alias
 """
 
 import copy
+import logging
 
 from logic.windows import _EDGE_TOL, merge_overrides, resolve_break_points, validate_windows
+
+logger = logging.getLogger(__name__)
 
 SEGMENT_SECTIONS = ('smoothing', 'peaks', 'shoulders', 'negative_peaks', 'rider')
 _DEFAULT_TOLERANCE = 0.1  # BreakPoint.tolerance default in logic/method.py; unused by the processor
@@ -108,19 +111,9 @@ def _parse(params, validate=True):
     return windows, breaks, _owners(windows, breaks)
 
 
-def _custom_end_ids(windows, breaks, owners):
-    """Ids of segments whose end break differs from the resume value."""
-    custom = set()
-    for w in windows:
-        end = _owned(owners, w['id'])['end']
-        if end is not None and _strip(breaks[end].get('overrides')) != _resume(breaks, owners, w['start']):
-            custom.add(w['id'])
-    return custom
-
-
 def resume_overrides(params, t):
     """Overrides of the latest whole-run break at or before t, else {}."""
-    windows, breaks, owners = _parse(params)
+    _, breaks, owners = _parse(params)
     return _resume(breaks, owners, float(t))
 
 
@@ -173,6 +166,8 @@ def new_segment(params, start, end):
 
 
 # ── writing ────────────────────────────────────────────────────────────────────
+# Edits never rewrite a segment the user didn't edit (design §4.1): only the edited
+# segment's own breaks change, plus the end break of the segment ending where it starts.
 
 def _set_breaks(out, breaks, original):
     """Store breaks sorted by time; an empty result keeps the input's None."""
@@ -180,41 +175,34 @@ def _set_breaks(out, breaks, original):
     out['baseline']['break_points'] = breaks if (breaks or original is not None) else None
 
 
-def _sync(out, custom):
-    """Regenerate every end break in ``out`` (in place); ``custom`` ids keep theirs.
+def _break_at(breaks, t):
+    return any(_same(bp['time'], t) for bp in breaks)
 
-    Not validated on entry: a fresh start just written may share its time with the
-    neighbour's end break this drops. ``_finish`` validates the result.
+
+def _end_break(wid, t, overrides, tolerance=_DEFAULT_TOLERANCE):
+    return {'time': float(t), 'tolerance': tolerance, 'overrides': overrides,
+            'anchor': {'window_id': wid, 'edge': 'end'}}
+
+
+def _restore_neighbour_ends(out, times):
+    """A segment ending at one of ``times`` regains a resume end break.
+
+    Only when it has a fresh start or partway rows, has no end break, and no break
+    sits at its end (a duplicate time is invalid). Not validated on entry.
     """
     windows, breaks, owners = _parse(out, validate=False)
-    fresh_starts = {w['id']: w['start'] for w in windows
-                    if _owned(owners, w['id'])['start'] is not None}
-    drop, add = set(), []
+    add = []
     for w in windows:
+        if not any(_same(w['end'], t) for t in times):
+            continue
         own = _owned(owners, w['id'])
-        end = own['end']
-        neighbour = next((o for o in windows if o is not w and o['id'] in fresh_starts
-                          and _same(fresh_starts[o['id']], w['end'])), None)
-        if end is not None and w['id'] in custom:
-            if neighbour is not None:
-                # shortcut: refuse instead of choosing between the custom end break and the
-                # neighbour's fresh start; revisit if the editor should let one replace the other.
-                raise ValueError(
-                    f"Segment '{_name(neighbour)}' starts a fresh baseline at {w['end']:g}, where "
-                    f"segment '{_name(w)}' has a custom baseline after it; reset that one first")
+        if own['end'] is not None or not (own['start'] is not None or own['partway']):
             continue
-        if not (own['start'] is not None or own['partway']) or neighbour is not None:
-            if end is not None:
-                drop.add(end)
+        if _break_at(breaks + add, w['end']):
             continue
-        resume = _resume(breaks, owners, w['start'])
-        if end is None:
-            add.append({'time': float(w['end']), 'tolerance': _DEFAULT_TOLERANCE,
-                        'overrides': resume, 'anchor': {'window_id': w['id'], 'edge': 'end'}})
-        elif _strip(breaks[end].get('overrides')) != resume:
-            breaks[end] = dict(breaks[end], overrides=resume)
-    original = out['baseline'].get('break_points')
-    _set_breaks(out, [bp for i, bp in enumerate(breaks) if i not in drop] + add, original)
+        add.append(_end_break(w['id'], w['end'], _resume(breaks, owners, w['start'])))
+    if add:
+        _set_breaks(out, breaks + add, out['baseline'].get('break_points'))
 
 
 def _finish(out):
@@ -228,10 +216,16 @@ def _finish(out):
 
 
 def apply_segment(params, record):
-    """New params with ``record`` written back; raises ValueError naming the time or segment."""
+    """New params with ``record`` written back; raises ValueError naming the time or segment.
+
+    The end break follows ``record['after']['mode']``: 'resume' writes the whole-run
+    value in force before the segment, 'custom' the given overrides, 'none' nothing.
+    'none' counts as 'resume' when the segment gains its first fresh start or partway
+    row; a record with neither keeps no end break. No end break is written where
+    another break already sits.
+    """
     out = copy.deepcopy(params)
     windows, breaks, owners = _parse(out)
-    custom = _custom_end_ids(windows, breaks, owners)
     rid = record['id']
     name = record.get('label') or rid
     start, end = float(record['start']), float(record['end'])
@@ -247,6 +241,7 @@ def apply_segment(params, record):
             raise ValueError(f"Baseline change at {t:g} is not inside segment '{name}' "
                              f"({start:g}-{end:g})")
 
+    old = next((w for w in windows if w['id'] == rid), None)
     window = {'id': rid, 'label': record.get('label', ''), 'start': start, 'end': end}
     window.update({s: _strip(record.get(s)) for s in SEGMENT_SECTIONS})
     window['events'] = copy.deepcopy(record.get('events') or [])
@@ -254,6 +249,7 @@ def apply_segment(params, record):
     out['peak_windows'].sort(key=lambda w: w['start'])
 
     own = _owned(owners, rid)
+    had_baseline = own['start'] is not None or bool(own['partway'])
     tolerance = {}  # a rewritten break keeps its tolerance (matched by role, partway by time)
     for role in ('start', 'end'):
         if own[role] is not None:
@@ -262,7 +258,13 @@ def apply_segment(params, record):
     original = out['baseline'].get('break_points')
     kept = [bp for bp, owner in zip(breaks, owners) if not (owner and owner[0] == rid)]
 
-    if record.get('fresh_baseline'):
+    fresh = bool(record.get('fresh_baseline'))
+    if fresh:
+        for bp in [bp for bp in kept if bp.get('anchor') and bp['anchor']['edge'] == 'end'
+                   and _same(bp['time'], start)]:
+            logger.info("End break at %g of segment '%s' dropped: segment '%s' starts a "
+                        "fresh baseline there", start, bp['anchor']['window_id'], name)
+            kept.remove(bp)
         effective = _strip(record.get('baseline'))
         kept.append({'time': start, 'tolerance': tolerance.get('start', _DEFAULT_TOLERANCE),
                      'overrides': copy.deepcopy(effective),
@@ -276,15 +278,26 @@ def apply_segment(params, record):
         kept.append({'time': t, 'tolerance': tol,
                      'overrides': merge_overrides(effective, _strip(row.get('overrides'))),
                      'anchor': None})
+
     after = record.get('after') or {'mode': 'none', 'overrides': {}}
-    custom.discard(rid)
-    if after['mode'] == 'custom':
-        kept.append({'time': end, 'tolerance': tolerance.get('end', _DEFAULT_TOLERANCE),
-                     'overrides': _strip(after.get('overrides')),
-                     'anchor': {'window_id': rid, 'edge': 'end'}})
-        custom.add(rid)
+    mode = after['mode']
+    if mode not in ('resume', 'custom', 'none'):
+        raise ValueError(f"Segment '{name}': unknown after-segment mode {mode!r}")
+    if not (fresh or record.get('partway')):
+        mode = 'none'
+    elif mode == 'none' and not had_baseline:
+        mode = 'resume'
+    if mode != 'none':
+        if _break_at(kept, end):
+            logger.info("Segment '%s' gets no end break: a baseline change already sits at %g",
+                        name, end)
+        else:
+            overrides = (_strip(after.get('overrides')) if mode == 'custom'
+                         else _resume(kept, _owners(out['peak_windows'], kept), start))
+            kept.append(_end_break(rid, end, overrides,
+                                   tolerance.get('end', _DEFAULT_TOLERANCE)))
     _set_breaks(out, kept, original)
-    _sync(out, custom)
+    _restore_neighbour_ends(out, [start] + ([old['start']] if old else []))
     return _finish(out)
 
 
@@ -292,24 +305,32 @@ def remove_segment(params, segment_id):
     """Drop the window, its anchored breaks and partway rows; an unanchored start break stays."""
     out = copy.deepcopy(params)
     windows, breaks, owners = _parse(out)
-    if not any(w['id'] == segment_id for w in windows):
+    gone = next((w for w in windows if w['id'] == segment_id), None)
+    if gone is None:
         raise ValueError(f"No segment with id '{segment_id}'")
-    custom = _custom_end_ids(windows, breaks, owners) - {segment_id}
     original = out['baseline'].get('break_points')
     kept = [bp for bp, owner in zip(breaks, owners)
             if not (owner and owner[0] == segment_id
                     and (owner[1] != 'start' or bp.get('anchor')))]
     out['peak_windows'] = [w for w in windows if w['id'] != segment_id]
     _set_breaks(out, kept, original)
-    _sync(out, custom)
+    _restore_neighbour_ends(out, [gone['start']])
     return _finish(out)
 
 
 def set_whole_run_breaks(params, breaks):
-    """Replace the breaks outside every segment, then regenerate the resume end breaks."""
+    """Replace the breaks outside every segment.
+
+    End breaks that were in 'resume' mode before the edit take the new resume value;
+    no end break is added or removed.
+    """
     out = copy.deepcopy(params)
     windows, stored, owners = _parse(out)
-    custom = _custom_end_ids(windows, stored, owners)
+    follows = set()  # ids of segments whose end break was 'resume'
+    for w in windows:
+        end = _owned(owners, w['id'])['end']
+        if end is not None and _strip(stored[end].get('overrides')) == _resume(stored, owners, w['start']):
+            follows.add(w['id'])
     new = []
     for bp in breaks:
         bp = copy.deepcopy(bp)
@@ -320,17 +341,15 @@ def set_whole_run_breaks(params, breaks):
         bp.setdefault('overrides', {})
         bp['anchor'] = None
         new.append(bp)
-    original = out['baseline'].get('break_points')
-    _set_breaks(out, [bp for bp, owner in zip(stored, owners) if owner is not None] + new, original)
-    _sync(out, custom)
-    return _finish(out)
-
-
-def sync_end_breaks(params):
-    """New params with every non-custom end break regenerated."""
-    out = copy.deepcopy(params)
-    windows, breaks, owners = _parse(out)
-    _sync(out, _custom_end_ids(windows, breaks, owners))
+    merged = [bp for bp, owner in zip(stored, owners) if owner is not None] + new
+    merged_owners = _owners(windows, merged)
+    for w in windows:
+        end = _owned(merged_owners, w['id'])['end']
+        if w['id'] in follows:
+            resume = _resume(merged, merged_owners, w['start'])
+            if _strip(merged[end].get('overrides')) != resume:
+                merged[end] = dict(merged[end], overrides=resume)
+    _set_breaks(out, merged, out['baseline'].get('break_points'))
     return _finish(out)
 
 
