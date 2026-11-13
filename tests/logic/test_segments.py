@@ -377,3 +377,73 @@ def test_set_whole_run_breaks_updates_only_resume_end_breaks():
     assert anchored(out, 'B', 'end') == custom
     assert anchored(out, 'C', 'end') == []
     assert len(bps(out)) == len(bps(p))
+
+
+# ── fix round 1: neighbour rule only where the edited segment's start break sat; R10 ──
+
+def _touching_a_fresh_b_plain():
+    return params_of(
+        [{'id': 'A', 'start': 1.0, 'end': 2.0}, {'id': 'B', 'start': 2.0, 'end': 3.0}],
+        [{'time': 1.0, 'anchor': {'window_id': 'A', 'edge': 'start'}, 'overrides': {'lambda': 1e3}}])
+
+
+def test_neighbour_end_not_added_when_edited_segment_had_no_start_break():
+    p = _touching_a_fresh_b_plain()
+    before = copy.deepcopy(bps(p))
+    assert bps(S.apply_segment(p, seg(p, 'B'))) == before
+    assert bps(S.remove_segment(p, 'B')) == before
+
+
+FOREIGN_LAYOUTS = {
+    'unanchored_start': (
+        [{'id': 'w1', 'start': 2.0, 'end': 3.0}],
+        [{'time': 2.0, 'overrides': {'lambda': 1e3}}]),
+    'custom_end_with_fresh_start': (
+        [{'id': 'w1', 'start': 2.0, 'end': 3.0}],
+        [{'time': 2.0, 'anchor': {'window_id': 'w1', 'edge': 'start'}, 'overrides': {'lambda': 1e3}},
+         {'time': 3.0, 'anchor': {'window_id': 'w1', 'edge': 'end'}, 'overrides': {'lambda': 1e7}}]),
+    'start_without_end': (
+        [{'id': 'w1', 'start': 2.0, 'end': 3.0}],
+        [{'time': 2.0, 'anchor': {'window_id': 'w1', 'edge': 'start'}, 'overrides': {'lambda': 1e3}}]),
+    'touching_fresh_a_plain_b': (
+        [{'id': 'A', 'start': 1.0, 'end': 2.0}, {'id': 'B', 'start': 2.0, 'end': 3.0}],
+        [{'time': 1.0, 'anchor': {'window_id': 'A', 'edge': 'start'}, 'overrides': {'lambda': 1e3}}]),
+}
+
+
+@pytest.mark.parametrize('layout', sorted(FOREIGN_LAYOUTS))
+def test_save_foreign_layout_roundtrip_identity(layout):
+    windows, breaks = FOREIGN_LAYOUTS[layout]
+    p = params_of(windows, breaks)
+    n_in = norm(p)
+    for rec in S.segments_view(p)['segments']:
+        n_out = norm(S.apply_segment(p, rec))
+        assert n_out['peak_windows'] == n_in['peak_windows']
+        got, want = n_out['baseline']['break_points'], n_in['baseline']['break_points']
+        assert len(got) == len(want)
+        for g, w in zip(got, want):
+            assert {k: g[k] for k in ('time', 'tolerance', 'overrides')} == \
+                {k: w[k] for k in ('time', 'tolerance', 'overrides')}
+            # the only allowed change: saving a segment anchors its own unanchored start break
+            if g['anchor'] != w['anchor']:
+                assert w['anchor'] is None
+                assert g['anchor'] == {'window_id': rec['id'], 'edge': 'start'}
+                assert g['time'] == rec['start']
+
+
+def test_custom_end_kept_on_segment_with_no_baseline():
+    p = params_of(
+        [{'id': 'w1', 'start': 2.0, 'end': 3.0}],
+        [{'time': 1.0, 'overrides': {'lambda': 1e5}},
+         {'time': 3.0, 'anchor': {'window_id': 'w1', 'edge': 'end'}, 'overrides': {'lambda': 1e7}}])
+    end_before = copy.deepcopy(anchored(p, 'w1', 'end'))
+    rec = seg(p, 'w1')
+    assert rec['fresh_baseline'] is False and rec['partway'] == []
+    assert rec['after']['mode'] == 'custom'
+    rec['peaks'] = {'min_prominence': 0.3}
+    out = S.apply_segment(p, rec)
+    assert anchored(out, 'w1', 'end') == end_before
+    # an explicit reset still removes it
+    rec = seg(out, 'w1')
+    rec['after'] = {'mode': 'resume', 'overrides': {}}
+    assert anchored(S.apply_segment(out, rec), 'w1', 'end') == []

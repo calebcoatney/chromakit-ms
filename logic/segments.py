@@ -167,7 +167,8 @@ def new_segment(params, start, end):
 
 # ── writing ────────────────────────────────────────────────────────────────────
 # Edits never rewrite a segment the user didn't edit (design §4.1): only the edited
-# segment's own breaks change, plus the end break of the segment ending where it starts.
+# segment's own breaks change, plus the end break of a segment ending where the edited
+# segment's own start break sat before the edit.
 
 def _set_breaks(out, breaks, original):
     """Store breaks sorted by time; an empty result keeps the input's None."""
@@ -221,8 +222,10 @@ def apply_segment(params, record):
     The end break follows ``record['after']['mode']``: 'resume' writes the whole-run
     value in force before the segment, 'custom' the given overrides, 'none' nothing.
     'none' counts as 'resume' when the segment gains its first fresh start or partway
-    row; a record with neither keeps no end break. No end break is written where
-    another break already sits.
+    row. A record with neither keeps only a custom end break (reset by setting the
+    mode to 'resume' or 'none'). No end break is written where another break already
+    sits. The segment ending at this one's old start regains a resume end break only
+    if this segment's start break sat there and no break sits there now.
     """
     out = copy.deepcopy(params)
     windows, breaks, owners = _parse(out)
@@ -255,6 +258,7 @@ def apply_segment(params, record):
         if own[role] is not None:
             tolerance[role] = breaks[own[role]].get('tolerance', _DEFAULT_TOLERANCE)
     old_partway = [breaks[i] for i in own['partway']]
+    old_end = breaks[own['end']] if own['end'] is not None else None
     original = out['baseline'].get('break_points')
     kept = [bp for bp, owner in zip(breaks, owners) if not (owner and owner[0] == rid)]
 
@@ -284,7 +288,8 @@ def apply_segment(params, record):
     if mode not in ('resume', 'custom', 'none'):
         raise ValueError(f"Segment '{name}': unknown after-segment mode {mode!r}")
     if not (fresh or record.get('partway')):
-        mode = 'none'
+        if mode != 'custom':  # a custom end break stays until the user resets it (R10)
+            mode = 'none'
     elif mode == 'none' and not had_baseline:
         mode = 'resume'
     if mode != 'none':
@@ -294,10 +299,15 @@ def apply_segment(params, record):
         else:
             overrides = (_strip(after.get('overrides')) if mode == 'custom'
                          else _resume(kept, _owners(out['peak_windows'], kept), start))
-            kept.append(_end_break(rid, end, overrides,
-                                   tolerance.get('end', _DEFAULT_TOLERANCE)))
+            if (old_end is not None and _same(old_end['time'], end)
+                    and _strip(old_end.get('overrides')) == overrides):
+                kept.append(old_end)  # unchanged: keep the stored dict as it is
+            else:
+                kept.append(_end_break(rid, end, overrides,
+                                       tolerance.get('end', _DEFAULT_TOLERANCE)))
     _set_breaks(out, kept, original)
-    _restore_neighbour_ends(out, [start] + ([old['start']] if old else []))
+    if old is not None and own['start'] is not None:  # only where its own start break sat
+        _restore_neighbour_ends(out, [old['start']])
     return _finish(out)
 
 
@@ -314,7 +324,9 @@ def remove_segment(params, segment_id):
                     and (owner[1] != 'start' or bp.get('anchor')))]
     out['peak_windows'] = [w for w in windows if w['id'] != segment_id]
     _set_breaks(out, kept, original)
-    _restore_neighbour_ends(out, [gone['start']])
+    start = _owned(owners, segment_id)['start']
+    if start is not None and breaks[start].get('anchor'):  # only a start break actually removed
+        _restore_neighbour_ends(out, [gone['start']])
     return _finish(out)
 
 
