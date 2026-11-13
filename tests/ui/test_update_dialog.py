@@ -82,3 +82,25 @@ def test_copy_button_says_copied_after_copying(qtbot):
     assert copy.text() == "Copied"
     assert copy.accessibleName() in ("", "Copied")       # nothing pins a stale name
     assert QApplication.clipboard().text() == pip_upgrade_command("/opt/py/python")
+
+
+def test_editable_dialog_also_shows_the_reinstall(qtbot):
+    # an editable install from before 0.2.0 can't import chromakit_version after a pull alone
+    from logic.update_check import editable_reinstall_command
+    dlg = UpdateDialog("9.9.9", URL, "editable", "/src/chromakit-qt", executable="/opt/py/python")
+    qtbot.addWidget(dlg)
+    fields = dlg.findChildren(QLineEdit)
+    assert [f.text() for f in fields] == [git_pull_command("/src/chromakit-qt"),
+                                          editable_reinstall_command("/opt/py/python", "/src/chromakit-qt")]
+    assert fields[1].text() == '"/opt/py/python" -m pip install -e "/src/chromakit-qt"'
+    assert "in order" in dlg.body_text()
+    copies = [b for b in dlg.findChildren(QPushButton) if b.text() == "Copy"]
+    copies[1].click()
+    assert QApplication.clipboard().text() == fields[1].text()
+    assert copies[1].text() == "Copied" and copies[0].text() == "Copy"
+
+
+def test_editable_dialog_on_windows_hints_powershell(qtbot):
+    dlg = UpdateDialog("9.9.9", URL, "editable", "C:\\src", platform="win32", executable="C:\\py\\python.exe")
+    qtbot.addWidget(dlg)
+    assert any("PowerShell" in l.text() for l in dlg.findChildren(QLabel))

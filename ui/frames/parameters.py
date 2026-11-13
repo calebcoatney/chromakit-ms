@@ -81,10 +81,14 @@ class _TitleHelpIcon(QLabel):
         rect = group.style().subControlRect(
             QStyle.CC_GroupBox, opt, QStyle.SC_GroupBoxLabel, group
         )
+        fm = group.fontMetrics()
         if not rect.isValid():
-            fm = group.fontMetrics()
             rect = QRect(8, 0, fm.horizontalAdvance(group.title()), fm.height())
-        self.move(rect.right() - 1, rect.center().y() - self.height() // 2)
+        # Under the app stylesheet on macOS the style's label rect is narrower than the title as
+        # drawn (77 px for "Peak Grouping", drawn 87 px), so the icon covered its last letters.
+        # Place it after whichever is wider, plus a few px because that style also indents the text.
+        right = max(rect.right(), rect.left() + fm.horizontalAdvance(group.title()))
+        self.move(right + 3, rect.center().y() - self.height() // 2)
 
     def eventFilter(self, obj, event):
         if obj is self._group and event.type() in (
