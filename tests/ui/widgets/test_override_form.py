@@ -194,7 +194,7 @@ def test_has_errors_group(qtbot):
     assert not g.has_errors()
 
 
-def test_group_header_collapse_and_reload(qtbot):
+def test_group_header_collapse(qtbot):
     g = OverrideGroup('Peaks', 'peaks', {}, {})
     qtbot.addWidget(g)
     g.show()
@@ -202,8 +202,4 @@ def test_group_header_collapse_and_reload(qtbot):
     assert not g._body.isVisible() and g._body.isEnabled()
     g.toggle_button.click()
     assert g._body.isVisible() and g.toggle_button.text().startswith('\u25be Peaks')
-    g.set_values({'min_width': 2.0})
-    assert g.values() == {'min_width': 2.0} and g.count_label.text() == '1 change'
-    g.set_values({})
-    assert g.values() == {} and not g._body.isVisible()
     assert not g.isCheckable()

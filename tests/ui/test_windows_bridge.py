@@ -96,6 +96,8 @@ def test_delete_segment_drops_its_anchored_breaks(qtbot):
 def test_overrides_note_shown_only_with_overrides(qtbot):
     f = _frame(qtbot, [W1])
     assert any(n.isVisibleTo(f) for n in f._overrides_notes if not n.isHidden())
+    assert all(n.text() == 'Segment settings are edited in the Segments table above.'
+               for n in f._overrides_notes)
     plain = _frame(qtbot, [W2])
     assert all(n.isHidden() for n in plain._overrides_notes if n.parent() is not None
                and plain.isAncestorOf(n))

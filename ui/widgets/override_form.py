@@ -311,18 +311,6 @@ class OverrideGroup(QGroupBox):
                 raise KeyError(f"{self.section} has no override field {key!r}")
             self.fields[key].set_value(v)
 
-    def set_values(self, values: dict) -> None:
-        """Replace all overrides (reload); re-evaluates the collapsed state."""
-        for f in self.fields.values():
-            f.blockSignals(True)
-        for f in self.fields.values():
-            f.set_value(None)
-        self._load(values)
-        for f in self.fields.values():
-            f.blockSignals(False)
-        self._update_count()
-        self.set_expanded(bool(self.values()))
-
     def body_layout(self) -> QFormLayout:
         """The collapsible body's form, for callers that add rows of their own."""
         return self._body.layout()

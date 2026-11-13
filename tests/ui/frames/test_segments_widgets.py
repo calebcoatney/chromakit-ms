@@ -528,3 +528,11 @@ def test_combo_fields_name_the_inherited_value_in_their_first_item(qtbot, spec):
     assert method.combo.itemText(0).startswith('same as whole run (')
     row_method = ed.partway.rows[0].fields['method']
     assert row_method.tag_label is None and row_method.combo.itemText(0).startswith('same as segment (')
+
+
+def test_min_prominence_field_explains_fractions(qtbot, spec):
+    """R23 / design §4.2."""
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    assert ed.groups['peaks'].fields['min_prominence'].toolTip() == (
+        "A value of 1 or less is a fraction of this segment's own signal range, not the whole run's.")

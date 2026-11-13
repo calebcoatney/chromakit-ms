@@ -23,6 +23,8 @@ WHOLE_RUN = 'Whole run (defaults)'
 HINT = 'Grey = same as the whole run. Type a value to change it for this segment; ↺ puts it back.'
 DECONV_NOTE = 'deconvolution mode: segments filter only'
 SAVE_BLOCKED = 'Fix the fields marked in red before saving'
+FRACTION_TIP = ("A value of 1 or less is a fraction of this segment's own signal range, "
+                "not the whole run's.")  # design §4.2 (R23)
 PARTWAY_TAG = 'same as segment'
 GROUPS = (('baseline', 'Baseline'), ('peaks', 'Peak detection'), ('smoothing', 'Smoothing'),
           ('shoulders', 'Shoulders'), ('rider', 'Tail skim'), ('negative_peaks', 'Negative peaks'))
@@ -418,6 +420,7 @@ class SegmentEditor(QFrame):
             self.groups[section] = group
             layout.addWidget(group)
         self._build_baseline_extras(record)
+        self.groups['peaks'].fields['min_prominence'].setToolTip(FRACTION_TIP)
         for section in DETECTION_GROUPS:
             self.groups[section].setEnabled(not deconvolution)
         footer = QHBoxLayout()

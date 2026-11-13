@@ -14,8 +14,8 @@ import numpy as np
 
 from logic.method import GCxGCParams, RiderParams
 from logic.segments import (
-    apply_segment, new_segment, remove_segment, resume_overrides, segments_view,
-    set_whole_run_breaks, validate_record, warnings_by_segment,
+    apply_segment, new_segment, range_filter_mirror, remove_segment, resume_overrides,
+    segments_view, set_whole_run_breaks, validate_record, warnings_by_segment,
 )
 from logic.windows import _EDGE_TOL
 from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
@@ -36,7 +36,7 @@ def _fix_table_height(table, rows=3):
 
 logger = logging.getLogger(__name__)
 
-OVERRIDES_NOTE = "λ etc. set per section in the method file"
+OVERRIDES_NOTE = "Segment settings are edited in the Segments table above."
 # Whole-run sections a segment's fields inherit from
 _INHERITED_SECTIONS = ('smoothing', 'peaks', 'shoulders', 'negative_peaks', 'rider', 'baseline')
 # peaks.mode values that run deconvolution: the GUI combo writes 'peak_splitting', the
@@ -1113,14 +1113,17 @@ class ParametersFrame(QWidget):
             params = self._apply_draft(record)
         except ValueError as exc:
             editor.show_error(str(exc))
-        else:
-            editor.show_error(None)
-            self.current_params = params
-            self._segment_previewed = True
-            self._after_segment_change()
-            self.parameters_changed.emit(self.current_params)
-        self._show_segment_warnings()  # the draft span may now hold other warnings
+            self._show_segment_warnings()  # the draft span may now hold other warnings
+            self._emit_segment_state(record)
+            return
+        editor.show_error(None)
+        self.current_params = params
+        self._segment_previewed = True
+        self._after_segment_change()
+        self._show_segment_warnings()
+        # the draft first: the reprocess that parameters_changed starts then draws it (one correct pass)
         self._emit_segment_state(record)
+        self.parameters_changed.emit(self.current_params)
 
     def _apply_draft(self, record):
         """The snapshot with ``record`` written back; ValueError (shown in the editor) when a
@@ -1257,10 +1260,7 @@ class ParametersFrame(QWidget):
 
     def _sync_range_filter_mirror(self):
         """peaks.range_filters mirrors the window spans under 'ignore' and is empty under 'global'."""
-        windows = self.current_params['peak_windows']
-        self.current_params['peaks']['range_filters'] = (
-            [[w['start'], w['end']] for w in windows]
-            if self.current_params.get('outside_windows', 'ignore') == 'ignore' else [])
+        self.current_params['peaks']['range_filters'] = range_filter_mirror(self.current_params)
 
     def _init_peak_grouping_controls(self):
         """Initialize peak grouping table UI."""
@@ -2288,7 +2288,6 @@ class ParametersFrame(QWidget):
         clearing the layout and re-running them is sufficient to restore
         the full widget state.
         """
-        self.cancel_open_segment()
         # Remove all existing widgets from params_layout. Hide each one now: deleteLater() only runs
         # once control returns to an event loop, and until then a removed group stays a visible
         # child of params_widget at its old place (in GCxGC mode the 1D groups showed through).

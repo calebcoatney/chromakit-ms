@@ -551,3 +551,10 @@ def test_owned_breaks_still_apply():
     q = params_of([{'id': 'w1', 'start': 2.0, 'end': 3.0}], [{'time': 2.0, 'overrides': {'lambda': 1e3}}])
     out = S.apply_segment(q, dict(seg(q, 'w1'), end=3.4))
     assert seg(out, 'w1')['fresh_baseline'] and seg(out, 'w1')['baseline'] == {'lambda': 1e3}
+
+
+def test_range_filter_mirror_helper():
+    p = params_of([{'id': 'w1', 'start': 1.0, 'end': 2.0}, {'id': 'w2', 'start': 3.0, 'end': 4.0}])
+    assert S.range_filter_mirror(p) == [[1.0, 2.0], [3.0, 4.0]]
+    assert S.range_filter_mirror(dict(p, outside_windows='global')) == []
+    assert S.range_filter_mirror(dict(p, peak_windows=[])) == []

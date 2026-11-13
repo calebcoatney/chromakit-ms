@@ -262,13 +262,18 @@ def _restore_neighbour_ends(out, times):
         _set_breaks(out, breaks + add, out['baseline'].get('break_points'))
 
 
+def range_filter_mirror(params):
+    """``peaks.range_filters`` for params: the window spans under 'ignore', [] under 'global'."""
+    if params.get('outside_windows', 'ignore') != 'ignore':
+        return []
+    return [[w['start'], w['end']] for w in params.get('peak_windows') or []]
+
+
 def _finish(out):
     """Validate the written params and refresh the range-filter mirror."""
     _parse(out)
     out['peak_windows'].sort(key=lambda w: w['start'])
-    out['peaks']['range_filters'] = (
-        [[w['start'], w['end']] for w in out['peak_windows']]
-        if out.get('outside_windows', 'ignore') == 'ignore' else [])
+    out['peaks']['range_filters'] = range_filter_mirror(out)
     return out
 
 

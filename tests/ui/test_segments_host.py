@@ -616,3 +616,21 @@ def test_cancel_without_edits_leaves_method_clean(qtbot):
     pf.open_segment(None, (2.0, 3.0))
     pf.cancel_open_segment()
     assert app._method_dirty is False
+
+
+# ── final fix wave #13: the reprocess after a preview draws the new draft ───────
+
+def test_preview_overlay_never_draws_a_stale_draft(qtbot, monkeypatch):
+    import numpy as np
+    app = _app(qtbot)
+    x = np.linspace(0.0, 10.0, 2000)
+    app.current_x, app.current_y = x, 5.0 + 100.0 * np.exp(-0.5 * ((x - 5.0) / 0.05) ** 2)
+    app.process_and_display(app.current_x, app.current_y)
+    pf = app.parameters_frame
+    pf.open_segment(None, (2.0, 3.0))
+    drawn = []
+    real = app.plot_frame.set_segment_overlay
+    monkeypatch.setattr(app.plot_frame, 'set_segment_overlay',
+                        lambda w, b, seg: (drawn.append(seg), real(w, b, seg)))
+    pf.segment_set_edge('end', 4.0)
+    assert drawn and all(seg is not None and seg['end'] == 4.0 for seg in drawn)
