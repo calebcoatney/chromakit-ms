@@ -15,7 +15,20 @@ kept (they are stored outside the app folder).
 **Problems:** the log is at `%LOCALAPPDATA%\ChromaKit\logs\chromakit.log`. Running
 `ChromaKit.exe --self-test "%TEMP%\ck"` writes a check to `%TEMP%\ck\self-test.txt`.
 
-**Changes in 0.2.4:**
+**Changes in 0.2.5:**
+- **Segments replace Peak Range Filters.** A **Segments** table now sits at the top of Parameters; its
+  first row, "Whole run (defaults)", holds the usual settings. Hold Shift and drag across the plot to make
+  a segment. Its editor opens beside it with Baseline, Peak detection, Smoothing, Shoulders, Tail skim and
+  Negative peaks. A grey value means "same as whole run"; type a value to change it for that segment only.
+  Right-click inside an open segment for **Change the baseline here**. Press **Save**, or **Cancel** (Esc)
+  to undo. Methods without segments work as before, and the method file format is unchanged.
+- **Smoothing now runs every time it is on.** Before, it was silently skipped on some runs: after opening
+  a file of a different length, on every reprocess of a method with Signal Break Points, and in peak
+  detection on GC-MS files. Results could also depend on which file was processed before. On those runs,
+  expect small changes in peak areas and bounds: most peaks move well under 1%, but area can shift a few
+  percent between closely spaced neighbours. If smoothing ever fails now, it is written to the log.
+
+**Changes in 0.2.4** (if you are updating from 0.2.3 or earlier):
 - The ⓘ help icons beside section titles no longer cover the end of the title on macOS.
 - Changing a setting before opening a file no longer prints errors to the terminal.
 - For copies run from a source folder, **Update available** now also shows the reinstall command to run
