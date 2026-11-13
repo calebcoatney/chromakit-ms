@@ -735,8 +735,8 @@ class PlotFrame(QWidget):
             return
         # Inside the open segment, right-click offers a baseline change (on a peak: in its menu).
         # Not while pan/zoom is active: a modal menu would swallow the toolbar's right-drag.
-        change_x = (event.xdata if not self.toolbar.mode and self._in_open_segment(event.xdata)
-                    else None)
+        change_x = (round(event.xdata, SEGMENT_TIME_DECIMALS)
+                    if not self.toolbar.mode and self._in_open_segment(event.xdata) else None)
 
         # Only handle right-clicks on the chromatogram axis specifically
         if hasattr(self, 'integrated_peaks') and self.integrated_peaks:

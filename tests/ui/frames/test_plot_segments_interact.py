@@ -505,3 +505,19 @@ def test_escape_during_edge_drag_restores_the_edge(qtbot):
     assert escapes == [()]
     _mouse(plot, 'button_release_event', 7.0)
     assert moved == []
+
+
+# ── final fix wave #6: the right-click baseline change time is rounded too ──────
+
+@pytest.mark.parametrize('on_peak', [False, True])
+def test_right_click_change_time_is_rounded(qtbot, menus, on_peak):
+    plot = _plot(qtbot)
+    if on_peak:
+        plot.integrated_peaks = [_peak(4.5)]
+    plot.set_segment_overlay([], [], OPEN_W1)
+    changes = _record(plot.baseline_change_requested)
+    menus(CHANGE_TEXT)
+    x = 4.5123456 if on_peak else 5.2345678
+    event = _mouse(plot, 'button_press_event', x, button=3)
+    (t,), = changes
+    assert t == round(event.xdata, 4) and t != event.xdata
