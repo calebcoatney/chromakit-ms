@@ -538,3 +538,46 @@ def test_params_writeback_failure_is_loud(qtbot, caplog):
     assert app.current_method.model_dump() == before
     assert 'sensitivity' in caplog.text
     assert 'not' in app.status_bar.currentMessage().lower()
+
+
+# ── final fix wave #2 (R22): no batch or automation while a segment is open ─────
+
+OPEN_FIRST = 'Save or cancel the open segment first'
+
+
+def _app_with_open_draft(qtbot, tmp_path):
+    app = _app(qtbot)
+    app.data_handler.current_directory_path = str(tmp_path / 'run.D')
+    pf = app.parameters_frame
+    pf.open_segment(None, (2.0, 3.0))
+    pf.segment_set_edge('end', 4.0)      # previewed: the draft is in current_method
+    return app
+
+
+def test_batch_refused_while_segment_open(qtbot, tmp_path, monkeypatch):
+    app = _app_with_open_draft(qtbot, tmp_path)
+    monkeypatch.setattr(app, 'process_next_batch_directory',
+                        lambda: pytest.fail('batch started with a segment open'))
+    app.start_batch_processing([str(tmp_path / 'a.D')], {'detector_runs': [{'detector': 'FID'}]})
+    assert app.status_bar.currentMessage() == OPEN_FIRST
+    assert getattr(app, '_batch_saved_method_state', None) is None
+    assert getattr(app, 'batch_dialog', None) is None
+    assert app.parameters_frame.segment_editor is not None
+
+
+def test_batch_dialog_refused_while_segment_open(qtbot, tmp_path, monkeypatch):
+    app = _app_with_open_draft(qtbot, tmp_path)
+    monkeypatch.setattr('ui.dialogs.batch_job_dialog.BatchJobDialog',
+                        lambda *a, **k: pytest.fail('batch dialog shown with a segment open'))
+    app.show_batch_queue_dialog()
+    assert app.status_bar.currentMessage() == OPEN_FIRST
+
+
+@pytest.mark.parametrize('entry', ['start_automation', 'on_automation_clicked'])
+def test_automation_refused_while_segment_open(qtbot, tmp_path, monkeypatch, entry):
+    app = _app_with_open_draft(qtbot, tmp_path)
+    monkeypatch.setattr('ui.app.AutomationWorker',
+                        lambda *a, **k: pytest.fail('automation started with a segment open'))
+    getattr(app, entry)()
+    assert app.status_bar.currentMessage() == OPEN_FIRST
+    assert app.parameters_frame.segment_editor is not None

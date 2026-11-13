@@ -2872,6 +2872,14 @@ class ChromaKitApp(QMainWindow):
                                 "Process GCxGC runs one at a time.")
         return True
 
+    def _refuse_run_with_open_segment(self) -> bool:
+        """R22: a batch or automation run reads (and a per-detector batch restores) the method,
+        so an open segment's unsaved draft would run and could be persisted; True when refused."""
+        if not self.parameters_frame.has_open_segment():
+            return False
+        self.status_bar.showMessage("Save or cancel the open segment first")
+        return True
+
     def on_automation_clicked(self):
         """Handle automation button click."""
         if self._refuse_batch_in_gcxgc_mode():
@@ -2881,6 +2889,8 @@ class ChromaKitApp(QMainWindow):
 
     def start_automation(self):
         """Start the automation process."""
+        if self._refuse_run_with_open_segment():
+            return
         # Check for current directory
         if not hasattr(self.data_handler, 'current_directory_path') or not self.data_handler.current_directory_path:
             self.status_bar.showMessage("No directory selected")
@@ -4525,7 +4535,7 @@ class ChromaKitApp(QMainWindow):
     
     def show_batch_queue_dialog(self):
         """Show the batch job setup dialog before the progress dialog."""
-        if self._refuse_batch_in_gcxgc_mode():
+        if self._refuse_batch_in_gcxgc_mode() or self._refuse_run_with_open_segment():
             return
         from ui.dialogs.batch_job_dialog import BatchJobDialog
         
@@ -4538,6 +4548,8 @@ class ChromaKitApp(QMainWindow):
     
     def start_batch_processing(self, directories, options):
         """Start batch processing with the selected directories and options."""
+        if self._refuse_run_with_open_segment():
+            return
         if not directories:
             self.status_bar.showMessage("No directories to process")
             return
