@@ -161,7 +161,11 @@ def test_tags_and_changed_label(qtbot):
     assert w.tag_label.isVisible() and w.value() is None
     c = _field(qtbot, FieldSpec('enabled', 'Enable', 'bool'), 'same as segment')
     c.show()
-    assert c.tag_label.text() == 'same as segment' and c.tag_label.isVisible()
+    assert c.tag_label is None   # a combo's first item carries the tag (fits a narrow pane)
+    c.set_inherited(True)
+    assert c.combo.itemText(0) == 'same as segment (on)'
+    c.set_value(False)
+    assert c.reset_button.isVisible()
 
 
 def test_combo_inherit_item_grey_italic(qtbot):

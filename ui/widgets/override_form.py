@@ -18,9 +18,10 @@ INHERIT_TAG = 'same as whole run'
 OVERRIDE_TAG = 'changed ↺'
 _ERROR_STYLE = 'border: 1px solid #c0392b;'
 _GREY = QColor('#888888')
-_TAG_STYLE = 'color: #888888; font-style: italic;'
+_TAG_STYLE = 'color: #888888; font-style: italic; font-size: 10px;'
 _CHANGED_STYLE = 'QToolButton { color: #1f6feb; border: none; }'
 _OPEN, _CLOSED = '▾', '▸'
+_EDIT_MAX_WIDTH = 100  # a number field; wider would push the segment editor past a narrow pane
 
 
 @dataclass(frozen=True)
@@ -111,11 +112,15 @@ class OverrideField(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         if spec.kind in ('float', 'int'):
             self.edit = QLineEdit()
+            self.edit.setMaximumWidth(_EDIT_MAX_WIDTH)
             self.edit.editingFinished.connect(self._on_edit_finished)
             self._style_placeholder()
             layout.addWidget(self.edit, 1)
         elif spec.kind in ('bool', 'choice'):
             self.combo = QComboBox()
+            # long items (the inherited one names its value) elide instead of widening the pane
+            self.combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            self.combo.setMinimumContentsLength(12)
             self.combo.addItem(self._tag, None)
             self.combo.setItemData(0, QBrush(_GREY), Qt.ForegroundRole)
             grey_italic = QFont(self.combo.font())
@@ -132,9 +137,11 @@ class OverrideField(QWidget):
         else:
             raise ValueError(f"unknown field kind {spec.kind!r}")
 
-        self.tag_label = QLabel(self._tag)  # shown while inheriting
-        self.tag_label.setStyleSheet(_TAG_STYLE)
-        layout.addWidget(self.tag_label)
+        self.tag_label = None  # shown while inheriting; a combo's first item says it instead
+        if self.edit is not None:
+            self.tag_label = QLabel(self._tag)
+            self.tag_label.setStyleSheet(_TAG_STYLE)
+            layout.addWidget(self.tag_label)
 
         self.reset_button = QToolButton()  # shown while overridden; click reverts
         self.reset_button.setText(OVERRIDE_TAG)
@@ -197,7 +204,8 @@ class OverrideField(QWidget):
         """Store value and refresh the reset button; emit only on a real change."""
         overridden = value is not None or bool(self.edit and self.edit.text())
         self.reset_button.setHidden(not overridden)
-        self.tag_label.setHidden(overridden)
+        if self.tag_label is not None:
+            self.tag_label.setHidden(overridden)
         if value != self._value:
             self._value = value
             self.changed.emit()
@@ -283,7 +291,9 @@ class OverrideGroup(QGroupBox):
         for spec in SECTION_FIELDS[section]:
             f = OverrideField(spec)
             self.fields[spec.key] = f
-            form.addRow(QLabel(spec.label), f)
+            label = QLabel(spec.label)
+            label.setWordWrap(True)  # the editor must fit a narrow side pane
+            form.addRow(label, f)
         outer = QVBoxLayout(self)
         outer.addLayout(header)
         outer.addWidget(self._body)

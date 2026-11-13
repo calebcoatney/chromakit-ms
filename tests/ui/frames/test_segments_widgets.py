@@ -190,7 +190,8 @@ def test_editor_partway_rows(qtbot, spec):
     row = ed.partway.rows[0]
     assert set(row.fields) == {'enabled', 'method', 'lambda', 'baseline_offset'}
     assert row.fields['lambda'].value() == 1e4
-    assert row.fields['method'].tag_label.text() == 'same as segment'
+    assert row.fields['lambda'].tag_label.text() == 'same as segment'
+    assert row.fields['method'].combo.itemText(0).startswith('same as segment')
     # inherited = the segment's effective baseline: own values over the whole-run baseline
     assert row.fields['lambda'].edit.placeholderText() == '1000'
     assert row.fields['baseline_offset'].edit.placeholderText() == f"{p['baseline']['baseline_offset']:g}"
@@ -491,3 +492,39 @@ def test_editor_set_resume_updates_partway_inheritance(qtbot):
     assert row.fields['lambda']._inherited == 1e5
     with qtbot.assertNotEmitted(ed.preview_changed):
         ed.set_resume({'lambda': 1e5})  # unchanged: nothing to do
+
+
+# ── final fix wave #5: the editor fits a 440 px pane ────────────────────────────
+
+PANE_WIDTH = 440
+
+
+def test_editor_fits_narrow_pane_with_baseline_and_partway_open(qtbot, spec):
+    from PySide6.QtWidgets import QComboBox, QVBoxLayout, QWidget
+    p, rec = spec
+    pane = QWidget()
+    qtbot.addWidget(pane)
+    pane.setFixedWidth(PANE_WIDTH)
+    ed = make_editor(qtbot, p, rec)
+    QVBoxLayout(pane).addWidget(ed)
+    ed.add_partway(13.0)
+    for g in ed.groups.values():
+        g.set_expanded(True)
+    pane.show()
+    assert ed.minimumSizeHint().width() <= PANE_WIDTH
+    assert ed.sizeHint().width() <= PANE_WIDTH
+    assert not ed.save_button.visibleRegion().isEmpty()
+    assert not ed.cancel_button.visibleRegion().isEmpty()
+    for combo in ed.findChildren(QComboBox):
+        assert combo.sizeAdjustPolicy() == QComboBox.AdjustToMinimumContentsLengthWithIcon
+        assert combo.minimumContentsLength() == 12
+
+
+def test_combo_fields_name_the_inherited_value_in_their_first_item(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    method = ed.groups['baseline'].fields['method']
+    assert method.tag_label is None
+    assert method.combo.itemText(0).startswith('same as whole run (')
+    row_method = ed.partway.rows[0].fields['method']
+    assert row_method.tag_label is None and row_method.combo.itemText(0).startswith('same as segment (')

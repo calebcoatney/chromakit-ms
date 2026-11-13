@@ -243,6 +243,7 @@ class _PartwayRow(QFrame):
         shown, self._carried = _split(overrides, PARTWAY_KEYS)
         form = QFormLayout(self)
         form.setContentsMargins(0, 4, 0, 4)
+        form.setRowWrapPolicy(QFormLayout.WrapAllRows)  # label above field: fits the pane
         self.time_edit = _TimeEdit(time)
         self.time_edit.committed.connect(self.changed.emit)
         self.delete_button = QToolButton()
@@ -258,7 +259,9 @@ class _PartwayRow(QFrame):
         for key in PARTWAY_KEYS:
             f = OverrideField(specs[key], PARTWAY_TAG)
             self.fields[key] = f
-            form.addRow(QLabel(specs[key].label), f)
+            label = QLabel(specs[key].label)
+            label.setWordWrap(True)
+            form.addRow(label, f)
         self.set_inherited(inherited)
         for key, val in shown.items():
             self.fields[key].set_value(val)
@@ -289,6 +292,7 @@ class _PartwayTable(QFrame):
         self.rows = []
         layout = QVBoxLayout(self)
         title = QLabel('Change the baseline partway through this segment')
+        title.setWordWrap(True)
         title.setStyleSheet('color: #8a5a00; font-weight: bold;')
         layout.addWidget(title)
         self._rows_layout = QVBoxLayout()
@@ -297,10 +301,10 @@ class _PartwayTable(QFrame):
         self.add_button = QPushButton('+ Change at…')
         self.add_button.clicked.connect(self.add_clicked.emit)
         hint = QLabel('or right-click the plot inside the segment')
+        hint.setWordWrap(True)
         hint.setStyleSheet(_GREY_STYLE)
         buttons.addWidget(self.add_button)
-        buttons.addWidget(hint)
-        buttons.addStretch(1)
+        buttons.addWidget(hint, 1)
         layout.addLayout(buttons)
 
     def add_row(self, time, overrides, inherited) -> None:
@@ -354,6 +358,7 @@ class SegmentEditor(QFrame):
         layout = QVBoxLayout(self)
         header = QHBoxLayout()
         self.title_label = QLabel()
+        self.title_label.setWordWrap(True)  # a long name wraps; Save/Cancel stay in the pane
         self.title_label.setStyleSheet('font-weight: bold;')
         self.save_button = QPushButton('Save')
         self.save_button.setDefault(True)
@@ -364,10 +369,9 @@ class SegmentEditor(QFrame):
         self.delete_button.setHidden(is_new)
         self.delete_button.clicked.connect(lambda: self.delete_requested.emit(self._base['id']))
         header.addWidget(self.title_label, 1)
-        header.addWidget(self.delete_button)
         header.addWidget(self.save_button)
         header.addWidget(self.cancel_button)
-        layout.addLayout(header)
+        layout.addLayout(header)   # Delete segment sits at the bottom: the header fits a narrow pane
 
         span = QHBoxLayout()
         self.label_edit = QLineEdit(record.get('label', ''))
@@ -416,6 +420,10 @@ class SegmentEditor(QFrame):
         self._build_baseline_extras(record)
         for section in DETECTION_GROUPS:
             self.groups[section].setEnabled(not deconvolution)
+        footer = QHBoxLayout()
+        footer.addWidget(self.delete_button)
+        footer.addStretch(1)
+        layout.addLayout(footer)
         layout.addStretch(1)
 
         self._update_title()
