@@ -26,14 +26,19 @@ def _table_rows(table):
     return [[table.cellWidget(r, c).value() for c in (0, 1)] for r in range(table.rowCount())]
 
 
+def _segment_rows(frame):
+    """From/To of each segment row in the Segments table (row 0 is Whole run)."""
+    t = frame.segments_panel.table
+    return [[float(t.item(r, c).text()) for c in (1, 2)] for r in range(1, t.rowCount())]
+
+
 def test_break_points_and_range_filters_survive_save_and_load(qtbot, tmp_path, monkeypatch):
     first = _app(qtbot)
     pf = first.parameters_frame
-    pf._add_range_filter_row()
-    pf.range_filter_table.cellWidget(0, 0).setValue(2.5)
-    pf.range_filter_table.cellWidget(0, 1).setValue(9.0)
+    pf.open_segment(None, (2.5, 9.0))
+    assert pf.commit_open_segment()
     pf._add_break_point_row()
-    pf.break_point_table.cellWidget(0, 0).setValue(4.2)
+    pf.break_point_table.cellWidget(0, 0).setValue(1.2)  # whole-run: outside the segment
     path = tmp_path / "anh.chromethod"
     first.current_method.to_file(path)
 
@@ -43,33 +48,35 @@ def test_break_points_and_range_filters_survive_save_and_load(qtbot, tmp_path, m
     second.load_method()
     pf2 = second.parameters_frame
 
-    assert _table_rows(pf2.range_filter_table) == [[2.5, 9.0]]
-    assert _table_rows(pf2.break_point_table) == [[4.2, pytest.approx(0.1)]]
+    assert _segment_rows(pf2) == [[2.5, 9.0]]
+    assert _table_rows(pf2.break_point_table) == [[1.2, pytest.approx(0.1)]]
 
-    # Editing the table after load keeps the loaded row.
-    pf2._add_range_filter_row()
+    # Adding a segment after load keeps the loaded one.
+    pf2.open_segment(None, (10.0, 11.0))
+    assert pf2.commit_open_segment()
     assert second.current_method.peaks.range_filters[0] == [2.5, 9.0]
-    assert second.current_method.baseline.break_points[0].time == pytest.approx(4.2)
+    assert second.current_method.baseline.break_points[0].time == pytest.approx(1.2)
 
 
 def test_added_row_left_at_defaults_reaches_method(qtbot):
     app = _app(qtbot)
-    app.parameters_frame._add_range_filter_row()
+    app.parameters_frame.segments_panel.add_button.click()
+    assert app.parameters_frame.commit_open_segment()
     app.parameters_frame._add_peak_group_row()
     assert app.current_method.peaks.range_filters == [[0.0, 60.0]]
     assert app.current_method.integration.peak_groups == [[0.0, 60.0]]
 
 
 def _method():
-    m = ChromaMethod(name="t", signal_type="gc")
+    # range_filters at construction: the v1 migration turns them into peak_windows, as on file load
+    m = ChromaMethod(name="t", signal_type="gc",
+                     peaks={"mode": "peak_splitting", "range_filters": [[1.0, 2.0], [5.0, 8.0]]})
     m.smoothing.method = "savgol"
     m.smoothing.diff_order = 2
     m.baseline.baseline_offset = 1.5
     m.baseline.enabled = False
     m.baseline.fastchrom = FastchromParams(half_window=7, smooth_half_window=9)
-    m.baseline.break_points = [BreakPoint(time=3.0, tolerance=0.2), BreakPoint(time=6.0, tolerance=0.05)]
-    m.peaks.mode = "peak_splitting"
-    m.peaks.range_filters = [[1.0, 2.0], [5.0, 8.0]]
+    m.baseline.break_points = [BreakPoint(time=3.0, tolerance=0.2), BreakPoint(time=9.0, tolerance=0.05)]  # both outside the segments
     m.deconvolution.splitting_method = "emg"
     m.deconvolution.windows = [[3.0, 4.0]]
     m.integration.peak_groups = [[7.0, 7.5]]
@@ -82,9 +89,9 @@ def _method():
     (lambda f: float(f.baseline_offset_input.text()), 1.5),
     (lambda f: f.baseline_enabled.isChecked(), False),
     (lambda f: (f.fc_half_window.value(), f.fc_smooth_half_window.value()), (7, 9)),
-    (lambda f: _table_rows(f.break_point_table), [[3.0, 0.2], [6.0, 0.05]]),
+    (lambda f: _table_rows(f.break_point_table), [[3.0, 0.2], [9.0, 0.05]]),
     (lambda f: f.peak_mode_combo.currentData(), "peak_splitting"),
-    (lambda f: _table_rows(f.range_filter_table), [[1.0, 2.0], [5.0, 8.0]]),
+    (lambda f: _segment_rows(f), [[1.0, 2.0], [5.0, 8.0]]),
     (lambda f: f.splitting_method_combo.currentData(), "emg"),
     (lambda f: _table_rows(f.peak_splitting_windows_table), [[3.0, 4.0]]),
     (lambda f: _table_rows(f.peak_group_table), [[7.0, 7.5]]),

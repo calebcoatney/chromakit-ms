@@ -7,13 +7,19 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QRect
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtCore import QRegularExpression
+import copy
 import html
 import logging
 import numpy as np
 
 from logic.method import GCxGCParams, RiderParams
-from logic.windows import _EDGE_TOL, resolve_break_points, validate_windows
+from logic.segments import (
+    apply_segment, new_segment, remove_segment, resume_overrides, segments_view,
+    set_whole_run_breaks,
+)
+from logic.windows import _EDGE_TOL
 from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
+from ui.frames.segments import SAVE_BLOCKED, SegmentEditor, SegmentsPanel
 
 INFO_ICON = "\u24d8"
 INFO_COLOR = "#1a73e8"
@@ -31,6 +37,11 @@ def _fix_table_height(table, rows=3):
 logger = logging.getLogger(__name__)
 
 OVERRIDES_NOTE = "λ etc. set per section in the method file"
+# Whole-run sections a segment's fields inherit from
+_INHERITED_SECTIONS = ('smoothing', 'peaks', 'shoulders', 'negative_peaks', 'rider', 'baseline')
+# peaks.mode values that run deconvolution: the GUI combo writes 'peak_splitting', the
+# method schema documents 'deconvolution'
+_DECONVOLUTION_MODES = ('peak_splitting', 'deconvolution')
 
 
 def _has_override(value):
@@ -104,6 +115,8 @@ class ParametersFrame(QWidget):
     # Add signal for when parameters change
     parameters_changed = Signal(dict)
     gcxgc_display_changed = Signal()      # display-only GCxGC change (TIC source): redraw, never reprocess
+    # None, or {'id','label','start','end','partway':[t...]} of the open segment (draft values)
+    segment_state_changed = Signal(object)
     
     # Add signal for MS baseline correction button click
     ms_baseline_clicked = Signal()
@@ -181,11 +194,18 @@ class ParametersFrame(QWidget):
             }
         }
         self.current_params['gcxgc'] = GCxGCParams().model_dump()
-        # Per-RT-window parameters. The Peak Range Filters table edits these in place.
+        # Per-RT-window parameters, edited as segments (logic/segments.py).
         self.current_params['peak_windows'] = []
         self.current_params['outside_windows'] = 'ignore'
         self._overrides_notes = []
         self._ui_mode = None
+        self.segment_editor = None     # the open SegmentEditor, if any
+        self._segment_snapshot = None  # current_params when it opened; Cancel restores it
+        self._segment_hidden = {}      # setting group key -> isHidden() before it opened
+        self._segment_warnings = {}    # segment id -> warning lines
+        self._whole_run_breaks = []    # whole-run break dicts in table row order
+        # The Whole run row summarises whole-run values; any edit may change them
+        self.parameters_changed.connect(lambda _params: self._refresh_segments_panel())
         
         # Create main layout
         self.layout = QVBoxLayout(self)
@@ -203,6 +223,9 @@ class ParametersFrame(QWidget):
 
         # Dict to hold group box references for visibility toggling
         self.section_groups = {}
+
+        # Segments table (top of the pane)
+        self._init_segments_controls()
         
         # Add smoothing group
         self._init_smoothing_controls()
@@ -218,9 +241,6 @@ class ParametersFrame(QWidget):
 
         # Add shoulder detection group
         self._init_shoulder_controls()
-
-        # Add range filter controls
-        self._init_range_filter_controls()
 
         # Add peak grouping controls
         self._init_peak_grouping_controls()
@@ -259,8 +279,20 @@ class ParametersFrame(QWidget):
         Help text lives in ui/frames/parameter_help.py, keyed by section and by
         the visible label text, so it survives _reinitialize_controls().
         """
-        icon_html = f"<span style='color:{INFO_COLOR}; font-weight:bold;'>{INFO_ICON}</span>"
+        self._apply_label_help(self.section_groups)
         for key, group in self.section_groups.items():
+            help_map = PARAMETER_HELP.get(key)
+            if isinstance(group, QGroupBox) and help_map and help_map.get(SECTION_KEY):
+                _TitleHelpIcon(group, help_map[SECTION_KEY])
+
+    @staticmethod
+    def _apply_label_help(groups):
+        """Info icon and hover help on the labels/checkboxes of ``groups`` ({section key: group}).
+
+        The segment editor's groups use it too: their labels match the main groups' labels.
+        """
+        icon_html = f"<span style='color:{INFO_COLOR}; font-weight:bold;'>{INFO_ICON}</span>"
+        for key, group in groups.items():
             if not isinstance(group, QGroupBox):
                 continue
             help_map = PARAMETER_HELP.get(key)
@@ -285,10 +317,6 @@ class ParametersFrame(QWidget):
                 checkbox.setText(f"{text}  {INFO_ICON}")
                 checkbox.setToolTip(tip)
                 checkbox.setProperty("_has_help", True)
-
-            section_tip = help_map.get(SECTION_KEY)
-            if section_tip:
-                _TitleHelpIcon(group, section_tip)
 
     def _init_smoothing_controls(self):
         """Initialize smoothing controls"""
@@ -589,11 +617,12 @@ class ParametersFrame(QWidget):
         bp_frame.setFrameStyle(QFrame.Box)
         bp_layout = QVBoxLayout(bp_frame)
         
-        bp_label = QLabel("Signal Break Points")
+        bp_label = QLabel("Baseline changes (whole run)")
         bp_label.setStyleSheet("font-weight: bold;")
         bp_layout.addWidget(bp_label)
         
-        bp_info = QLabel("Split baseline fitting at valve-switch step changes.\nEach segment is fitted independently.")
+        bp_info = QLabel("Restart the baseline fit at valve-switch step changes.\n"
+                         "Each part is fitted on its own. Segments set theirs in the segment editor.")
         bp_info.setStyleSheet("color: #666666; font-size: 10px;")
         bp_layout.addWidget(bp_info)
         
@@ -608,9 +637,7 @@ class ParametersFrame(QWidget):
         
         bp_add_btn = QPushButton("+ Add Break Point")
         bp_add_btn.clicked.connect(lambda: self._add_break_point_row())
-        for bp in self.current_params['baseline'].get('break_points') or []:
-            self._add_break_point_row(bp['time'], bp.get('tolerance', 0.1), notify=False,
-                                      anchor=bp.get('anchor'))
+        self._rebuild_break_point_rows()
         bp_layout.addWidget(bp_add_btn)
         bp_layout.addWidget(self._make_overrides_note())
         
@@ -959,50 +986,215 @@ class ParametersFrame(QWidget):
         self.section_groups['shoulders'] = shoulder_group
         self.params_layout.addWidget(shoulder_group)
 
-    def _init_range_filter_controls(self):
-        """Initialize peak range filter table UI."""
-        group = QGroupBox("Peak Range Filters")
-        layout = QVBoxLayout(group)
+    # ── Segments (design 2026-11-12 §4.2) ─────────────────────────────────
 
-        info = QLabel("Only keep peaks within these time ranges.\nLeave empty to keep all peaks.")
-        info.setStyleSheet("color: #666666; font-size: 10px;")
-        layout.addWidget(info)
+    def _init_segments_controls(self):
+        """The Segments table at the top of the pane; the segment editor opens just below it."""
+        panel = SegmentsPanel()
+        panel.open_requested.connect(self._on_segment_open_requested)
+        panel.add_requested.connect(self._on_segment_add_requested)
+        panel.delete_requested.connect(self._on_segment_delete)
+        panel.outside_changed.connect(self._on_outside_changed)
+        self.segments_panel = panel
+        self.section_groups['segments'] = panel
+        self.params_layout.addWidget(panel)
+        self._refresh_segments_panel()
 
-        self.range_filter_table = QTableWidget(0, 3)
-        self.range_filter_table.setHorizontalHeaderLabels(["Start Time", "End Time", ""])
-        self.range_filter_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.range_filter_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.range_filter_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.range_filter_table.setSelectionMode(QAbstractItemView.NoSelection)
-        _fix_table_height(self.range_filter_table)
-        layout.addWidget(self.range_filter_table)
+    def _setting_keys(self):
+        """The 1D setting groups the segment editor takes the place of."""
+        return [k for k in self.section_groups if k != 'segments' and not k.startswith('gcxgc')]
 
-        add_btn = QPushButton("+ Add Range")
-        add_btn.clicked.connect(lambda: self._add_range_filter_row())
-        layout.addWidget(add_btn)
+    def _whole_run_summary(self, view):
+        def num(v):
+            return f"{v:g}" if isinstance(v, (int, float)) else str(v)
+        b, p = self.current_params['baseline'], self.current_params['peaks']
+        parts = [f"{b.get('method')} λ {num(b.get('lambda'))}" if b.get('enabled', True)
+                 else 'baseline off',
+                 f"prom {num(p.get('min_prominence'))}"]
+        n = len(view['whole_run_breaks'])
+        if n:
+            parts.append(f"{n} baseline change{'s' if n > 1 else ''}")
+        return ' · '.join(parts)
 
-        self.windows_status = QLabel("")
-        self.windows_status.setStyleSheet("color: #b36b00; font-size: 10px;")
-        self.windows_status.setWordWrap(True)
-        self.windows_status.hide()
-        layout.addWidget(self.windows_status)
-        layout.addWidget(self._make_overrides_note())
+    def _refresh_segments_panel(self):
+        view = segments_view(self.current_params)
+        self.segments_panel.set_view(view, self._whole_run_summary(view),
+                                     self.current_params.get('outside_windows', 'ignore'))
+        for sid, lines in self._segment_warnings.items():
+            self.segments_panel.set_row_warning(sid, '\n'.join(lines))
 
-        self.section_groups['range_filters'] = group
-        self.params_layout.addWidget(group)
-        params = self.current_params
-        windows = params.get('peak_windows') or []
-        # shortcut: a range_filters-only params dict (no windows) shows its spans as rows; the first
-        # edit turns them into windows. ChromaMethod does this on load and merges overlaps; this does not.
-        spans = ([[w['start'], w['end']] for w in windows] if windows
-                 else params.get('peaks', {}).get('range_filters') or [])
-        for start, end in spans:
-            self._add_range_filter_row(start, end, notify=False)
+    def _after_segment_change(self):
+        """Redraw what shows the segments and whole-run breaks after current_params changed."""
+        self._refresh_segments_panel()
+        self._rebuild_break_point_rows()
+        self._update_overrides_note()
 
-    @staticmethod
-    def _new_window(wid, start, end):
-        # Keys left out inherit; ChromaMethod fills the override groups with defaults.
-        return {'id': wid, 'label': '', 'start': start, 'end': end, 'events': []}
+    def _emit_segment_state(self, record):
+        self.segment_state_changed.emit({
+            'id': record['id'], 'label': record.get('label', ''),
+            'start': record['start'], 'end': record['end'],
+            'partway': [row['time'] for row in record.get('partway') or []],
+        })
+
+    def open_segment(self, segment_id, span=None):
+        """Open the editor on a segment, or on a new one over ``span`` when ``segment_id`` is None.
+
+        A new segment is not in current_params until a preview or Save applies it. A span
+        given with an existing id moves that segment's edges (one preview).
+        """
+        if self.segment_editor is not None:
+            logger.info("Segment '%s' cancelled: another segment was opened",
+                        self.segment_editor.record()['id'])
+            self.cancel_open_segment()
+        snapshot = copy.deepcopy(self.current_params)
+        if segment_id is None:
+            if span is None:
+                raise ValueError("A new segment needs a span")
+            record, is_new = new_segment(snapshot, *sorted(float(t) for t in span)), True
+        else:
+            record = next((r for r in segments_view(snapshot)['segments'] if r['id'] == segment_id), None)
+            if record is None:
+                raise ValueError(f"No segment with id '{segment_id}'")
+            is_new = False
+        inherited = {s: copy.deepcopy(snapshot.get(s) or {}) for s in _INHERITED_SECTIONS}
+        deconvolution = snapshot['peaks'].get('mode') in _DECONVOLUTION_MODES
+        editor = SegmentEditor(record, inherited, resume_overrides(snapshot, record['start']),
+                               deconvolution, is_new)
+        editor.preview_changed.connect(self._on_segment_preview)
+        editor.save_requested.connect(self._save_segment)
+        editor.cancel_requested.connect(self.cancel_open_segment)
+        editor.delete_requested.connect(self._on_segment_delete)
+        editor.set_warnings(self._segment_warnings.get(record['id'], []))
+        self._apply_label_help(editor.groups)
+
+        self._segment_snapshot = snapshot
+        self.segment_editor = editor
+        self._segment_hidden = {}
+        for key in self._setting_keys():
+            group = self.section_groups[key]
+            self._segment_hidden[key] = group.isHidden()
+            group.hide()
+        self.params_layout.insertWidget(self.params_layout.indexOf(self.segments_panel) + 1, editor)
+        self.segments_panel.set_editing(True)
+        self._emit_segment_state(record)
+        if segment_id is not None and span is not None:
+            editor.set_span(*sorted(float(t) for t in span))
+
+    def _close_segment_editor(self):
+        """Remove the editor and give the setting groups back the visibility they had."""
+        editor = self.segment_editor
+        self.segment_editor = None
+        self._segment_snapshot = None
+        self.params_layout.removeWidget(editor)
+        editor.hide()
+        editor.deleteLater()
+        for key, hidden in self._segment_hidden.items():
+            if key in self.section_groups:
+                self.section_groups[key].setHidden(hidden)
+        self._segment_hidden = {}
+        self.segments_panel.set_editing(False)
+        self.segment_state_changed.emit(None)
+
+    def _on_segment_preview(self, record):
+        """Apply the draft to the snapshot; an invalid draft shows its reason and keeps the last preview."""
+        editor = self.segment_editor
+        editor.set_resume(resume_overrides(self._segment_snapshot, record['start']))  # R12
+        try:
+            params = apply_segment(self._segment_snapshot, record)
+        except ValueError as exc:
+            editor.show_error(str(exc))
+        else:
+            editor.show_error(None)
+            self.current_params = params
+            self._after_segment_change()
+            self.parameters_changed.emit(self.current_params)
+        self._emit_segment_state(record)
+
+    def _save_segment(self, record) -> bool:
+        try:
+            params = apply_segment(self._segment_snapshot, record)
+        except ValueError as exc:
+            self.segment_editor.show_error(str(exc))
+            return False
+        self.current_params = params
+        self._close_segment_editor()
+        self._after_segment_change()
+        self.parameters_changed.emit(self.current_params)
+        return True
+
+    def commit_open_segment(self) -> bool:
+        """Save the open segment. True if nothing is open or the save succeeded."""
+        editor = self.segment_editor
+        if editor is None:
+            return True
+        if editor.has_errors():
+            editor.show_error(SAVE_BLOCKED)
+            return False
+        return self._save_segment(editor.record())
+
+    def cancel_open_segment(self, emit=True) -> None:
+        """Close the editor and restore the method as it was when the segment was opened."""
+        if self.segment_editor is None:
+            return
+        self.current_params = self._segment_snapshot
+        self._close_segment_editor()
+        self._after_segment_change()
+        if emit:
+            self.parameters_changed.emit(self.current_params)
+
+    def _require_editor(self):
+        if self.segment_editor is None:
+            raise RuntimeError("No segment is open")
+        return self.segment_editor
+
+    def segment_add_partway(self, time: float) -> None:
+        self._require_editor().add_partway(time)
+
+    def segment_set_edge(self, edge: str, time: float) -> None:
+        editor = self._require_editor()
+        if edge == 'start':
+            editor.set_span(time, editor.to_edit.value())
+        elif edge == 'end':
+            editor.set_span(editor.from_edit.value(), time)
+        else:
+            raise ValueError(f"edge must be 'start' or 'end', not {edge!r}")
+
+    def set_segment_warnings(self, lines_by_id: dict) -> None:
+        """Warnings per segment id: a ⚠ on its row, and lines in the editor when it is open."""
+        for sid in set(self._segment_warnings) | set(lines_by_id):
+            self.segments_panel.set_row_warning(sid, '\n'.join(lines_by_id.get(sid) or []) or None)
+        self._segment_warnings = {sid: list(lines) for sid, lines in lines_by_id.items() if lines}
+        if self.segment_editor is not None:
+            self.segment_editor.set_warnings(
+                self._segment_warnings.get(self.segment_editor.record()['id'], []))
+
+    def _on_segment_open_requested(self, segment_id):
+        if segment_id:
+            self.open_segment(segment_id)
+        else:
+            self.cancel_open_segment()  # Whole run: the setting groups
+
+    def _on_segment_add_requested(self):
+        """A new segment 1 min after the last one, or 0-60 when there is none."""
+        last_end = max((w['end'] for w in self.current_params.get('peak_windows') or []), default=None)
+        self.open_segment(None, (0.0, 60.0) if last_end is None else (last_end, last_end + 1.0))
+
+    def _on_segment_delete(self, segment_id):
+        """R13: no confirmation; nothing is saved until Save Method."""
+        if self.segment_editor is not None:
+            params = remove_segment(self._segment_snapshot, segment_id)
+            self._close_segment_editor()
+        else:
+            params = remove_segment(self.current_params, segment_id)
+        self.current_params = params
+        self._after_segment_change()
+        self.parameters_changed.emit(self.current_params)
+
+    def _on_outside_changed(self, mode):
+        self.current_params['outside_windows'] = mode
+        self._sync_range_filter_mirror()
+        self._refresh_segments_panel()
+        self.parameters_changed.emit(self.current_params)
 
     def _make_overrides_note(self):
         note = QLabel(OVERRIDES_NOTE)
@@ -1025,146 +1217,6 @@ class ParametersFrame(QWidget):
         self._overrides_notes = [n for n in self._overrides_notes if not _is_dead(n)]
         for n in self._overrides_notes:
             n.setVisible(visible)
-
-    def _add_range_filter_row(self, start=None, end=None, notify=True):
-        """Add a new row to the range filter table.
-
-        Defaults to a 1-min span after the last window, or 0-60 when there is none.
-        """
-        if start is None:
-            windows = self.current_params.get('peak_windows') or []
-            last_end = max((w['end'] for w in windows), default=None)
-            start, end = (0.0, 60.0) if last_end is None else (last_end, last_end + 1.0)
-        row = self.range_filter_table.rowCount()
-        self.range_filter_table.insertRow(row)
-
-        start_spin = QDoubleSpinBox()
-        start_spin.setDecimals(3)
-        start_spin.setRange(0, 9999)
-        start_spin.setValue(start)
-        start_spin.valueChanged.connect(self._on_range_filters_changed)
-        self.range_filter_table.setCellWidget(row, 0, start_spin)
-
-        end_spin = QDoubleSpinBox()
-        end_spin.setDecimals(3)
-        end_spin.setRange(0, 9999)
-        end_spin.setValue(end)
-        end_spin.valueChanged.connect(self._on_range_filters_changed)
-        self.range_filter_table.setCellWidget(row, 1, end_spin)
-
-        del_btn = QPushButton("✕")
-        del_btn.setFixedWidth(30)
-        del_btn.clicked.connect(lambda checked, r=row: self._remove_range_filter_row(r))
-        self.range_filter_table.setCellWidget(row, 2, del_btn)
-        if notify:
-            self._on_range_filters_changed()
-
-    def _remove_range_filter_row(self, row):
-        """Remove a row (and its window) from the range filter table."""
-        windows = self.current_params['peak_windows']
-        cleared = []
-        if row < len(windows):
-            gone = windows.pop(row)
-            for bp in self.current_params['baseline'].get('break_points') or []:
-                anchor = bp.get('anchor')
-                if anchor and anchor.get('window_id') == gone['id']:
-                    bp['anchor'] = None
-                    cleared.append(bp['time'])
-        self.range_filter_table.removeRow(row)
-        # Reconnect delete buttons with correct row indices
-        for r in range(self.range_filter_table.rowCount()):
-            del_btn = self.range_filter_table.cellWidget(r, 2)
-            if del_btn:
-                del_btn.clicked.disconnect()
-                del_btn.clicked.connect(lambda checked, r=r: self._remove_range_filter_row(r))
-        if cleared:
-            msg = (f"Window '{gone['label'] or gone['id']}' removed; "
-                   f"{len(cleared)} break point(s) detached, kept at "
-                   + ", ".join(f"{t:g}" for t in cleared) + " min")
-            logger.warning(msg)
-            self.windows_status.setText(msg)
-            self.windows_status.show()
-            self._rebuild_break_point_rows()
-        else:
-            self.windows_status.hide()
-        self._on_range_filters_changed()
-
-    def _on_range_filters_changed(self, _=None):
-        """Apply the table's spans to peak_windows, or flag an overlap and keep the last valid set."""
-        table = self.range_filter_table
-        old = self.current_params['peak_windows']
-        used = {w['id'] for w in old}
-        proposed = []
-        for r in range(table.rowCount()):
-            start_w, end_w = table.cellWidget(r, 0), table.cellWidget(r, 1)
-            if not (start_w and end_w):
-                continue
-            if r < len(old):
-                w = dict(old[r])
-            else:
-                n = 1
-                while f"w{n}" in used:
-                    n += 1
-                used.add(f"w{n}")
-                w = self._new_window(f"w{n}", 0.0, 0.0)
-            w['start'], w['end'] = start_w.value(), end_w.value()
-            proposed.append(w)
-        for r in range(table.rowCount()):
-            for c in (0, 1):
-                spin = table.cellWidget(r, c)
-                if spin:
-                    spin.setStyleSheet("")
-                    spin.setToolTip("")
-        try:
-            validate_windows(proposed)
-        except ValueError as exc:
-            msg = str(exc)
-            logger.warning("Range edit not applied: %s", msg)
-            for r, w in enumerate(proposed):
-                if f"'{w['id']}'" in msg:
-                    for c in (0, 1):
-                        spin = table.cellWidget(r, c)
-                        spin.setStyleSheet("border: 1px solid red;")
-                        spin.setToolTip(msg)
-            return
-        # Anchored breaks follow their window edge; that move must not land on another break.
-        moved = [dict(bp, time=self._anchored_time(bp, proposed))
-                 for bp in self.current_params['baseline'].get('break_points') or []]
-        try:
-            resolve_break_points(proposed, moved)
-        except ValueError as exc:
-            msg = str(exc)
-            logger.warning("Range edit not applied: %s", msg)
-            for r in range(table.rowCount()):
-                for c in (0, 1):
-                    spin = table.cellWidget(r, c)
-                    spin.setStyleSheet("border: 1px solid red;")
-                    spin.setToolTip(msg)
-            return
-        self.current_params['peak_windows'] = proposed
-        self.current_params['baseline']['break_points'] = moved
-        self._sync_anchored_break_spinboxes()
-        self._sync_range_filter_mirror()
-        self.parameters_changed.emit(self.current_params)
-
-    @staticmethod
-    def _anchored_time(bp, windows):
-        """The break's time: its window edge if anchored (as resolve_break_points does), else its own."""
-        anchor = bp.get('anchor')
-        if anchor:
-            for w in windows:
-                if w['id'] == anchor['window_id']:
-                    return float(w['start'] if anchor['edge'] == 'start' else w['end'])
-        return bp['time']
-
-    def _sync_anchored_break_spinboxes(self):
-        table = self.break_point_table
-        for r, bp in enumerate(self.current_params['baseline'].get('break_points') or []):
-            spin = table.cellWidget(r, 0)
-            if spin is not None and bp.get('anchor'):
-                spin.blockSignals(True)
-                spin.setValue(bp['time'])
-                spin.blockSignals(False)
 
     def _sync_range_filter_mirror(self):
         """peaks.range_filters mirrors the window spans under 'ignore' and is empty under 'global'."""
@@ -1330,8 +1382,8 @@ class ParametersFrame(QWidget):
         self.current_params['integration']['peak_groups'] = groups
         self.parameters_changed.emit(self.current_params)
 
-    def _add_break_point_row(self, time=0.0, tolerance=0.1, notify=True, anchor=None):
-        """Add a new row to the break point table."""
+    def _add_break_point_row(self, time=0.0, tolerance=0.1, notify=True):
+        """Add a new row to the whole-run break table."""
         row = self.break_point_table.rowCount()
         self.break_point_table.insertRow(row)
 
@@ -1340,12 +1392,6 @@ class ParametersFrame(QWidget):
         time_spin.setRange(0, 9999)
         time_spin.setValue(time)
         time_spin.valueChanged.connect(self._on_break_points_changed)
-        if anchor:
-            by_id = {w['id']: w for w in self.current_params.get('peak_windows') or []}
-            win = by_id.get(anchor['window_id'], {})
-            label = win.get('label') or anchor['window_id']
-            time_spin.setEnabled(False)
-            time_spin.setToolTip(f"Follows window '{label}' {anchor['edge']}")
         self.break_point_table.setCellWidget(row, 0, time_spin)
 
         tol_spin = QDoubleSpinBox()
@@ -1364,10 +1410,9 @@ class ParametersFrame(QWidget):
             self._on_break_points_changed()
 
     def _remove_break_point_row(self, row):
-        """Remove a row (and its break point) from the break point table."""
-        bps = self.current_params['baseline'].get('break_points') or []
-        if row < len(bps):
-            del bps[row]
+        """Remove a row (and its break point) from the whole-run break table."""
+        if row < len(self._whole_run_breaks):
+            del self._whole_run_breaks[row]
         self.break_point_table.removeRow(row)
         for r in range(self.break_point_table.rowCount()):
             del_btn = self.break_point_table.cellWidget(r, 2)
@@ -1377,45 +1422,78 @@ class ParametersFrame(QWidget):
         self._on_break_points_changed()
 
     def _on_break_points_changed(self, _=None):
-        """Update break point times and tolerances; overrides and anchors stay as loaded."""
-        old = self.current_params['baseline'].get('break_points') or []
+        """Write the table's whole-run breaks back; overrides stay as loaded.
+
+        A duplicate time, or a time inside a segment (it would become that segment's
+        baseline change), flags the rows red and keeps the last valid set.
+        """
+        old = self._whole_run_breaks
+        table = self.break_point_table
         bps = []
-        for r in range(self.break_point_table.rowCount()):
-            time_w = self.break_point_table.cellWidget(r, 0)
-            tol_w = self.break_point_table.cellWidget(r, 1)
+        for r in range(table.rowCount()):
+            time_w, tol_w = table.cellWidget(r, 0), table.cellWidget(r, 1)
             if time_w and tol_w:
-                bp = dict(old[r]) if r < len(old) else {}
+                bp = copy.deepcopy(old[r]) if r < len(old) else {}
                 bp['time'], bp['tolerance'] = time_w.value(), tol_w.value()
                 bps.append(bp)
-        table = self.break_point_table
         for r in range(table.rowCount()):
             for c in (0, 1):
                 spin = table.cellWidget(r, c)
                 if spin:
                     spin.setStyleSheet("")
-                    if not (c == 0 and not spin.isEnabled()):  # keep the anchor tooltip
-                        spin.setToolTip("")
+                    spin.setToolTip("")
         try:
-            resolve_break_points(self.current_params['peak_windows'], bps)
+            params = set_whole_run_breaks(self.current_params, bps)
+            self._check_breaks_outside_segments(params, bps)
         except ValueError as exc:
             msg = str(exc)
             logger.warning("Break point edit not applied: %s", msg)
-            times = [self._anchored_time(bp, self.current_params['peak_windows']) for bp in bps]
-            for r, t in enumerate(times):
-                if any(abs(t - o) < _EDGE_TOL for i, o in enumerate(times) if i != r):
-                    for c in (0, 1):
-                        table.cellWidget(r, c).setStyleSheet("border: 1px solid red;")
-                        table.cellWidget(r, c).setToolTip(msg)
+            self._flag_break_rows(bps, msg)
             return
-        self.current_params['baseline']['break_points'] = bps
+        self.current_params = params
+        self._whole_run_breaks = bps
+        self._refresh_segments_panel()
         self.parameters_changed.emit(self.current_params)
 
+    @staticmethod
+    def _check_breaks_outside_segments(params, bps):
+        """Raise if a table break landed inside a segment (or on its start) in ``params``."""
+        kept = segments_view(params)['whole_run_breaks']
+        if len(kept) == len(bps):
+            return
+        kept_times = [float(bp['time']) for bp in kept]
+        for bp in bps:
+            t = float(bp['time'])
+            if any(abs(t - k) < _EDGE_TOL for k in kept_times):
+                continue
+            w = next(w for w in params['peak_windows']
+                     if w['start'] - _EDGE_TOL < t < w['end'] - _EDGE_TOL)
+            raise ValueError(f"Baseline change at {t:g} is inside segment "
+                             f"'{w.get('label') or w['id']}'; change it in that segment")
+        raise ValueError("A whole-run baseline change was taken over by a segment")
+
+    def _flag_break_rows(self, bps, msg):
+        """Red rows: the time named in ``msg``'s duplicate or segment, else every row."""
+        current = self.current_params['baseline'].get('break_points') or []
+        whole = segments_view(self.current_params)['whole_run_breaks']
+        owned = [float(bp['time']) for bp in current if bp not in whole]
+        times = [float(bp['time']) for bp in bps]
+        bad = [r for r, t in enumerate(times)
+               if any(abs(t - o) < _EDGE_TOL for i, o in enumerate(times) if i != r)
+               or any(abs(t - o) < _EDGE_TOL for o in owned)
+               or f"at {t:g} is inside" in msg]
+        table = self.break_point_table
+        for r in bad or range(len(bps)):
+            for c in (0, 1):
+                table.cellWidget(r, c).setStyleSheet("border: 1px solid red;")
+                table.cellWidget(r, c).setToolTip(msg)
+
     def _rebuild_break_point_rows(self):
-        """Redraw the break point table from current_params (after an anchor changed)."""
+        """Redraw the whole-run break table from current_params."""
         self.break_point_table.setRowCount(0)
-        for bp in self.current_params['baseline'].get('break_points') or []:
-            self._add_break_point_row(bp['time'], bp.get('tolerance', 0.1), notify=False,
-                                      anchor=bp.get('anchor'))
+        self._whole_run_breaks = segments_view(self.current_params)['whole_run_breaks']
+        for bp in self._whole_run_breaks:
+            self._add_break_point_row(bp['time'], bp.get('tolerance', 0.1), notify=False)
 
     def update_lam_visibility(self):
         """Show/hide lambda and fastchrom controls based on the current algorithm"""
@@ -1891,7 +1969,9 @@ class ParametersFrame(QWidget):
         for key, visible in visibility.items():
             if getattr(self, '_ui_mode', None) == 'gcxgc' and not key.startswith('gcxgc'):
                 continue
-            if key in self.section_groups:
+            if key in self._segment_hidden:   # segment editor open: applies when it closes
+                self._segment_hidden[key] = not visible
+            elif key in self.section_groups:
                 self.section_groups[key].setVisible(visible)
 
     def _on_shoulders_toggled(self, state):
@@ -2160,6 +2240,7 @@ class ParametersFrame(QWidget):
         and re-initializes the controls. The app guards write-back during this
         via its ``_loading_method`` flag, so no dirty flip occurs.
         """
+        self.cancel_open_segment(emit=False)  # no draft leaks into the loaded method
         self.current_params = method.to_gui_params()
         self._reinitialize_controls()
 
@@ -2171,6 +2252,7 @@ class ParametersFrame(QWidget):
         clearing the layout and re-running them is sufficient to restore
         the full widget state.
         """
+        self.cancel_open_segment()
         # Remove all existing widgets from params_layout. Hide each one now: deleteLater() only runs
         # once control returns to an event loop, and until then a removed group stays a visible
         # child of params_widget at its old place (in GCxGC mode the 1D groups showed through).
@@ -2190,12 +2272,12 @@ class ParametersFrame(QWidget):
 
         # Rebuild all control sections — must match the order in __init__
         self.section_groups = {}
+        self._init_segments_controls()
         self._init_smoothing_controls()
         self._init_baseline_controls()
         self._init_peaks_controls()
         self._init_negative_peaks_controls()
         self._init_shoulder_controls()
-        self._init_range_filter_controls()
         self._init_peak_grouping_controls()
         self._init_tail_skim_controls()
         self._init_gcxgc_controls()
@@ -2210,13 +2292,16 @@ class ParametersFrame(QWidget):
         In 'gcxgc' mode: hide 1D sections, show gcxgc_layout, gcxgc_baseline and gcxgc_peaks.
         Otherwise: show 1D sections, hide gcxgc sections.
         """
-        self._ui_mode = ui_mode
         is_gcxgc = ui_mode == 'gcxgc'
+        if is_gcxgc:
+            self.cancel_open_segment()
+        self._ui_mode = ui_mode
         for key, group in self.section_groups.items():
-            if key.startswith('gcxgc'):
-                group.setVisible(is_gcxgc)
+            visible = is_gcxgc if key.startswith('gcxgc') else not is_gcxgc
+            if key in self._segment_hidden:   # segment editor open: applies when it closes
+                self._segment_hidden[key] = not visible
             else:
-                group.setVisible(not is_gcxgc)
+                group.setVisible(visible)
 
     def get_gcxgc_params(self) -> dict:
         """GCxGC settings in the shape the app and exporter use."""

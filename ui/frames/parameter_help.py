@@ -156,13 +156,14 @@ PARAMETER_HELP = {
             "<b>Larger</b> values give a smoother baseline; <b>smaller</b> values "
             "follow the baseline points more closely."
         ),
-        "Signal Break Points": (
-            "<b>Signal Break Points</b><br>"
-            "Splits the chromatogram into separate segments at the given times. Each "
-            "segment gets its own baseline fit. Use these at valve switches or "
+        "Baseline changes (whole run)": (
+            "<b>Baseline changes (whole run)</b><br>"
+            "Restarts the baseline fit at the given times, outside every segment. Each "
+            "part of the run gets its own baseline fit. Use these at valve switches or "
             "other sudden step changes, where a single smooth baseline would cut "
-            "through the step and distort nearby peak areas.<br><br>"
-            "<b>Tolerance</b>: window (min) around the break time."
+            "through the step and distort nearby peak areas. A baseline change inside "
+            "a segment is set in that segment's editor instead.<br><br>"
+            "<b>Tolerance</b>: window (min) around the change time."
         ),
     },
     "peaks": {
@@ -325,13 +326,29 @@ PARAMETER_HELP = {
             "How sensitive the shoulder search is."
         ),
     },
-    "range_filters": {
+    "segments": {
         SECTION_KEY: (
-            "<b>Peak Range Filters</b><br>"
-            "Keeps only peaks whose apex is inside one of these time ranges; all other "
-            "peaks are removed from the results. Use it to exclude solvent fronts, "
-            "column bleed at the end of the run, or uninteresting regions. "
-            "Leave the table empty to keep all peaks."
+            "<b>Segments</b><br>"
+            "A segment is a stretch of the run (From–To, in minutes) with its own "
+            "settings. Use one where the whole-run settings don't suit: a cluster of "
+            "small peaks that needs a lower prominence, or a region after a valve "
+            "switch that needs its own baseline.<br><br>"
+            "Click a segment to edit it. A blank field uses the whole-run value; type a "
+            "value to change it for that segment only. Click <b>Whole run</b> to get "
+            "back to the main settings. Add one with <b>+ Segment</b> or by "
+            "shift-dragging across the plot.<br><br>"
+            "Changes show on the plot as you type; <b>Save</b> keeps them in the method, "
+            "<b>Cancel</b> puts everything back. Nothing reaches the method file until "
+            "<b>Save Method</b>."
+        ),
+        "Outside segments:": (
+            "<b>Outside segments</b><br>"
+            "What happens to peaks outside every segment.<br><br>"
+            "• <b>ignore</b>: they are dropped from the results; only peaks inside a "
+            "segment are reported (the old Peak Range Filters).<br>"
+            "• <b>use whole-run settings</b>: they are kept and found with the "
+            "whole-run settings; segments only change the settings inside them.<br><br>"
+            "With no segments, every peak is kept either way."
         ),
     },
     "peak_grouping": {
@@ -342,7 +359,8 @@ PARAMETER_HELP = {
             "time is the highest point in the window.<br><br>"
             "Use it for compounds that always split into several peaks (isomers, "
             "fronting), or to report a lump area for an unresolved region. Unlike "
-            "Range Filters, no peaks are removed; they are combined."
+            "segments set to ignore what lies outside them, no peaks are removed; "
+            "they are combined."
         ),
     },
     "gcxgc_layout": {

@@ -594,6 +594,14 @@ class SegmentEditor(QFrame):
         self.to_edit.set_value(end)
         self._on_span_committed()
 
+    def set_resume(self, resume: dict) -> None:
+        """New whole-run value in force before the segment (From moved across a whole-run
+        break); partway rows and the after-line follow it. Emits nothing."""
+        if resume == self._resume:
+            return
+        self._resume = copy.deepcopy(resume)
+        self._refresh_baseline()
+
     def add_partway(self, time: float) -> None:
         self._watch_edits(self.partway.add_row(float(time), {}, self._segment_baseline()))
         self.groups['baseline'].set_expanded(True)

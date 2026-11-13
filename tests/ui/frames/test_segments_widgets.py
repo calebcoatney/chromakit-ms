@@ -475,3 +475,19 @@ def test_editor_partway_sorted_by_time(qtbot, spec):
     ed = make_editor(qtbot, p, rec)
     ed.add_partway(12.6)
     assert [r['time'] for r in ed.record()['partway']] == [12.6, 12.85]
+
+
+def test_editor_set_resume_updates_partway_inheritance(qtbot):
+    """R12: From moved across a whole-run break; partway rows inherit the new resume value."""
+    p = params_of([{'id': 'w1', 'label': '', 'start': 5.0, 'end': 8.0}],
+                  [{'time': 4.0, 'overrides': {'lambda': 1e3}}])
+    rec = S.segments_view(p)['segments'][0]
+    ed = make_editor(qtbot, p, rec)
+    ed.add_partway(6.0)
+    row = ed.partway.rows[0]
+    assert row.fields['lambda']._inherited == 1e3
+    with qtbot.assertNotEmitted(ed.preview_changed):
+        ed.set_resume({'lambda': 1e5})
+    assert row.fields['lambda']._inherited == 1e5
+    with qtbot.assertNotEmitted(ed.preview_changed):
+        ed.set_resume({'lambda': 1e5})  # unchanged: nothing to do

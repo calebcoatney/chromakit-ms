@@ -437,6 +437,11 @@ class ChromaKitApp(QMainWindow):
         dialog; the dialog itself confirms replacing an existing file.
         """
         from pathlib import Path
+        # An open segment is saved first; its write-back reaches current_method via parameters_changed
+        if not self.parameters_frame.commit_open_segment():
+            self.status_bar.showMessage(
+                "Method not saved: the open segment has an error (see the segment editor); fix it or Cancel it")
+            return
         start = (str(self.current_method_path) if self.current_method_path
                  else f"{self.current_method.name}.chromethod")
         path, _ = QFileDialog.getSaveFileName(
