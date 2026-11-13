@@ -1,4 +1,5 @@
 import pytest
+from PySide6.QtCore import Qt
 pytest.importorskip('pytestqt')
 
 from logic.method import (
@@ -54,17 +55,21 @@ def test_invalid_text_is_none_and_red(qtbot):
     w.edit.setText('abc')
     w.edit.editingFinished.emit()
     assert w.value() is None
-    assert 'red' in w.edit.styleSheet() or '#' in w.edit.styleSheet()
+    assert 'border: 1px solid #c0392b' in w.edit.styleSheet()
+    assert w.has_error()
     w.set_value(None)
     assert w.edit.styleSheet() == ''
+    assert not w.has_error()
 
 
 def test_set_error_marks_field(qtbot):
     w = _field(qtbot, FLOAT)
     w.set_error('bad')
     assert w.edit.toolTip() == 'bad'
+    assert w.has_error()
     w.set_error(None)
     assert w.edit.styleSheet() == ''
+    assert not w.has_error()
 
 
 def test_int_field(qtbot):
@@ -108,14 +113,14 @@ def test_group_values_title_and_fastchrom_nesting(qtbot):
     g = OverrideGroup('Baseline', 'baseline', {'lambda': 1e6}, {})
     qtbot.addWidget(g)
     assert g.values() == {}
-    assert 'same as whole run' in g.title()
+    assert g.count_label.text() == 'same as whole run'
     g.set_inherited({'lambda': 1e5, 'fastchrom': {'half_window': 5}})
     g.fields['lambda'].set_value(1e4)
     g.fields['fastchrom.half_window'].set_value(9)
     assert g.values() == {'lambda': 1e4, 'fastchrom': {'half_window': 9}}
-    assert '2 changes' in g.title()
+    assert g.count_label.text() == '2 changes'
     g.fields['fastchrom.half_window'].set_value(None)
-    assert '1 change' in g.title() and '1 changes' not in g.title()
+    assert g.count_label.text() == '1 change'
 
 
 def test_group_initial_values_and_signal(qtbot):
@@ -142,3 +147,59 @@ def test_section_fields_cover_model():
         aliases = {f.alias or n for n, f in model.model_fields.items()}
         aliases -= {'asymmetry', 'skim_chain_min_tail', 'skim_flag_band'}
         assert {s.key.split('.')[0] for s in SECTION_FIELDS[section]} == aliases
+
+
+def test_tags_and_changed_label(qtbot):
+    w = _field(qtbot, FLOAT)
+    w.show()
+    assert w.tag_label.text() == 'same as whole run' and w.tag_label.isVisible()
+    assert not w.reset_button.isVisible()
+    w.set_value(2.0)
+    assert w.reset_button.text() == 'changed \u21ba'
+    assert w.reset_button.isVisible() and not w.tag_label.isVisible()
+    w.reset_button.click()
+    assert w.tag_label.isVisible() and w.value() is None
+    c = _field(qtbot, FieldSpec('enabled', 'Enable', 'bool'), 'same as segment')
+    c.show()
+    assert c.tag_label.text() == 'same as segment' and c.tag_label.isVisible()
+
+
+def test_combo_inherit_item_grey_italic(qtbot):
+    w = _field(qtbot, FieldSpec('enabled', 'Enable', 'bool'))
+    assert w.combo.itemData(0, Qt.FontRole).italic()
+    assert w.combo.itemData(0, Qt.ForegroundRole).color().name() == '#888888'
+
+
+def test_unchanged_text_never_reparses(qtbot):
+    w = _field(qtbot, FLOAT)
+    w.set_value(1234567.89)
+    assert w.edit.text() == '1234567.89'
+    with qtbot.assertNotEmitted(w.changed):
+        w.edit.editingFinished.emit()
+    assert w.value() == 1234567.89
+
+
+def test_has_errors_group(qtbot):
+    g = OverrideGroup('Peaks', 'peaks', {}, {})
+    qtbot.addWidget(g)
+    assert not g.has_errors()
+    g.fields['min_width'].edit.setText('abc')
+    g.fields['min_width'].edit.editingFinished.emit()
+    assert g.has_errors()
+    g.fields['min_width'].reset_button.click()
+    assert not g.has_errors()
+
+
+def test_group_header_collapse_and_reload(qtbot):
+    g = OverrideGroup('Peaks', 'peaks', {}, {})
+    qtbot.addWidget(g)
+    g.show()
+    assert g.toggle_button.text().startswith('\u25b8 Peaks')
+    assert not g._body.isVisible() and g._body.isEnabled()
+    g.toggle_button.click()
+    assert g._body.isVisible() and g.toggle_button.text().startswith('\u25be Peaks')
+    g.set_values({'min_width': 2.0})
+    assert g.values() == {'min_width': 2.0} and g.count_label.text() == '1 change'
+    g.set_values({})
+    assert g.values() == {} and not g._body.isVisible()
+    assert not g.isCheckable()

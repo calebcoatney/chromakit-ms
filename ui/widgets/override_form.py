@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QBrush, QColor, QFont, QPalette
 from PySide6.QtWidgets import (
     QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QToolButton, QVBoxLayout, QWidget,
@@ -18,6 +18,9 @@ INHERIT_TAG = 'same as whole run'
 OVERRIDE_TAG = 'changed ↺'
 _ERROR_STYLE = 'border: 1px solid #c0392b;'
 _GREY = QColor('#888888')
+_TAG_STYLE = 'color: #888888; font-style: italic;'
+_CHANGED_STYLE = 'QToolButton { color: #1f6feb; border: none; }'
+_OPEN, _CLOSED = '▾', '▸'
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,8 @@ class OverrideField(QWidget):
         self._tag = inherited_tag
         self._inherited = None
         self._value = None
+        self._error = False
+        self._last_text = ''  # text as last committed; unchanged text is never re-parsed
         self.edit = None
         self.combo = None
 
@@ -112,6 +117,10 @@ class OverrideField(QWidget):
         elif spec.kind in ('bool', 'choice'):
             self.combo = QComboBox()
             self.combo.addItem(self._tag, None)
+            self.combo.setItemData(0, QBrush(_GREY), Qt.ForegroundRole)
+            grey_italic = QFont(self.combo.font())
+            grey_italic.setItalic(True)
+            self.combo.setItemData(0, grey_italic, Qt.FontRole)
             if spec.kind == 'bool':
                 self.combo.addItem('on', True)
                 self.combo.addItem('off', False)
@@ -123,10 +132,15 @@ class OverrideField(QWidget):
         else:
             raise ValueError(f"unknown field kind {spec.kind!r}")
 
-        self.reset_button = QToolButton()
-        self.reset_button.setText('↺')
-        self.reset_button.setToolTip(f"{OVERRIDE_TAG}: click to go back to the inherited value")
+        self.tag_label = QLabel(self._tag)  # shown while inheriting
+        self.tag_label.setStyleSheet(_TAG_STYLE)
+        layout.addWidget(self.tag_label)
+
+        self.reset_button = QToolButton()  # shown while overridden; click reverts
+        self.reset_button.setText(OVERRIDE_TAG)
+        self.reset_button.setToolTip("Click to go back to the inherited value")
         self.reset_button.setAutoRaise(True)
+        self.reset_button.setStyleSheet(_CHANGED_STYLE)
         self.reset_button.setHidden(True)
         self.reset_button.clicked.connect(lambda: self.set_value(None))
         layout.addWidget(self.reset_button)
@@ -148,7 +162,7 @@ class OverrideField(QWidget):
         if value is None:
             return ''
         if self.spec.kind == 'float':
-            return f"{value:g}"
+            return f"{value:.12g}"  # enough digits that a typed value round-trips
         return str(value)
 
     def _inherited_text(self):
@@ -164,7 +178,7 @@ class OverrideField(QWidget):
     def set_inherited(self, value) -> None:
         self._inherited = value
         if self.edit is not None:
-            self.edit.setPlaceholderText(self._fmt(value))
+            self.edit.setPlaceholderText(f"{value:g}" if self.spec.kind == 'float' and value is not None else self._fmt(value))
         else:
             self.combo.setItemText(0, f"{self._tag} ({self._inherited_text()})" if value is not None else self._tag)
 
@@ -181,13 +195,18 @@ class OverrideField(QWidget):
 
     def _commit(self, value):
         """Store value and refresh the reset button; emit only on a real change."""
-        self.reset_button.setHidden(value is None and not (self.edit and self.edit.text()))
+        overridden = value is not None or bool(self.edit and self.edit.text())
+        self.reset_button.setHidden(not overridden)
+        self.tag_label.setHidden(overridden)
         if value != self._value:
             self._value = value
             self.changed.emit()
 
     def _on_edit_finished(self):
         self._sync_italic()
+        if self.edit.text() == self._last_text:
+            return
+        self._last_text = self.edit.text()
         try:
             value = self._parse(self.edit.text())
         except ValueError:
@@ -203,6 +222,7 @@ class OverrideField(QWidget):
     def set_value(self, value) -> None:
         if self.edit is not None:
             self.edit.setText(self._fmt(value))
+            self._last_text = self.edit.text()
             self.set_error(None)
             self._sync_italic()
         else:
@@ -219,8 +239,12 @@ class OverrideField(QWidget):
 
     def set_error(self, msg) -> None:
         w = self.edit if self.edit is not None else self.combo
+        self._error = bool(msg)
         w.setStyleSheet(_ERROR_STYLE if msg else '')
         w.setToolTip(msg or '')
+
+    def has_error(self) -> bool:
+        return self._error
 
 
 def _flatten(d, prefix=''):
@@ -241,38 +265,69 @@ class OverrideGroup(QGroupBox):
         super().__init__(parent)
         self._base_title = title
         self.section = section
-        self.setCheckable(True)  # the check box is the expand/collapse toggle
-        body = QWidget()
-        form = QFormLayout(body)
+
+        self.toggle_button = QToolButton()
+        self.toggle_button.setAutoRaise(True)
+        self.toggle_button.setStyleSheet('font-weight: bold;')
+        self.toggle_button.clicked.connect(lambda: self.set_expanded(not self._expanded))
+        self.count_label = QLabel()
+        self.count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header = QHBoxLayout()
+        header.addWidget(self.toggle_button)
+        header.addStretch(1)
+        header.addWidget(self.count_label)
+
+        self._body = QWidget()
+        form = QFormLayout(self._body)
         self.fields = {}
         for spec in SECTION_FIELDS[section]:
             f = OverrideField(spec)
             self.fields[spec.key] = f
             form.addRow(QLabel(spec.label), f)
         outer = QVBoxLayout(self)
-        outer.addWidget(body)
-        self._body = body
-        self.toggled.connect(body.setVisible)
+        outer.addLayout(header)
+        outer.addWidget(self._body)
 
         self.set_inherited(inherited)
-        for key, v in _flatten(values).items():
-            if key not in self.fields:
-                raise KeyError(f"{section} has no override field {key!r}")
-            self.fields[key].set_value(v)
+        self._load(values)
         for f in self.fields.values():
             f.changed.connect(self._on_field_changed)
-        self._update_title()
-        # shortcut: collapsed whenever nothing is set at construction, re-collapse is manual
-        self.setChecked(bool(self.values()))
+        self._update_count()
+        self.set_expanded(bool(self.values()))
 
-    def _update_title(self):
+    def _load(self, values):
+        for key, v in _flatten(values).items():
+            if key not in self.fields:
+                raise KeyError(f"{self.section} has no override field {key!r}")
+            self.fields[key].set_value(v)
+
+    def set_values(self, values: dict) -> None:
+        """Replace all overrides (reload); re-evaluates the collapsed state."""
+        for f in self.fields.values():
+            f.blockSignals(True)
+        for f in self.fields.values():
+            f.set_value(None)
+        self._load(values)
+        for f in self.fields.values():
+            f.blockSignals(False)
+        self._update_count()
+        self.set_expanded(bool(self.values()))
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._expanded = expanded
+        self._body.setVisible(expanded)  # hides only; never disables
+        self.toggle_button.setText(f"{_OPEN if expanded else _CLOSED} {self._base_title}")
+
+    def _update_count(self):
         n = sum(1 for f in self.fields.values() if f.value() is not None)
-        suffix = INHERIT_TAG if n == 0 else ('1 change' if n == 1 else f"{n} changes")
-        self.setTitle(f"{self._base_title} — {suffix}")
+        self.count_label.setText(INHERIT_TAG if n == 0 else ('1 change' if n == 1 else f"{n} changes"))
 
     def _on_field_changed(self):
-        self._update_title()
+        self._update_count()
         self.changed.emit()
+
+    def has_errors(self) -> bool:
+        return any(f.has_error() for f in self.fields.values())
 
     def values(self) -> dict:
         out = {}
