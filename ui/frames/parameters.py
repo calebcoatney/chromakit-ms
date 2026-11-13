@@ -1130,6 +1130,9 @@ class ParametersFrame(QWidget):
         self.parameters_changed.emit(self.current_params)
         return True
 
+    def has_open_segment(self) -> bool:
+        return self.segment_editor is not None
+
     def commit_open_segment(self) -> bool:
         """Save the open segment. True if nothing is open or the save succeeded."""
         editor = self.segment_editor

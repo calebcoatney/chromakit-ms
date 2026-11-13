@@ -19,6 +19,10 @@ SEGMENT_BREAK_COLOR = '#7a4c00'
 SEGMENT_EXCLUDED_COLOR = '#999999'
 SEGMENT_FADED_ALPHA = 0.3
 SEGMENT_BAND_BOTTOM = 0.97   # bands fill the top 3 % of the axes; vertical lines stop below them
+SEGMENT_MIN_WIDTH_PX = 3     # a shift-drag narrower than this is a click; an edge drag keeps this gap
+SEGMENT_EDGE_GRAB_PX = 6     # a press this close to an open segment's edge drags that edge
+SEGMENT_DRAG_ALPHA = 0.2     # the temporary span shown during a shift-drag
+BASELINE_CHANGE_TEXT = "Change the baseline here"
 
 
 class _BandLabel(Text):
@@ -62,6 +66,12 @@ class PlotFrame(QWidget):
     
     # Signal for adding peaks to RT table
     add_to_rt_table_requested = Signal(int)  # Peak index for adding to RT table
+
+    # Segment editing on the chromatogram (design 2026-11-12 §4.3); app routes them to ParametersFrame
+    segment_span_requested = Signal(float, float)   # shift-drag; start < end in data units
+    baseline_change_requested = Signal(float)       # right-click inside the open segment
+    segment_edge_moved = Signal(str, float)         # 'start' | 'end', new time, on release
+    segment_escape = Signal()                       # Esc on the canvas with a segment open
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -85,6 +95,7 @@ class PlotFrame(QWidget):
         # Add figure to canvas
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setFocusPolicy(Qt.FocusPolicy.ClickFocus)   # key_press_event (Esc) needs focus
         
         # Add toolbar
         self.toolbar = NavigationToolbar(self.canvas, self)
@@ -105,6 +116,8 @@ class PlotFrame(QWidget):
         # Replace existing mouse click connection with new connections
         self.canvas.mpl_connect('button_press_event', self._on_plot_click)
         self.canvas.mpl_connect('button_release_event', self._on_button_release)
+        self.canvas.mpl_connect('motion_notify_event', self._on_motion)
+        self.canvas.mpl_connect('key_press_event', self._on_key_press)
         
         # GCxGC mode state
         self._gcxgc_peaks: list = []
@@ -117,6 +130,8 @@ class PlotFrame(QWidget):
         self._segment_fit_key = None      # (id, start, end) the y-axis was last fitted to
         self._segment_saved_ylim = None   # the ylim to restore when the segment closes
         self._displayed_trace = None      # (x, trace, baseline) as plot_chromatogram shows them
+        self._span_drag = None            # shift-drag in progress: {'x0', 'px0', 'patch'}
+        self._edge_drag = None            # edge drag in progress: {'edge', 'other', 'orig', 'line', 'px0'}
         
         # Track click information
         self._click_time = 0
@@ -709,9 +724,19 @@ class PlotFrame(QWidget):
         self._click_time = time.time()
         self._last_click_x = event.xdata
         self._is_right_button = event.button == 3  # Right button is 3 in matplotlib
-        
+
+        # Shift-drag (new segment) or a press on the open segment's edge; a press that
+        # never becomes a drag still ends as the plain click recorded above.
+        if event.button == 1:
+            self._begin_segment_drag(event)
+
+        if not (self._is_right_button and event.inaxes == self.chromatogram_ax):
+            return
+        # Inside the open segment, right-click offers a baseline change (on a peak: in its menu)
+        change_x = event.xdata if self._in_open_segment(event.xdata) else None
+
         # Only handle right-clicks on the chromatogram axis specifically
-        if self._is_right_button and event.inaxes == self.chromatogram_ax and hasattr(self, 'integrated_peaks') and self.integrated_peaks:
+        if hasattr(self, 'integrated_peaks') and self.integrated_peaks:
             # Check if the click is near any integrated peak
             found_peak = False
             
@@ -724,7 +749,7 @@ class PlotFrame(QWidget):
                 
                 if (bound_lo <= event.xdata <= bound_hi) or distance < abs(bound_hi - bound_lo) * 0.1:
                     found_peak = True
-                    self._show_peak_context_menu(i, event)
+                    self._show_peak_context_menu(i, event, baseline_change_x=change_x)
                     
                     self._last_click_x = None
                     self._is_right_button = False
@@ -734,9 +759,18 @@ class PlotFrame(QWidget):
             # letting the regular right-click behavior proceed
             if found_peak:
                 return
+
+        if change_x is not None:
+            self._show_baseline_change_menu(change_x)
+            self._last_click_x = None
+            self._is_right_button = False
     
     def _on_button_release(self, event):
         """Handle mouse button release on the plot."""
+        if self._finish_segment_drag(event):
+            self._last_click_x = None
+            self._is_right_button = False
+            return
         if event.inaxes is None or self._last_click_x is None:
             return
             
@@ -816,6 +850,114 @@ class PlotFrame(QWidget):
         # Reset click tracking
         self._last_click_x = None
         self._is_right_button = False
+
+    # ── segment editing gestures ─────────────────────────────────────────────
+
+    def _in_open_segment(self, x) -> bool:
+        seg = self._open_segment
+        if seg is None or x is None:
+            return False
+        lo, hi = sorted((float(seg['start']), float(seg['end'])))
+        return lo <= x <= hi
+
+    def _data_x(self, event) -> float:
+        """The chromatogram x under the mouse, also when the mouse has left the axes."""
+        return float(self.chromatogram_ax.transData.inverted().transform((event.x, event.y))[0])
+
+    def _x_px(self, x) -> float:
+        ax = self.chromatogram_ax
+        return float(ax.transData.transform((x, ax.get_ylim()[0]))[0])
+
+    def _begin_segment_drag(self, event):
+        """Start an edge drag (press near an open segment's edge) or a shift-drag span."""
+        if event.inaxes is not self.chromatogram_ax or self.toolbar.mode:
+            return
+        seg = self._open_segment
+        if seg is not None:
+            lo, hi = sorted((float(seg['start']), float(seg['end'])))
+            near = [(abs(event.x - self._x_px(t)), edge, t, other)
+                    for edge, t, other in (('start', lo, hi), ('end', hi, lo))]
+            dist, edge, t, other = min(near)
+            if dist <= SEGMENT_EDGE_GRAB_PX:
+                line = next((ln for ln in self._segment_artists
+                             if getattr(ln, 'segment_role', None) == 'edge' and ln.get_xdata()[0] == t),
+                            None)
+                if line is None:
+                    raise RuntimeError(f"Open segment {seg['id']!r} has no edge line at {t}")
+                self._edge_drag = {'edge': edge, 'other': other, 'orig': t, 'line': line,
+                                   'px0': event.x}
+                return
+        if 'shift' in (event.modifiers or ()):
+            self._span_drag = {'x0': float(event.xdata), 'px0': event.x, 'patch': None}
+
+    def _edge_drag_x(self, drag, event) -> float:
+        """The dragged edge's time, kept SEGMENT_MIN_WIDTH_PX short of the other edge."""
+        ax = self.chromatogram_ax
+        x0, x1 = ax.get_xlim()
+        min_gap = SEGMENT_MIN_WIDTH_PX * abs(x1 - x0) / ax.bbox.width
+        x = self._data_x(event)
+        if drag['edge'] == 'start':
+            return min(x, drag['other'] - min_gap)
+        return max(x, drag['other'] + min_gap)
+
+    def _on_motion(self, event):
+        if self._span_drag is None and self._edge_drag is None:
+            return
+        x = self._data_x(event)
+        if self._span_drag is not None:
+            drag = self._span_drag
+            if drag['patch'] is None:
+                drag['patch'] = Rectangle((drag['x0'], 0), 0, 1,
+                                          transform=self.chromatogram_ax.get_xaxis_transform(),
+                                          facecolor=SEGMENT_BAND_COLOR, edgecolor='none',
+                                          alpha=SEGMENT_DRAG_ALPHA, zorder=2.4)
+                drag['patch'].segment_role = 'drag_span'
+                self.chromatogram_ax.add_artist(drag['patch'])   # leaves the data limits alone
+            drag['patch'].set_width(x - drag['x0'])
+        else:
+            x = self._edge_drag_x(self._edge_drag, event)
+            self._edge_drag['line'].set_xdata([x, x])
+        self.canvas.draw_idle()
+
+    def _finish_segment_drag(self, event) -> bool:
+        """End a drag on release; True if it emitted (so the release is not also a click)."""
+        span, edge = self._span_drag, self._edge_drag
+        self._cancel_segment_drag()
+        if span is not None and abs(event.x - span['px0']) > SEGMENT_MIN_WIDTH_PX:
+            x1 = self._data_x(event)
+            self.segment_span_requested.emit(min(span['x0'], x1), max(span['x0'], x1))
+            return True
+        if edge is not None and event.x != edge['px0']:
+            x = self._edge_drag_x(edge, event)
+            edge['line'].set_xdata([x, x])   # stays put until the editor's preview redraws it
+            self.segment_edge_moved.emit(edge['edge'], x)
+            return True
+        return False
+
+    def _cancel_segment_drag(self):
+        """Drop a drag in progress: remove the temporary span, put a dragged edge back."""
+        if self._span_drag is not None and self._span_drag['patch'] is not None:
+            self._span_drag['patch'].remove()
+            self.canvas.draw_idle()
+        if self._edge_drag is not None:
+            orig = self._edge_drag['orig']
+            self._edge_drag['line'].set_xdata([orig, orig])
+            self.canvas.draw_idle()
+        self._span_drag = None
+        self._edge_drag = None
+
+    def _on_key_press(self, event):
+        if event.key != 'escape':
+            return
+        self._cancel_segment_drag()
+        if self._open_segment is not None:
+            self.segment_escape.emit()
+
+    def _show_baseline_change_menu(self, x):
+        menu = QMenu(self)
+        action = menu.addAction(BASELINE_CHANGE_TEXT)
+        if menu.exec(QCursor.pos()) is action:
+            self.baseline_change_requested.emit(float(x))
 
     def _clear_peak_highlights(self):
         """Clear any peak highlights."""
@@ -1369,9 +1511,9 @@ class PlotFrame(QWidget):
                 except:
                     pass
     
-    def _show_peak_context_menu(self, peak_index, event):
-        """Show context menu for a peak."""
-        from PySide6.QtWidgets import QMenu
+    def _show_peak_context_menu(self, peak_index, event, baseline_change_x=None):
+        """Show context menu for a peak; with baseline_change_x (a click inside the open
+        segment) it also offers a baseline change there."""
         from PySide6.QtCore import QPoint
         from PySide6.QtGui import QClipboard
         
@@ -1440,9 +1582,16 @@ class PlotFrame(QWidget):
             convolution_action = menu.addAction("⚠️ Possible Peak Convolution")
             convolution_action.setEnabled(False)  # Just for display
         
+        change_action = None
+        if baseline_change_x is not None:
+            menu.addSeparator()
+            change_action = menu.addAction(BASELINE_CHANGE_TEXT)
+
         # Show the menu at current cursor position instead of using matplotlib event coordinates
         cursor_pos = QCursor.pos()  # Get global cursor position
-        menu.exec_(cursor_pos)      # Show menu at cursor position
+        chosen = menu.exec(cursor_pos)      # Show menu at cursor position
+        if change_action is not None and chosen is change_action:
+            self.baseline_change_requested.emit(float(baseline_change_x))
 
     def _request_ms_search(self, peak_index):
         """Request MS search for a peak."""

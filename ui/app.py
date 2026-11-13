@@ -232,6 +232,11 @@ class ChromaKitApp(QMainWindow):
         self.parameters_frame.gcxgc_display_changed.connect(self._on_gcxgc_display_changed)
         self._open_segment_state = None   # the open segment's draft, as segment_state_changed last sent it
         self.parameters_frame.segment_state_changed.connect(self._on_segment_state_changed)
+        # Segment editing on the plot (shift-drag, right-click, edge drag, Esc)
+        self.plot_frame.segment_span_requested.connect(self._on_segment_span_requested)
+        self.plot_frame.baseline_change_requested.connect(self.parameters_frame.segment_add_partway)
+        self.plot_frame.segment_edge_moved.connect(self.parameters_frame.segment_set_edge)
+        self.plot_frame.segment_escape.connect(self.parameters_frame.cancel_open_segment)
         
         # Connect button frame signals
         self.button_frame.export_clicked.connect(self.on_export)
@@ -3148,6 +3153,16 @@ class ChromaKitApp(QMainWindow):
     def _on_segment_state_changed(self, state):
         self._open_segment_state = state
         self._refresh_segment_overlay()
+
+    def _on_segment_span_requested(self, start, end):
+        """Shift-drag on the plot: open a new (unsaved) segment over the span."""
+        pf = self.parameters_frame
+        if pf.has_open_segment():   # never discard a draft the user is editing
+            self.status_bar.showMessage("Save or cancel the open segment first")
+            return
+        if pf.section_groups['segments'].isHidden():   # hidden in Configure Visible Parameters
+            pf.set_section_visibility({'segments': True})
+        pf.open_segment(None, (start, end))
 
     def _refresh_segment_overlay(self):
         """Hand the plot the method's segments, its whole-run breaks and the open segment."""

@@ -770,12 +770,13 @@ def test_loading_a_1d_sample_after_a_gcxgc_run_returns_clicks_to_the_1d_plot(gcx
     assert pf.integrated_peaks
     gcxgc_clicks, menus = [], []
     monkeypatch.setattr(pf, "_on_gcxgc_click", lambda event: gcxgc_clicks.append(event))
-    monkeypatch.setattr(pf, "_show_peak_context_menu", lambda i, event: menus.append(i))
+    monkeypatch.setattr(pf, "_show_peak_context_menu", lambda i, event, **kw: menus.append(i))
     peak = pf.integrated_peaks[0]
     rt = getattr(peak, "retention_time", None) or peak.position
     pf._on_plot_click(SimpleNamespace(inaxes=pf.chromatogram_ax, button=3, xdata=rt, ydata=1.0))
     assert gcxgc_clicks == [] and menus == [0]                    # a right-click on a peak opens its menu
-    pf._on_plot_click(SimpleNamespace(inaxes=pf.chromatogram_ax, button=1, xdata=rt, ydata=1.0))
+    pf._on_plot_click(SimpleNamespace(inaxes=pf.chromatogram_ax, button=1, xdata=rt, ydata=1.0,
+                                      modifiers=frozenset()))
     assert gcxgc_clicks == [] and pf._last_click_x == rt           # a left-click is recorded for point selection
 
 
