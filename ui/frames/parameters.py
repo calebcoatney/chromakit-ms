@@ -201,6 +201,7 @@ class ParametersFrame(QWidget):
         self._ui_mode = None
         self.segment_editor = None     # the open SegmentEditor, if any
         self._segment_snapshot = None  # current_params when it opened; Cancel restores it
+        self._segment_previewed = False  # a preview reached current_params since it opened
         self._segment_hidden = {}      # setting group key -> isHidden() before it opened
         self._segment_warnings = []    # (time, message) pairs; rows and editor attach them by time
         self._warned_rows = set()      # segment ids whose row carries a warning ('' is Whole run)
@@ -1075,6 +1076,7 @@ class ParametersFrame(QWidget):
         self._apply_label_help(editor.groups)
 
         self._segment_snapshot = snapshot
+        self._segment_previewed = False
         self.segment_editor = editor
         self._segment_hidden = {}
         for key in self._setting_keys():
@@ -1114,6 +1116,7 @@ class ParametersFrame(QWidget):
         else:
             editor.show_error(None)
             self.current_params = params
+            self._segment_previewed = True
             self._after_segment_change()
             self.parameters_changed.emit(self.current_params)
         self._show_segment_warnings()  # the draft span may now hold other warnings
@@ -1151,13 +1154,18 @@ class ParametersFrame(QWidget):
         return self._save_segment(editor.record())
 
     def cancel_open_segment(self, emit=True) -> None:
-        """Close the editor and restore the method as it was when the segment was opened."""
+        """Close the editor and restore the method as it was when the segment was opened.
+
+        Emits parameters_changed (reprocess, method dirty) only if a preview changed
+        current_params since the segment opened.
+        """
         if self.segment_editor is None:
             return
+        previewed = self._segment_previewed
         self.current_params = self._segment_snapshot
         self._close_segment_editor()
         self._after_segment_change()
-        if emit:
+        if emit and previewed:
             self.parameters_changed.emit(self.current_params)
         else:
             self._refresh_segments_panel()

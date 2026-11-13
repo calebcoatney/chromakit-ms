@@ -587,3 +587,32 @@ def test_automation_refused_while_segment_open(qtbot, tmp_path, monkeypatch, ent
     getattr(app, entry)()
     assert app.status_bar.currentMessage() == OPEN_FIRST
     assert app.parameters_frame.segment_editor is not None
+
+
+# ── final fix wave #4: Cancel with nothing previewed changes nothing ────────────
+
+def test_cancel_without_preview_emits_nothing(qtbot):
+    f = _frame(qtbot, [W1, W2])
+    snapshot = copy.deepcopy(f.current_params)
+    emitted = []
+    f.parameters_changed.connect(emitted.append)
+    f.open_segment('w1')
+    f.cancel_open_segment()
+    f.open_segment('w1')
+    f.segment_set_edge('end', 7.0)       # refused (overlaps w2): nothing applied
+    f.cancel_open_segment()
+    assert emitted == [] and f.current_params == snapshot
+    assert f.segments_panel.table.isEnabled()
+    f.open_segment('w1')
+    f.segment_set_edge('end', 5.0)       # applied
+    f.cancel_open_segment()
+    assert len(emitted) == 2 and f.current_params == snapshot
+
+
+def test_cancel_without_edits_leaves_method_clean(qtbot):
+    app = _app(qtbot)
+    app._mark_dirty(False)
+    pf = app.parameters_frame
+    pf.open_segment(None, (2.0, 3.0))
+    pf.cancel_open_segment()
+    assert app._method_dirty is False
