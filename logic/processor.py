@@ -310,9 +310,6 @@ class ChromatogramProcessor:
         return peaks_x, peaks_y, peak_metadata, signal_for_detection
     
     def __init__(self):
-        # Initialize the baseline fitter
-        self.baseline_fitter = Baseline()
-        
         # Default parameters
         self.default_params = {
             'smoothing': {
@@ -651,8 +648,15 @@ class ChromatogramProcessor:
         Whittaker: asls with p=0.9 so points above the fit (peaks) get high
         weight (preserved) while points below (noise) get low weight.
         Savitzky-Golay: local polynomial fit via scipy.signal.savgol_filter.
+        NaN samples (masked regions of a corrected trace) are filled with the
+        nearest finite value for smoothing and are NaN again in the result.
+        On failure the error is logged and the input is returned unsmoothed.
         """
         method = smoothing_params.get('method', 'whittaker')
+        y_in = y
+        masked = ~np.isfinite(y)
+        if masked.any():
+            y = _extend_nan_with_nearest_finite(y)
         try:
             # Optional median pre-filter for spike removal
             if smoothing_params.get('median_enabled', False):
@@ -675,17 +679,22 @@ class ChromatogramProcessor:
                     window += 1
                 if polyorder >= window:
                     polyorder = window - 1
-                return savgol_filter(y, window_length=window, polyorder=polyorder)
+                smoothed_y = savgol_filter(y, window_length=window, polyorder=polyorder)
             else:
                 lam = smoothing_params.get('lambda', 1e-1)
                 diff_order = smoothing_params.get('diff_order', 1)
-                smoothed_y, _ = self.baseline_fitter.asls(
+                # A fresh fitter per call: pybaselines binds a fitter to the
+                # length of the first array it fits.
+                smoothed_y, _ = Baseline().asls(
                     data=y, lam=lam, p=0.9, diff_order=diff_order
                 )
-                return smoothed_y
-        except Exception as e:
-            print(f"Smoothing failed: {str(e)}")
-            return y
+        except Exception:
+            logger.exception("Smoothing failed (method=%s, %d points); this trace "
+                             "continues unsmoothed", method, len(y_in))
+            return y_in
+        if masked.any():
+            smoothed_y = np.where(masked, np.nan, smoothed_y)
+        return smoothed_y
     
     def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0, ms_range=None, baseline_params=None, notes=None):
         """Apply baseline correction using the specified method.
@@ -798,20 +807,21 @@ class ChromatogramProcessor:
     
     def _apply_baseline_correction_single(self, y, method="asls", lam=1e6, fastchrom_params=None, baseline_offset=0.0):
         """Apply baseline correction to a single signal segment."""
-        # Re-initialize the baseline fitter each time to avoid length mismatch issues
-        self.baseline_fitter = Baseline()
-        
+        # A fresh fitter per segment: pybaselines binds a fitter to the length
+        # of the first array it fits.
+        fitter = Baseline()
+
         # Available methods in pybaselines with common algorithms
         methods = {
-            "asls": self.baseline_fitter.asls,           # Asymmetric Least Squares
-            "imodpoly": self.baseline_fitter.imodpoly,   # Improved Modified Polynomial
-            "modpoly": self.baseline_fitter.modpoly,     # Modified Polynomial
-            "snip": self.baseline_fitter.snip,           # Statistics-sensitive Non-linear
-            "airpls": self.baseline_fitter.airpls,       # Adaptive Iteratively Reweighted
-            "arpls": self.baseline_fitter.arpls,         # Asymmetrically Reweighted
-            "mixture_model": self.baseline_fitter.mixture_model,  # Mixture Model (spline-based)
-            "irsqr": self.baseline_fitter.irsqr,                  # Iterative Reweighted Spline Quantile Regression
-            "fastchrom": self.baseline_fitter.fastchrom,           # FastChrom's Baseline Method
+            "asls": fitter.asls,           # Asymmetric Least Squares
+            "imodpoly": fitter.imodpoly,   # Improved Modified Polynomial
+            "modpoly": fitter.modpoly,     # Modified Polynomial
+            "snip": fitter.snip,           # Statistics-sensitive Non-linear
+            "airpls": fitter.airpls,       # Adaptive Iteratively Reweighted
+            "arpls": fitter.arpls,         # Asymmetrically Reweighted
+            "mixture_model": fitter.mixture_model,  # Mixture Model (spline-based)
+            "irsqr": fitter.irsqr,                  # Iterative Reweighted Spline Quantile Regression
+            "fastchrom": fitter.fastchrom,           # FastChrom's Baseline Method
         }
         
         # Validate input data
