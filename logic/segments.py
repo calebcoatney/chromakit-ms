@@ -299,6 +299,13 @@ def apply_segment(params, record):
         if t <= start + _EDGE_TOL or t >= end - _EDGE_TOL:
             raise ValueError(f"Baseline change at {t:g} is not inside segment '{name}' "
                              f"({start:g}-{end:g})")
+    # R21: a whole-run break (owned by no segment before the edit) that the new span would
+    # cover becomes this segment's own, so deleting the segment would delete it too
+    for bp, owner in zip(breaks, owners):
+        t = float(bp['time'])
+        if owner is None and (_same(t, start) or start + _EDGE_TOL < t < end - _EDGE_TOL):
+            raise ValueError(f"Whole-run baseline change at {t:g} min is inside segment "
+                             f"'{name}'; move or delete it first")
 
     old = next((w for w in windows if w['id'] == rid), None)
     window = {'id': rid, 'label': record.get('label', ''), 'start': start, 'end': end}

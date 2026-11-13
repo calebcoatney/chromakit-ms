@@ -336,11 +336,17 @@ def test_whole_run_break_inside_segment_rejected(qtbot):
     assert [b['time'] for b in f.current_params['baseline']['break_points']] == [5.0]
 
 
-def test_break_table_refreshes_after_segment_save(qtbot):
+def test_segment_save_over_whole_run_break_refused(qtbot):
+    """R21: a new segment may not take over a whole-run baseline change."""
     f = _frame(qtbot, [W1], [{'time': 6.0}])
     f.open_segment(None, (5.0, 7.0))
+    assert f.commit_open_segment() is False
+    assert ('Whole-run baseline change at 6 min is inside segment'
+            in f.segment_editor.error_label.text())
+    f.segment_set_edge('end', 5.5)
     assert f.commit_open_segment() is True
-    assert f.break_point_table.rowCount() == 0  # the break now sits inside the new segment
+    assert [w['end'] for w in f.current_params['peak_windows']] == [4.0, 5.5]
+    assert f.break_point_table.rowCount() == 1   # still a whole-run change
 
 
 def test_outside_combo_sets_mode_and_mirror(qtbot):

@@ -514,3 +514,40 @@ def test_validate_record_checks_partway_and_custom_after():
         S.validate_record(_record(after={'mode': 'custom', 'overrides': {'bogus': 1}}))
     with pytest.raises(ValueError, match='Baseline'):
         S.validate_record(_record(fresh_baseline=True, baseline={'bogus': 1}))
+
+
+# ── R21: a segment never absorbs a whole-run baseline change (final fix wave #3) ─
+
+WHOLE_35 = [{'time': 3.5, 'overrides': {'lambda': 1e3}}]
+
+
+def test_grow_over_whole_run_break_rejected():
+    p = params_of([{'id': 'w1', 'start': 2.0, 'end': 3.0}], WHOLE_35)
+    with pytest.raises(ValueError, match=r"Whole-run baseline change at 3.5 min is inside segment 'w1'; "
+                                         r"move or delete it first"):
+        S.apply_segment(p, dict(seg(p, 'w1'), end=4.0))
+
+
+@pytest.mark.parametrize('span', [(3.0, 4.0), (3.5, 4.0)])
+def test_create_over_whole_run_break_rejected(span):
+    p = params_of([], WHOLE_35)
+    record = dict(S.new_segment(p, *span), label='late')
+    with pytest.raises(ValueError, match="change at 3.5 min is inside segment 'late'"):
+        S.apply_segment(p, record)
+
+
+def test_whole_run_break_at_new_end_allowed():
+    p = params_of([], WHOLE_35)
+    out = S.apply_segment(p, S.new_segment(p, 2.0, 3.5))
+    assert [b['time'] for b in S.segments_view(out)['whole_run_breaks']] == [3.5]
+
+
+def test_owned_breaks_still_apply():
+    p = params_of([SPEC_WINDOW], SPEC_BREAKS)       # 12.85 is w1's partway row
+    assert norm(S.apply_segment(p, seg(p, 'w1'))) == norm(p)
+    grown = S.apply_segment(p, dict(seg(p, 'w1'), end=13.3))
+    assert [r['time'] for r in seg(grown, 'w1')['partway']] == [12.85]
+    # a foreign file's unanchored break at the start is the segment's own fresh start
+    q = params_of([{'id': 'w1', 'start': 2.0, 'end': 3.0}], [{'time': 2.0, 'overrides': {'lambda': 1e3}}])
+    out = S.apply_segment(q, dict(seg(q, 'w1'), end=3.4))
+    assert seg(out, 'w1')['fresh_baseline'] and seg(out, 'w1')['baseline'] == {'lambda': 1e3}
