@@ -5,7 +5,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
-from logic.update_check import git_pull_command, pip_upgrade_command
+from logic.update_check import editable_reinstall_command, git_pull_command, pip_upgrade_command
 
 
 class UpdateDialog(QDialog):
@@ -19,15 +19,16 @@ class UpdateDialog(QDialog):
         super().__init__(parent)
         self.kind, self.url, self.version = kind, url, version
         self.setWindowTitle(f"ChromaKit {version} is available")
-        self.command = None
+        self.commands = []
         if kind == "git":
-            self.command = pip_upgrade_command(executable or sys.executable)
+            self.commands = [pip_upgrade_command(executable or sys.executable)]
             text = (f"ChromaKit {version} is available. Close ChromaKit, run this in a terminal, "
                     "then start it again:")
         elif kind == "editable" and source_dir:
-            self.command = git_pull_command(source_dir)
+            self.commands = [git_pull_command(source_dir),
+                             editable_reinstall_command(executable or sys.executable, source_dir)]
             text = (f"ChromaKit {version} is available. This copy runs from the source folder "
-                    f"{source_dir}. Close ChromaKit, run this in a terminal to update it, "
+                    f"{source_dir}. Close ChromaKit, run these two commands in a terminal, in order, "
                     "then start it again:")
         else:
             self.kind = "frozen" if kind == "frozen" else "unknown"
@@ -39,21 +40,25 @@ class UpdateDialog(QDialog):
         layout.addWidget(self._body)
 
         buttons = QHBoxLayout()
-        if self.command:
-            row = QHBoxLayout()
-            field = QLineEdit(self.command)
-            field.setReadOnly(True)
-            field.setAccessibleName("Update command")
-            field.setMinimumWidth(520)
-            row.addWidget(field)
-            copy = QPushButton("Copy")
-            copy.setToolTip("Copy the command to the clipboard")
-            copy.clicked.connect(lambda: self._copy_command(copy))
-            row.addWidget(copy)
-            layout.addLayout(row)
-            if kind == "git" and (platform or sys.platform) == "win32":
+        if self.commands:
+            for i, command in enumerate(self.commands, start=1):
+                row = QHBoxLayout()
+                field = QLineEdit(command)
+                field.setReadOnly(True)
+                field.setAccessibleName("Update command" if len(self.commands) == 1
+                                        else f"Update command {i} of {len(self.commands)}")
+                field.setMinimumWidth(520)
+                row.addWidget(field)
+                copy = QPushButton("Copy")
+                copy.setToolTip("Copy the command to the clipboard")
+                copy.clicked.connect(lambda _=False, b=copy, c=command: self._copy_command(b, c))
+                row.addWidget(copy)
+                layout.addLayout(row)
+            if (platform or sys.platform) == "win32":
                 # PowerShell rejects a line starting with a quoted exe path unless it begins with &
-                hint = QLabel("In PowerShell, type & and a space before the command.")
+                hint = QLabel("In PowerShell, type & and a space before a command that starts with a quote."
+                              if kind == "editable" else
+                              "In PowerShell, type & and a space before the command.")
                 hint.setWordWrap(True)
                 layout.addWidget(hint)
             notes = QPushButton("Open release notes")
@@ -67,8 +72,8 @@ class UpdateDialog(QDialog):
         buttons.addWidget(close)
         layout.addLayout(buttons)
 
-    def _copy_command(self, button: QPushButton) -> None:
-        QGuiApplication.clipboard().setText(self.command)
+    def _copy_command(self, button: QPushButton, command: str) -> None:
+        QGuiApplication.clipboard().setText(command)
         button.setText("Copied")      # status feedback (WCAG 4.1.3); stays until the dialog closes
 
     def body_text(self) -> str:

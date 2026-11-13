@@ -196,6 +196,9 @@ class ChromaKitApp(QMainWindow):
         self.method_label.setAccessibleName("Current method")
         self.status_bar.addPermanentWidget(self.method_label)
 
+        # No trace until a file loads; parameter edits before then must not process anything.
+        self.current_x = None
+        self.current_y = None
         self._last_ms_peak_index = None
         self._deconvolve_ms_run = False
         self._deconv_inspector = None

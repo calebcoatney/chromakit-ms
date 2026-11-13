@@ -87,3 +87,10 @@ def pip_upgrade_command(executable: str) -> str:
 
 def git_pull_command(source_dir: str) -> str:
     return f'git -C "{source_dir}" pull'
+
+
+def editable_reinstall_command(executable: str, source_dir: str) -> str:
+    """Re-run the editable install after a pull. An editable install only finds the top-level
+    modules that existed when it was made (an install from before 0.2.0 can't import
+    chromakit_version), and a pull can add dependencies."""
+    return f'"{executable}" -m pip install -e "{source_dir}"'
