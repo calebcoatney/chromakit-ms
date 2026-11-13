@@ -15,7 +15,7 @@ import numpy as np
 from logic.method import GCxGCParams, RiderParams
 from logic.segments import (
     apply_segment, new_segment, remove_segment, resume_overrides, segments_view,
-    set_whole_run_breaks,
+    set_whole_run_breaks, warnings_by_segment,
 )
 from logic.windows import _EDGE_TOL
 from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
@@ -202,7 +202,8 @@ class ParametersFrame(QWidget):
         self.segment_editor = None     # the open SegmentEditor, if any
         self._segment_snapshot = None  # current_params when it opened; Cancel restores it
         self._segment_hidden = {}      # setting group key -> isHidden() before it opened
-        self._segment_warnings = {}    # segment id -> warning lines
+        self._segment_warnings = []    # (time, message) pairs; rows and editor attach them by time
+        self._warned_rows = set()      # segment ids whose row carries a warning ('' is Whole run)
         self._whole_run_breaks = []    # whole-run break dicts in table row order
         # The one place the Segments table refreshes: every change emits parameters_changed
         # (the Whole run row summarises whole-run values, so any edit may change it)
@@ -1028,8 +1029,7 @@ class ParametersFrame(QWidget):
         view = segments_view(self.current_params)
         self.segments_panel.set_view(view, self._whole_run_summary(view),
                                      self.current_params.get('outside_windows', 'ignore'))
-        for sid, lines in self._segment_warnings.items():
-            self.segments_panel.set_row_warning(sid, '\n'.join(lines))
+        self._show_segment_warnings()
 
     def _after_segment_change(self):
         """Redraw the whole-run breaks after a segment change (the Segments table follows
@@ -1072,7 +1072,6 @@ class ParametersFrame(QWidget):
         editor.save_requested.connect(self._save_segment)
         editor.cancel_requested.connect(self.cancel_open_segment)
         editor.delete_requested.connect(self._on_segment_delete)
-        editor.set_warnings(self._segment_warnings.get(record['id'], []))
         self._apply_label_help(editor.groups)
 
         self._segment_snapshot = snapshot
@@ -1084,6 +1083,7 @@ class ParametersFrame(QWidget):
             group.hide()
         self.params_layout.insertWidget(self.params_layout.indexOf(self.segments_panel) + 1, editor)
         self.segments_panel.set_editing(True)
+        self._show_segment_warnings()
         self._emit_segment_state(record)
         if segment_id is not None and span is not None:
             editor.set_span(*sorted(float(t) for t in span))
@@ -1116,6 +1116,7 @@ class ParametersFrame(QWidget):
             self.current_params = params
             self._after_segment_change()
             self.parameters_changed.emit(self.current_params)
+        self._show_segment_warnings()  # the draft span may now hold other warnings
         self._emit_segment_state(record)
 
     def _save_segment(self, record) -> bool:
@@ -1172,14 +1173,24 @@ class ParametersFrame(QWidget):
         else:
             raise ValueError(f"edge must be 'start' or 'end', not {edge!r}")
 
-    def set_segment_warnings(self, lines_by_id: dict) -> None:
-        """Warnings per segment id: a ⚠ on its row, and lines in the editor when it is open."""
-        for sid in set(self._segment_warnings) | set(lines_by_id):
-            self.segments_panel.set_row_warning(sid, '\n'.join(lines_by_id.get(sid) or []) or None)
-        self._segment_warnings = {sid: list(lines) for sid, lines in lines_by_id.items() if lines}
-        if self.segment_editor is not None:
-            self.segment_editor.set_warnings(
-                self._segment_warnings.get(self.segment_editor.record()['id'], []))
+    def set_segment_warnings(self, timed: list) -> None:
+        """Replace the warnings: ``(time, message)`` pairs, each shown on the segment whose
+        span holds its time (else Whole run), as a ⚠ on its row and a line in its open editor."""
+        self._segment_warnings = [(float(t), str(msg)) for t, msg in timed]
+        self._show_segment_warnings()
+
+    def _show_segment_warnings(self):
+        windows = self.current_params.get('peak_windows') or []
+        by_id = warnings_by_segment(windows, self._segment_warnings)
+        for sid in self._warned_rows | set(by_id):
+            self.segments_panel.set_row_warning(sid, '\n'.join(by_id.get(sid, [])) or None)
+        self._warned_rows = set(by_id)
+        editor = self.segment_editor
+        if editor is not None:
+            # the draft span, so a new or moved segment shows what falls inside it now
+            draft = editor.record()
+            windows = [w for w in windows if w['id'] != draft['id']] + [draft]
+            editor.set_warnings(warnings_by_segment(windows, self._segment_warnings).get(draft['id'], []))
 
     def _on_segment_open_requested(self, segment_id):
         if segment_id:

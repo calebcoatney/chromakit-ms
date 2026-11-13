@@ -34,3 +34,12 @@ def test_short_section_noted():
     assert len(notes) == 1
     assert "5.00" in notes[0] and "5.03" in notes[0]
     assert notes[0] == "Baseline section 5.00–5.03 min is too short to fit; left uncorrected"
+
+
+def test_note_times_parallel_to_notes():
+    assert _run([])['baseline_note_times'] == []
+    dropped = _run([11.0])
+    assert dropped['baseline_note_times'] == [11.0]
+    short = _run([5.00, 5.03])
+    assert short['baseline_note_times'] == [5.0]  # the section's start
+    assert len(short['baseline_note_times']) == len(short['baseline_notes'])

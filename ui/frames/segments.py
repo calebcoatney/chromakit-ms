@@ -175,7 +175,7 @@ class SegmentsPanel(QGroupBox):
         rows = [('', WHOLE_RUN, 'start', 'end', whole_run_summary)]
         rows += [(r['id'], r.get('label') or r['id'], f"{r['start']:g}", f"{r['end']:g}", summarize(r))
                  for r in view['segments']]
-        self._names = {sid: name for sid, name, *_ in rows if sid}
+        self._names = {sid: name for sid, name, *_ in rows}  # '' is Whole run
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
         italic = QFont(self.table.font())

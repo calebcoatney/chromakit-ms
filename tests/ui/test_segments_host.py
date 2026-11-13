@@ -363,11 +363,11 @@ def test_outside_combo_shows_loaded_mode(qtbot):
 
 def test_set_segment_warnings_marks_rows_and_editor(qtbot):
     f = _frame(qtbot, [W1, W2])
-    f.set_segment_warnings({'w2': ['Baseline change at 7 falls inside a peak']})
+    f.set_segment_warnings([(7.0, 'Baseline change at 7 falls inside a peak')])
     assert f.segments_panel.table.item(2, 0).text() == '⚠ w2'
     f.open_segment('w2')
     assert 'falls inside a peak' in f.segment_editor.warning_label.text()
-    f.set_segment_warnings({})
+    f.set_segment_warnings([])
     assert f.segment_editor.warning_label.isHidden()
     assert f.segments_panel.table.item(2, 0).text() == 'w2'
 

@@ -20,7 +20,7 @@ in ``params['baseline']['break_points']`` (may be None), override keys by alias
 import copy
 import logging
 
-from logic.windows import _EDGE_TOL, merge_overrides, resolve_break_points, validate_windows
+from logic.windows import _EDGE_TOL, merge_overrides, resolve_break_points, validate_windows, window_at
 
 logger = logging.getLogger(__name__)
 
@@ -418,14 +418,37 @@ def summarize(record):
     return ' · '.join(t for t in tokens if t) or '—'
 
 
-def breaks_inside_peaks(peaks, break_times):
-    """One message per break time strictly inside a peak's start_time-end_time bounds."""
-    messages = []
+def breaks_inside_peaks_timed(peaks, break_times):
+    """``(break time, message)`` per break time strictly inside a peak's start_time-end_time bounds."""
+    out = []
     for t in break_times:
         for p in peaks:
             lo, hi = sorted((float(p.start_time), float(p.end_time)))
             if lo + _EDGE_TOL < t < hi - _EDGE_TOL:
-                messages.append(f"Baseline change at {t:g} falls inside the peak at "
-                                f"{lo:g}-{hi:g}; its area spans two baselines")
+                out.append((t, f"Baseline change at {t:g} falls inside the peak at "
+                               f"{lo:g}-{hi:g}; its area spans two baselines"))
                 break
-    return messages
+    return out
+
+
+def breaks_inside_peaks(peaks, break_times):
+    """One message per break time strictly inside a peak's start_time-end_time bounds."""
+    return [msg for _, msg in breaks_inside_peaks_timed(peaks, break_times)]
+
+
+def baseline_break_times(params):
+    """Every time the baseline restarts: params' break points, anchors resolved, sorted."""
+    return [b['time'] for b in resolve_break_points(params.get('peak_windows') or [], _breaks(params))]
+
+
+def warnings_by_segment(windows, timed):
+    """``{segment id: [message, ...]}`` for ``(time, message)`` pairs.
+
+    A message goes to the window holding its time (``window_at``: inclusive, the later
+    window wins a shared edge), else to Whole run, keyed ``''``.
+    """
+    out = {}
+    for t, msg in timed:
+        w = window_at(windows, t)
+        out.setdefault(w['id'] if w else '', []).append(msg)
+    return out

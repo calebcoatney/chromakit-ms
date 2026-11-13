@@ -275,6 +275,28 @@ def test_breaks_inside_peaks():
     assert S.breaks_inside_peaks(peaks, [12.80]) == []
 
 
+def test_breaks_inside_peaks_timed_names_the_break_time():
+    peaks = [SimpleNamespace(start_time=12.80, end_time=12.90, retention_time=12.85)]
+    timed = S.breaks_inside_peaks_timed(peaks, [12.70, 12.85])
+    assert timed == [(12.85, S.breaks_inside_peaks(peaks, [12.85])[0])]
+
+
+def test_baseline_break_times_resolves_anchors():
+    w = {'id': 'w1', 'start': 2.0, 'end': 4.0}
+    p = params_of([w], [{'time': 1.0, 'overrides': {}},
+                        {'time': 9.0, 'anchor': {'window_id': 'w1', 'edge': 'start'}, 'overrides': {}},
+                        {'time': 3.0, 'overrides': {}}])
+    assert S.baseline_break_times(p) == [1.0, 2.0, 3.0]
+    assert S.baseline_break_times(params_of()) == []
+
+
+def test_warnings_by_segment_uses_window_at_rule():
+    windows = [{'id': 'w1', 'start': 1.0, 'end': 4.0}, {'id': 'w2', 'start': 4.0, 'end': 6.0}]
+    timed = [(2.0, 'a'), (4.0, 'b'), (1.0, 'c'), (9.0, 'd'), (0.5, 'e')]
+    assert S.warnings_by_segment(windows, timed) == {'w1': ['a', 'c'], 'w2': ['b'], '': ['d', 'e']}
+    assert S.warnings_by_segment([], [(2.0, 'a')]) == {'': ['a']}
+
+
 def test_v1_method_view_is_whole_run_only():
     p = ChromaMethod.model_validate({
         'name': 'tcd', 'version': '1', 'signal_type': 'gc',

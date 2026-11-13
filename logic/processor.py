@@ -43,8 +43,9 @@ def _build_baseline_segments(x, ms_range, break_points, notes=None):
                       splitting. Each entry is either a float or a dict with
                       a 'time' key. Break points falling outside any fit=True
                       segment are silently dropped (warning logged).
-        notes: Optional list; user-readable strings for dropped breaks and
-               demoted sections are appended to it.
+        notes: Optional list; ``(time, message)`` pairs for dropped breaks and
+               demoted sections are appended to it. The time is the one the
+               message names: the break, or the section's start.
 
     Returns:
         Ordered list of _BaselineSegment objects that tile [0, len(x))
@@ -136,7 +137,7 @@ def _build_baseline_segments(x, ms_range, break_points, notes=None):
                            "baseline, but its settings apply from the MS start", float(x[b]))
         if notes is not None:
             for b in post_ms:
-                notes.append(f"Break at {float(x[b]):.2f} min is outside the MS range; ignored")
+                notes.append((float(x[b]), f"Break at {float(x[b]):.2f} min is outside the MS range; ignored"))
         if post_ms:
             logger.warning("%d break point(s) dropped because they fall outside the MS-on region", len(post_ms))
 
@@ -149,7 +150,7 @@ def _build_baseline_segments(x, ms_range, break_points, notes=None):
             logger.warning("segment [%d:%d] is too short (%d < %d); demoting to fit=False", seg.start, seg.end, seg.end - seg.start, MIN_SEGMENT_LEN)
             if notes is not None:
                 t_a, t_b = float(x[seg.start]), float(x[min(seg.end, n - 1)])
-                notes.append(f"Baseline section {t_a:.2f}\u2013{t_b:.2f} min is too short to fit; left uncorrected")
+                notes.append((t_a, f"Baseline section {t_a:.2f}\u2013{t_b:.2f} min is too short to fit; left uncorrected"))
             final_segments.append(_BaselineSegment(start=seg.start, end=seg.end, fit=False))
         else:
             final_segments.append(seg)
@@ -462,7 +463,8 @@ class ChromatogramProcessor:
             'peak_windows': windows,
             'outside_windows': outside,
             'rider': dict(params['rider']) if params.get('rider') else None,
-            'baseline_notes': baseline_notes,
+            'baseline_notes': [msg for _, msg in baseline_notes],
+            'baseline_note_times': [t for t, _ in baseline_notes],  # the time each note names
         }
     
     def _detect_all(self, x, corrected_y, smoothed_y, params, ms_range,
@@ -712,7 +714,7 @@ class ChromatogramProcessor:
                 latest break at or before the segment start (break_points must
                 then be resolved break dicts, see logic.windows). A segment
                 whose merged ``enabled`` is False gets a zero baseline.
-            notes: Optional list collecting user-readable baseline notes
+            notes: Optional list collecting ``(time, message)`` baseline notes
                 (see _build_baseline_segments).
         
         Returns:

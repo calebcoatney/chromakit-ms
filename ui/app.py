@@ -36,7 +36,7 @@ import matplotlib
 
 # Import the data handler directly as a required dependency
 from logic.data_handler import DataHandler
-from logic.segments import segments_view
+from logic.segments import baseline_break_times, breaks_inside_peaks_timed, segments_view
 
 # Resolved from this file, not the working directory: in a frozen onedir build ui/app.py sits in
 # _internal/ui/, so this is _internal/resources/file.ico (bundled by packaging/windows/chromakit.spec).
@@ -231,6 +231,10 @@ class ChromaKitApp(QMainWindow):
         self.parameters_frame.load_method_requested.connect(self.load_method)
         self.parameters_frame.gcxgc_display_changed.connect(self._on_gcxgc_display_changed)
         self._open_segment_state = None   # the open segment's draft, as segment_state_changed last sent it
+        # Segment warnings as (time, message): the last processing's baseline notes, and the
+        # breaks inside peaks of the last Integrate (stale once processing reruns)
+        self._baseline_warnings = []
+        self._peak_warnings = []
         self.parameters_frame.segment_state_changed.connect(self._on_segment_state_changed)
         # Segment editing on the plot (shift-drag, right-click, edge drag, Esc)
         self.plot_frame.segment_span_requested.connect(self._on_segment_span_requested)
@@ -388,6 +392,7 @@ class ChromaKitApp(QMainWindow):
         self._loading_method = True
         try:
             self.parameters_frame.apply_method(self.current_method)
+            self._clear_segment_warnings()   # they described the previous method's processing
             if self._gcxgc_mode and self._gcxgc_run is not None:
                 # apply_method rebuilt the widgets: give them the run's file values back
                 self.parameters_frame.set_gcxgc_run_info(self._gcxgc_run)
@@ -1044,6 +1049,7 @@ class ChromaKitApp(QMainWindow):
             self.plot_frame.clear_peak_data()
             
             # Clear any stored peak data in the app
+            self._clear_segment_warnings()
             if hasattr(self, 'integrated_peaks'):
                 delattr(self, 'integrated_peaks')
             if hasattr(self, 'integration_results'):
@@ -2102,6 +2108,7 @@ class ChromaKitApp(QMainWindow):
         processing the earlier sample and exporting its peaks into whatever folder
         data_handler.current_directory_path still names."""
         self.current_processed = None
+        self._clear_segment_warnings()
         for name in ('integrated_peaks', 'integration_results'):
             if hasattr(self, name):
                 delattr(self, name)
@@ -2372,6 +2379,8 @@ class ChromaKitApp(QMainWindow):
         
         # Check if integration was successful
         if not integration_results:
+            self._peak_warnings = []       # no kept peaks for a break to fall inside
+            self._push_segment_warnings()
             self.status_bar.showMessage(self._no_peaks_reason(self.parameters_frame.get_parameters()))
             return
         
@@ -3133,6 +3142,10 @@ class ChromaKitApp(QMainWindow):
 
         # Always store for downstream use (integration, export)
         self.current_processed = processed
+        # New processing: fresh baseline notes; the peaks are stale until the next Integrate
+        self._baseline_warnings = list(zip(processed['baseline_note_times'], processed['baseline_notes']))
+        self._peak_warnings = []
+        self._push_segment_warnings()
 
         if not skip_render:
             # Update the chromatogram plot
@@ -3149,6 +3162,13 @@ class ChromaKitApp(QMainWindow):
 
         # Store the processed data for reference
         self.current_processed = processed
+
+    def _push_segment_warnings(self):
+        self.parameters_frame.set_segment_warnings(self._baseline_warnings + self._peak_warnings)
+
+    def _clear_segment_warnings(self):
+        self._baseline_warnings, self._peak_warnings = [], []
+        self._push_segment_warnings()
 
     def _on_segment_state_changed(self, state):
         self._open_segment_state = state
@@ -4318,6 +4338,9 @@ class ChromaKitApp(QMainWindow):
     def on_peaks_integrated(self, peaks):
         """Handle when peaks are integrated."""
         self.integrated_peaks = peaks
+        self._peak_warnings = breaks_inside_peaks_timed(
+            peaks, baseline_break_times(self.parameters_frame.get_parameters()))
+        self._push_segment_warnings()
 
         # Clear stale quantitation status — we're about to re-quantitate (or not)
         self.quantitation_frame.clear_status()
