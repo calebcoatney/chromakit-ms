@@ -360,3 +360,148 @@ def test_plot_edits_route_to_the_open_segment(qtbot):
     assert pf.segment_editor.record()['end'] == 11.0
     app.plot_frame.segment_escape.emit()
     assert pf.segment_editor is None
+
+
+# ── fix round 1 ───────────────────────────────────────────────────────────────
+
+def test_right_click_in_toolbar_mode_has_no_baseline_menu(qtbot, menus):
+    plot = _plot(qtbot)
+    plot.set_segment_overlay([], [], OPEN_W1)
+    seen = menus(CHANGE_TEXT)
+    plot.toolbar.pan()
+    try:
+        _mouse(plot, 'button_press_event', 5.2, button=3)
+        _mouse(plot, 'button_release_event', 5.2, button=3)
+    finally:
+        plot.toolbar.pan()
+    assert seen == []        # the toolbar keeps its right-drag (pan scale / zoom out)
+
+
+def test_peak_menu_in_toolbar_mode_is_unchanged(qtbot, menus):
+    plot = _plot(qtbot)
+    plot.integrated_peaks = [_peak(4.5)]
+    plot.set_segment_overlay([], [], OPEN_W1)
+    seen = menus(CHANGE_TEXT)
+    plot.toolbar.zoom()
+    try:
+        _mouse(plot, 'button_press_event', 4.52, button=3)
+    finally:
+        plot.toolbar.zoom()
+    assert len(seen) == 1 and CHANGE_TEXT not in seen[0]
+
+
+def test_edge_press_on_a_peak_with_wobble_selects_the_peak(qtbot, monkeypatch):
+    plot = _plot(qtbot)
+    plot.integrated_peaks = [_peak(6.0)]
+    plot.set_segment_overlay([], [], OPEN_W1)
+    moved = _record(plot.segment_edge_moved)
+    selected = []
+    monkeypatch.setattr(plot, '_highlight_selected_peak', selected.append)
+    px = _px(plot, 6.0)[0]
+    line = _edge_line(plot, 6.0)
+    _mouse(plot, 'button_press_event', 6.0)
+    _mouse(plot, 'motion_notify_event', 6.0, px_x=px + 1)
+    assert line.get_xdata()[0] == 6.0          # wobble does not move the edge
+    _mouse(plot, 'button_release_event', 6.0, px_x=px + 1)
+    assert moved == []
+    assert selected == [plot.integrated_peaks[0]]
+
+
+def test_edge_press_ignored_in_toolbar_mode(qtbot):
+    plot = _plot(qtbot)
+    plot.set_segment_overlay([], [], OPEN_W1)
+    moved = _record(plot.segment_edge_moved)
+    line = _edge_line(plot, 6.0)
+    plot.toolbar.pan()
+    try:
+        _drag(plot, 6.0, 7.0, shift=False)
+    finally:
+        plot.toolbar.pan()
+    assert moved == [] and line.get_xdata()[0] == 6.0
+
+
+def _ratio(monkeypatch, plot, ratio):
+    monkeypatch.setattr(type(plot.canvas), 'device_pixel_ratio', property(lambda self: ratio))
+
+
+def test_thresholds_scale_with_device_pixel_ratio(qtbot, monkeypatch):
+    plot = _plot(qtbot)
+    plot.set_segment_overlay([], [], OPEN_W1)
+    _ratio(monkeypatch, plot, 2)
+    spans = _record(plot.segment_span_requested)
+    moved = _record(plot.segment_edge_moved)
+
+    px = _px(plot, 10.0)[0]          # a 5 physical px shift-drag is 2.5 logical px: a click
+    _mouse(plot, 'button_press_event', 10.0, shift=True)
+    _mouse(plot, 'button_release_event', 10.0, shift=True, px_x=px + 5)
+    assert spans == []
+    _mouse(plot, 'button_press_event', 10.0, shift=True)
+    _mouse(plot, 'button_release_event', 10.0, shift=True, px_x=px + 7)
+    assert len(spans) == 1
+
+    edge_px = _px(plot, 6.0)[0]      # 10 physical px from the edge is 5 logical px: grabbed
+    _mouse(plot, 'button_press_event', 6.0, px_x=edge_px + 10)
+    _mouse(plot, 'button_release_event', 6.0, px_x=edge_px + 15)   # 5 physical px: still a click
+    assert moved == []
+    _mouse(plot, 'button_press_event', 6.0, px_x=edge_px + 10)
+    _mouse(plot, 'button_release_event', 6.0, px_x=edge_px + 40)
+    assert len(moved) == 1 and moved[0][0] == 'end'
+
+
+def test_edge_clamp_gap_scales_with_device_pixel_ratio(qtbot, monkeypatch):
+    plot = _plot(qtbot)
+    plot.set_segment_overlay([], [], OPEN_W1)
+    _ratio(monkeypatch, plot, 2)
+    moved = _record(plot.segment_edge_moved)
+    _drag(plot, 6.0, 1.0, shift=False)
+    assert _px(plot, moved[0][1])[0] - _px(plot, 3.0)[0] == pytest.approx(6.0, abs=0.01)
+
+
+def test_emitted_times_are_rounded_to_4_decimals(qtbot):
+    plot = _plot(qtbot)
+    spans = _record(plot.segment_span_requested)
+    _drag(plot, 8.01234567, 9.98765432)
+    start, end = spans[0]
+    assert start == round(start, 4) and end == round(end, 4) and start < end
+
+    plot.set_segment_overlay([], [], OPEN_W1)
+    moved = _record(plot.segment_edge_moved)
+    _drag(plot, 6.0, 7.01234567, shift=False)
+    (edge, t), = moved
+    assert t == round(t, 4)
+
+
+def test_round_past_keeps_strict_order():
+    from ui.frames.plot import PlotFrame
+    assert PlotFrame._round_past(3.00004, 3.00006, below=True) == 3.0
+    assert PlotFrame._round_past(3.00005, 3.00006, below=True) < 3.00006
+    assert PlotFrame._round_past(3.00007, 3.00006, below=False) > 3.00006
+    assert PlotFrame._round_past(5.00001, 5.0, below=False) == 5.0001
+
+
+def test_escape_during_shift_drag_removes_the_span(qtbot):
+    plot = _plot(qtbot)
+    spans = _record(plot.segment_span_requested)
+    _mouse(plot, 'button_press_event', 8.0, shift=True)
+    _mouse(plot, 'motion_notify_event', 10.0, shift=True)
+    assert [p for p in plot.chromatogram_ax.patches if getattr(p, 'segment_role', None) == 'drag_span']
+    _key(plot, 'escape')
+    assert not [p for p in plot.chromatogram_ax.patches if getattr(p, 'segment_role', None) == 'drag_span']
+    _mouse(plot, 'button_release_event', 10.0, shift=True)
+    assert spans == []
+
+
+def test_escape_during_edge_drag_restores_the_edge(qtbot):
+    plot = _plot(qtbot)
+    plot.set_segment_overlay([], [], OPEN_W1)
+    moved = _record(plot.segment_edge_moved)
+    escapes = _record(plot.segment_escape)
+    line = _edge_line(plot, 6.0)
+    _mouse(plot, 'button_press_event', 6.0)
+    _mouse(plot, 'motion_notify_event', 7.0)
+    assert line.get_xdata()[0] == pytest.approx(7.0, abs=0.05)
+    _key(plot, 'escape')
+    assert line.get_xdata()[0] == 6.0
+    assert escapes == [()]
+    _mouse(plot, 'button_release_event', 7.0)
+    assert moved == []

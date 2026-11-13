@@ -19,8 +19,9 @@ SEGMENT_BREAK_COLOR = '#7a4c00'
 SEGMENT_EXCLUDED_COLOR = '#999999'
 SEGMENT_FADED_ALPHA = 0.3
 SEGMENT_BAND_BOTTOM = 0.97   # bands fill the top 3 % of the axes; vertical lines stop below them
-SEGMENT_MIN_WIDTH_PX = 3     # a shift-drag narrower than this is a click; an edge drag keeps this gap
-SEGMENT_EDGE_GRAB_PX = 6     # a press this close to an open segment's edge drags that edge
+SEGMENT_MIN_WIDTH_PX = 3     # logical px: a shorter shift-drag or edge drag is a click; an edge keeps this gap
+SEGMENT_EDGE_GRAB_PX = 6     # logical px: a press this close to an open segment's edge drags that edge
+SEGMENT_TIME_DECIMALS = 4    # emitted span/edge times: 0.1 ms in minutes
 SEGMENT_DRAG_ALPHA = 0.2     # the temporary span shown during a shift-drag
 BASELINE_CHANGE_TEXT = "Change the baseline here"
 
@@ -732,8 +733,10 @@ class PlotFrame(QWidget):
 
         if not (self._is_right_button and event.inaxes == self.chromatogram_ax):
             return
-        # Inside the open segment, right-click offers a baseline change (on a peak: in its menu)
-        change_x = event.xdata if self._in_open_segment(event.xdata) else None
+        # Inside the open segment, right-click offers a baseline change (on a peak: in its menu).
+        # Not while pan/zoom is active: a modal menu would swallow the toolbar's right-drag.
+        change_x = (event.xdata if not self.toolbar.mode and self._in_open_segment(event.xdata)
+                    else None)
 
         # Only handle right-clicks on the chromatogram axis specifically
         if hasattr(self, 'integrated_peaks') and self.integrated_peaks:
@@ -868,6 +871,14 @@ class PlotFrame(QWidget):
         ax = self.chromatogram_ax
         return float(ax.transData.transform((x, ax.get_ylim()[0]))[0])
 
+    def _px(self, logical: float) -> float:
+        """Logical px in the physical px that matplotlib's Qt events and transforms use."""
+        return logical * self.canvas.device_pixel_ratio
+
+    def _dragged(self, drag, event) -> bool:
+        """True once the pointer is more than SEGMENT_MIN_WIDTH_PX from where the drag began."""
+        return abs(event.x - drag['px0']) > self._px(SEGMENT_MIN_WIDTH_PX)
+
     def _begin_segment_drag(self, event):
         """Start an edge drag (press near an open segment's edge) or a shift-drag span."""
         if event.inaxes is not self.chromatogram_ax or self.toolbar.mode:
@@ -878,7 +889,7 @@ class PlotFrame(QWidget):
             near = [(abs(event.x - self._x_px(t)), edge, t, other)
                     for edge, t, other in (('start', lo, hi), ('end', hi, lo))]
             dist, edge, t, other = min(near)
-            if dist <= SEGMENT_EDGE_GRAB_PX:
+            if dist <= self._px(SEGMENT_EDGE_GRAB_PX):
                 line = next((ln for ln in self._segment_artists
                              if getattr(ln, 'segment_role', None) == 'edge' and ln.get_xdata()[0] == t),
                             None)
@@ -894,11 +905,21 @@ class PlotFrame(QWidget):
         """The dragged edge's time, kept SEGMENT_MIN_WIDTH_PX short of the other edge."""
         ax = self.chromatogram_ax
         x0, x1 = ax.get_xlim()
-        min_gap = SEGMENT_MIN_WIDTH_PX * abs(x1 - x0) / ax.bbox.width
+        min_gap = self._px(SEGMENT_MIN_WIDTH_PX) * abs(x1 - x0) / ax.bbox.width
         x = self._data_x(event)
         if drag['edge'] == 'start':
             return min(x, drag['other'] - min_gap)
         return max(x, drag['other'] + min_gap)
+
+    @staticmethod
+    def _round_past(x: float, other: float, below: bool) -> float:
+        """x rounded to SEGMENT_TIME_DECIMALS, then stepped until it stays strictly below
+        (or above) ``other``; only needed when zoomed in past the rounding step."""
+        step = 10.0 ** -SEGMENT_TIME_DECIMALS
+        x = round(x, SEGMENT_TIME_DECIMALS)
+        while (x >= other) if below else (x <= other):
+            x = round(x - step if below else x + step, SEGMENT_TIME_DECIMALS)
+        return x
 
     def _on_motion(self, event):
         if self._span_drag is None and self._edge_drag is None:
@@ -915,6 +936,8 @@ class PlotFrame(QWidget):
                 self.chromatogram_ax.add_artist(drag['patch'])   # leaves the data limits alone
             drag['patch'].set_width(x - drag['x0'])
         else:
+            if not self._dragged(self._edge_drag, event):
+                return   # a press with a little wobble is still a click (it may select a peak)
             x = self._edge_drag_x(self._edge_drag, event)
             self._edge_drag['line'].set_xdata([x, x])
         self.canvas.draw_idle()
@@ -923,12 +946,14 @@ class PlotFrame(QWidget):
         """End a drag on release; True if it emitted (so the release is not also a click)."""
         span, edge = self._span_drag, self._edge_drag
         self._cancel_segment_drag()
-        if span is not None and abs(event.x - span['px0']) > SEGMENT_MIN_WIDTH_PX:
+        if span is not None and self._dragged(span, event):
             x1 = self._data_x(event)
-            self.segment_span_requested.emit(min(span['x0'], x1), max(span['x0'], x1))
+            lo = round(min(span['x0'], x1), SEGMENT_TIME_DECIMALS)
+            self.segment_span_requested.emit(lo, self._round_past(max(span['x0'], x1), lo, below=False))
             return True
-        if edge is not None and event.x != edge['px0']:
-            x = self._edge_drag_x(edge, event)
+        if edge is not None and self._dragged(edge, event):
+            x = self._round_past(self._edge_drag_x(edge, event), edge['other'],
+                                 below=edge['edge'] == 'start')
             edge['line'].set_xdata([x, x])   # stays put until the editor's preview redraws it
             self.segment_edge_moved.emit(edge['edge'], x)
             return True
