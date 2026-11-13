@@ -130,6 +130,7 @@ class SegmentsPanel(QGroupBox):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.cellClicked.connect(lambda row, _col: self.open_requested.emit(self._row_id(row)))
+        self.table.cellActivated.connect(lambda row, _col: self.open_requested.emit(self._row_id(row)))
         self.table.itemSelectionChanged.connect(self._update_delete)
         layout.addWidget(self.table)
 
@@ -308,6 +309,7 @@ class _PartwayTable(QFrame):
         row.delete_requested.connect(lambda: self._delete(row))
         self.rows.append(row)
         self._rows_layout.addWidget(row)
+        return row
 
     def _delete(self, row):
         self.rows.remove(row)
@@ -331,6 +333,7 @@ class SegmentEditor(QFrame):
     preview_changed = Signal(dict)      # current record
     save_requested = Signal(dict)
     cancel_requested = Signal()
+    delete_requested = Signal(str)      # segment id; never for a new (unsaved) segment
 
     def __init__(self, record: dict, inherited: dict, resume: dict, deconvolution: bool,
                  is_new: bool, parent=None):
@@ -341,6 +344,10 @@ class SegmentEditor(QFrame):
         self._is_new = is_new
         self._after = copy.deepcopy(record.get('after') or {'mode': 'none', 'overrides': {}})
         self._committed_label = record.get('label', '')
+        # apply_segment writes 'none' as 'resume' when the segment gains its first fresh
+        # start or partway row, so 'none' is kept only if the stored segment had either
+        self._had_baseline = not is_new and bool(record.get('fresh_baseline') or record.get('partway'))
+        self._had_errors = False  # error state at the last check; clearing it previews
         self.setObjectName('segmentEditor')
         self.setStyleSheet('QFrame#segmentEditor { border: 2px solid #1f6feb; border-radius: 4px; }')
 
@@ -353,7 +360,11 @@ class SegmentEditor(QFrame):
         self.save_button.clicked.connect(self._on_save)
         self.cancel_button = QPushButton('Cancel')
         self.cancel_button.clicked.connect(self.cancel_requested.emit)
+        self.delete_button = QPushButton('Delete segment')
+        self.delete_button.setHidden(is_new)
+        self.delete_button.clicked.connect(lambda: self.delete_requested.emit(self._base['id']))
         header.addWidget(self.title_label, 1)
+        header.addWidget(self.delete_button)
         header.addWidget(self.save_button)
         header.addWidget(self.cancel_button)
         layout.addLayout(header)
@@ -411,7 +422,17 @@ class SegmentEditor(QFrame):
         self._refresh_baseline()
         for section, group in self.groups.items():
             group.changed.connect(self._on_baseline_changed if section == 'baseline' else self._preview)
+        self._watch_edits(self)
         self._last_valid = self._build()
+
+    def _watch_edits(self, widget):
+        """Check errors after every text edit (connected after the fields' own handlers).
+
+        Bad text can be cleared without changing any value (retyping the old From, or
+        blanking an inheriting field), so no field emits; this catches that case.
+        """
+        for edit in widget.findChildren(QLineEdit):
+            edit.editingFinished.connect(self._on_any_edit_finished)
 
     def _build_baseline_extras(self, record):
         group = self.groups['baseline']
@@ -468,12 +489,17 @@ class SegmentEditor(QFrame):
             f.setEnabled(fresh)
         self.partway.set_inherited(self._segment_baseline())
         end = self.to_edit.value()
-        if self._after['mode'] == 'custom':
+        mode = self._after['mode']
+        carries_on = (mode == 'none' and self._had_baseline
+                      and (fresh or bool(self.partway.rows)))  # no end break: R11
+        if mode == 'custom':
             summary = summarize({'baseline': self._after.get('overrides') or {}})
             self.after_label.setText(f"After {end:g}: custom ({summary})")
+        elif carries_on:
+            self.after_label.setText(f"After {end:g} this segment's baseline carries on")
         else:
             self.after_label.setText(f"After {end:g} the whole-run baseline takes over again.")
-        self.after_reset.setHidden(self._after['mode'] != 'custom')
+        self.after_reset.setHidden(not (mode == 'custom' or carries_on))
         n = (len(group.values()) if fresh else 0) + len(self.partway.rows)
         group.count_label.setText('same as whole run' if n == 0
                                   else ('1 change' if n == 1 else f"{n} changes"))
@@ -481,8 +507,19 @@ class SegmentEditor(QFrame):
     # ── user edits ──
 
     def _preview(self):
-        if not self.has_errors():
-            self.preview_changed.emit(self.record())
+        """Emit the record after a committed change; held while any field has bad text."""
+        self._had_errors = self.has_errors()
+        if self._had_errors:
+            return
+        if self.error_label.text() == SAVE_BLOCKED:
+            self.show_error(None)
+        self.preview_changed.emit(self.record())
+
+    def _on_any_edit_finished(self):
+        if self._had_errors and not self.has_errors():
+            self._preview()  # edits held while the error stood
+        else:
+            self._had_errors = self.has_errors()
 
     def _on_label_finished(self):
         if self.label_edit.text() != self._committed_label:
@@ -535,7 +572,7 @@ class SegmentEditor(QFrame):
             'end': self.to_edit.value(),
             'fresh_baseline': fresh,
             'baseline': self._section('baseline') if fresh else {},
-            'partway': [row.record() for row in self.partway.rows],
+            'partway': sorted((row.record() for row in self.partway.rows), key=lambda r: r['time']),
             'after': copy.deepcopy(self._after),
         })
         for section, _title in GROUPS:
@@ -550,14 +587,15 @@ class SegmentEditor(QFrame):
 
     def set_span(self, start: float, end: float) -> None:
         """Move From/To (e.g. an edge dragged on the plot); one preview if anything moved."""
-        if (float(start), float(end)) == (self.from_edit.value(), self.to_edit.value()):
+        if ((float(start), float(end)) == (self.from_edit.value(), self.to_edit.value())
+                and not (self.from_edit.has_error() or self.to_edit.has_error())):
             return
         self.from_edit.set_value(start)
         self.to_edit.set_value(end)
         self._on_span_committed()
 
     def add_partway(self, time: float) -> None:
-        self.partway.add_row(float(time), {}, self._segment_baseline())
+        self._watch_edits(self.partway.add_row(float(time), {}, self._segment_baseline()))
         self.groups['baseline'].set_expanded(True)
         self._on_partway_changed()
 

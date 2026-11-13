@@ -130,7 +130,10 @@ def test_editor_roundtrips_spec_record(qtbot, spec):
     ed = make_editor(qtbot, p, rec)
     assert rec == before
     assert ed.record() == rec
-    S.apply_segment(p, ed.record())  # accepted as is
+    via_editor = S.apply_segment(p, ed.record())
+    via_view = S.apply_segment(p, S.segments_view(p)['segments'][0])
+    assert via_editor['peak_windows'] == via_view['peak_windows']
+    assert via_editor['baseline']['break_points'] == via_view['baseline']['break_points']
 
 
 def test_editor_no_preview_during_construction(qtbot, spec, monkeypatch):
@@ -219,7 +222,8 @@ def test_editor_change_at_adds_midpoint_row(qtbot, spec):
     with qtbot.waitSignal(ed.preview_changed, timeout=500) as blocker:
         qtbot.mouseClick(ed.partway.add_button, Qt.LeftButton)
     assert ed.partway.add_button.text() == '+ Change at…'
-    assert blocker.args[0]['partway'][-1]['time'] == pytest.approx((12.55 + 13.10) / 2)
+    times = [r['time'] for r in blocker.args[0]['partway']]
+    assert times == [pytest.approx((12.55 + 13.10) / 2), 12.85]  # sorted by time
 
 
 def test_editor_partway_time_edit_previews(qtbot, spec):
@@ -377,3 +381,97 @@ def test_editor_carries_keys_it_has_no_field_for(qtbot):
     type_into(ed.groups['rider'].fields['skim_height_ratio'].edit, '3')
     assert ed.record()['rider'] == {'skim_chain_min_tail': 0.2, 'skim_model': 'tangent',
                                     'skim_height_ratio': 3.0}
+
+
+def test_panel_enter_opens_row(qtbot, spec):
+    panel = make_panel(qtbot, spec[0])
+    with qtbot.waitSignal(panel.open_requested, timeout=500) as blocker:
+        panel.table.cellActivated.emit(1, 0)
+    assert blocker.args == ['w1']
+
+
+def test_editor_clearing_last_error_previews_held_edits(qtbot, spec):
+    """Reviewer repro: bad From, then an edit (held), then From fixed to its old value."""
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    with qtbot.assertNotEmitted(ed.preview_changed):
+        type_into(ed.from_edit, 'x')
+        type_into(ed.groups['peaks'].fields['min_prominence'].edit, '0.5')
+    with qtbot.waitSignal(ed.preview_changed, timeout=500) as blocker:
+        type_into(ed.from_edit, '12.55')
+    assert blocker.args[0]['peaks']['min_prominence'] == 0.5
+    assert blocker.args[0]['start'] == 12.55
+
+
+def test_editor_clearing_bad_text_in_inherited_field_previews(qtbot, spec):
+    """An inheriting field with bad text keeps value None, so clearing it changes no value."""
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    with qtbot.assertNotEmitted(ed.preview_changed):
+        type_into(ed.groups['peaks'].fields['min_height'].edit, 'abc')
+        type_into(ed.groups['peaks'].fields['min_width'].edit, '4')
+    seen = []
+    ed.preview_changed.connect(seen.append)
+    type_into(ed.groups['peaks'].fields['min_height'].edit, '')
+    assert len(seen) == 1 and seen[0]['peaks']['min_width'] == 4.0
+
+
+def test_editor_save_blocked_message_clears_with_errors(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    type_into(ed.to_edit, 'y')
+    qtbot.mouseClick(ed.save_button, Qt.LeftButton)
+    assert not ed.error_label.isHidden()
+    type_into(ed.to_edit, '13.1')
+    assert ed.error_label.isHidden()
+    # a host's message is not the editor's to clear
+    ed.show_error("Segment 'late cluster' overlaps segment 'x'")
+    type_into(ed.groups['peaks'].fields['min_height'].edit, '1')
+    assert not ed.error_label.isHidden()
+
+
+def test_editor_delete_segment_button(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    assert not ed.delete_button.isHidden() and ed.delete_button.text() == 'Delete segment'
+    with qtbot.waitSignal(ed.delete_requested, timeout=500) as blocker:
+        qtbot.mouseClick(ed.delete_button, Qt.LeftButton)
+    assert blocker.args == ['w1']
+    new = make_editor(qtbot, p, S.new_segment(p, 1.0, 2.0), is_new=True)
+    assert new.delete_button.isHidden()
+
+
+def test_editor_after_line_none_with_baseline_carries_on(qtbot):
+    """R11: a file whose fresh segment has no end break; its baseline runs past the end."""
+    p = params_of([{'id': 'w1', 'label': '', 'start': 5.0, 'end': 8.0}],
+                  [{'time': 5.0, 'overrides': {'lambda': 1e3}}])
+    rec = S.segments_view(p)['segments'][0]
+    assert rec['fresh_baseline'] and rec['after']['mode'] == 'none'
+    ed = make_editor(qtbot, p, rec, resume={})
+    assert ed.after_label.text() == "After 8 this segment's baseline carries on"
+    assert not ed.after_reset.isHidden()
+    assert ed.record() == rec
+    with qtbot.waitSignal(ed.preview_changed, timeout=500) as blocker:
+        qtbot.mouseClick(ed.after_reset, Qt.LeftButton)
+    assert blocker.args[0]['after'] == {'mode': 'resume', 'overrides': {}}
+    assert ed.after_label.text() == 'After 8 the whole-run baseline takes over again.'
+    assert ed.after_reset.isHidden()
+
+
+def test_editor_after_line_first_baseline_resumes(qtbot, spec):
+    """'none' on a segment gaining its first fresh start is written as 'resume' (apply_segment)."""
+    p, _rec = spec
+    new = S.new_segment(p, 1.0, 2.0)
+    ed = make_editor(qtbot, p, new, is_new=True)
+    ed.fresh_check.setChecked(True)
+    assert ed.after_label.text() == 'After 2 the whole-run baseline takes over again.'
+    assert ed.after_reset.isHidden()
+    ed.add_partway(1.5)
+    assert ed.after_label.text() == 'After 2 the whole-run baseline takes over again.'
+
+
+def test_editor_partway_sorted_by_time(qtbot, spec):
+    p, rec = spec
+    ed = make_editor(qtbot, p, rec)
+    ed.add_partway(12.6)
+    assert [r['time'] for r in ed.record()['partway']] == [12.6, 12.85]
