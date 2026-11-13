@@ -32,7 +32,7 @@ class _BaselineSegment:
     fit: bool
 
 
-def _build_baseline_segments(x, ms_range, break_points):
+def _build_baseline_segments(x, ms_range, break_points, notes=None):
     """Decide which slices of the FID get a pybaselines fit and which are masked.
 
     Args:
@@ -43,6 +43,8 @@ def _build_baseline_segments(x, ms_range, break_points):
                       splitting. Each entry is either a float or a dict with
                       a 'time' key. Break points falling outside any fit=True
                       segment are silently dropped (warning logged).
+        notes: Optional list; user-readable strings for dropped breaks and
+               demoted sections are appended to it.
 
     Returns:
         Ordered list of _BaselineSegment objects that tile [0, len(x))
@@ -132,6 +134,9 @@ def _build_baseline_segments(x, ms_range, break_points):
         for b in pre_ms:
             logger.warning("break at %.3f min is before the MS start; it doesn't split the "
                            "baseline, but its settings apply from the MS start", float(x[b]))
+        if notes is not None:
+            for b in post_ms:
+                notes.append(f"Break at {float(x[b]):.2f} min is outside the MS range; ignored")
         if post_ms:
             logger.warning("%d break point(s) dropped because they fall outside the MS-on region", len(post_ms))
 
@@ -142,6 +147,9 @@ def _build_baseline_segments(x, ms_range, break_points):
     for seg in segments:
         if seg.fit and (seg.end - seg.start) < MIN_SEGMENT_LEN:
             logger.warning("segment [%d:%d] is too short (%d < %d); demoting to fit=False", seg.start, seg.end, seg.end - seg.start, MIN_SEGMENT_LEN)
+            if notes is not None:
+                t_a, t_b = float(x[seg.start]), float(x[min(seg.end, n - 1)])
+                notes.append(f"Baseline section {t_a:.2f}\u2013{t_b:.2f} min is too short to fit; left uncorrected")
             final_segments.append(_BaselineSegment(start=seg.start, end=seg.end, fit=False))
         else:
             final_segments.append(seg)
@@ -406,6 +414,7 @@ class ChromatogramProcessor:
         resolved_breaks = resolve_break_points(windows, raw_breaks)
         any_section_enabled = any(
             (b.get('overrides') or {}).get('enabled') is True for b in resolved_breaks)
+        baseline_notes = []
         if params['baseline'].get('enabled', True) or any_section_enabled:
             # Pass ms_range so the baseline is not fit through the solvent peak
             # (the pre-MS region of the FID is masked with NaN).
@@ -418,6 +427,7 @@ class ChromatogramProcessor:
                 baseline_offset=params['baseline'].get('baseline_offset', 0.0),
                 ms_range=ms_range,
                 baseline_params=params['baseline'],
+                notes=baseline_notes,
             )
         else:
             baseline_y = np.zeros_like(smoothed_y)
@@ -452,6 +462,7 @@ class ChromatogramProcessor:
             'peak_windows': windows,
             'outside_windows': outside,
             'rider': dict(params['rider']) if params.get('rider') else None,
+            'baseline_notes': baseline_notes,
         }
     
     def _detect_all(self, x, corrected_y, smoothed_y, params, ms_range,
@@ -674,7 +685,7 @@ class ChromatogramProcessor:
             print(f"Smoothing failed: {str(e)}")
             return y
     
-    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0, ms_range=None, baseline_params=None):
+    def _apply_baseline_correction(self, x, y, method="asls", lam=1e6, fastchrom_params=None, break_points=None, baseline_offset=0.0, ms_range=None, baseline_params=None, notes=None):
         """Apply baseline correction using the specified method.
         
         Signal is split into segments based on:
@@ -701,6 +712,8 @@ class ChromatogramProcessor:
                 latest break at or before the segment start (break_points must
                 then be resolved break dicts, see logic.windows). A segment
                 whose merged ``enabled`` is False gets a zero baseline.
+            notes: Optional list collecting user-readable baseline notes
+                (see _build_baseline_segments).
         
         Returns:
             (baseline_y, corrected_y) — both full-length arrays matching len(y).
@@ -713,7 +726,7 @@ class ChromatogramProcessor:
         if x is None or len(x) == 0 or len(y) == 0:
             return self._apply_baseline_correction_single(y, method=method, lam=lam, fastchrom_params=fastchrom_params, baseline_offset=baseline_offset)
         
-        segments = _build_baseline_segments(x, ms_range, break_points)
+        segments = _build_baseline_segments(x, ms_range, break_points, notes=notes)
         
         if not segments:
             return np.zeros_like(y), np.copy(y)
