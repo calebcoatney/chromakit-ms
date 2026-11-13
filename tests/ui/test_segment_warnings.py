@@ -133,3 +133,28 @@ def test_new_segment_editor_shows_warnings_inside_its_draft_span(qtbot):
     label = f.segment_editor.warning_label
     assert not label.isHidden()
     assert 'late note' in label.text() and 'mid note' not in label.text()
+
+
+# ── final fix wave #7: breaks the processor didn't use never warn inside a peak ─
+
+@pytest.mark.parametrize('break_time, ms_range', [
+    (5.03, (1.0, 5.02)),    # after the MS end: dropped
+    (4.97, (4.98, 9.0)),    # before the MS start: doesn't split the baseline
+])
+def test_unused_break_inside_peak_does_not_warn(qtbot, monkeypatch, tmp_path, break_time, ms_range):
+    app = _app(qtbot, monkeypatch, tmp_path, breaks=[{'time': break_time, 'overrides': {}}],
+               ms_range=ms_range)
+    app.on_integrate()
+    # Integration clips this synthetic peak to the MS range; a peak whose bounds reach past
+    # it (as other integration settings can give) is what put the break inside it
+    peak = app.integrated_peaks[0]
+    peak.start_time, peak.end_time = 4.8, 5.2
+    app.on_peaks_integrated(app.integrated_peaks)
+    assert 'falls inside the peak' not in _row(app, SEG_ROW)[1]
+    assert not any('falls inside the peak' in msg for _, msg in app._peak_warnings)
+
+
+def test_break_inside_ms_range_and_peak_still_warns(qtbot, monkeypatch, tmp_path):
+    app = _app(qtbot, monkeypatch, tmp_path, ms_range=(1.0, 9.0))
+    app.on_integrate()
+    assert 'Baseline change at 5 falls inside the peak' in _row(app, SEG_ROW)[1]

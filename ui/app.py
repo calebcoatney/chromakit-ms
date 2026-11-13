@@ -238,6 +238,7 @@ class ChromaKitApp(QMainWindow):
         # breaks inside peaks of the last Integrate (stale once processing reruns)
         self._baseline_warnings = []
         self._peak_warnings = []
+        self._baseline_ms_range = None    # the MS range the last processing used
         self.parameters_frame.segment_state_changed.connect(self._on_segment_state_changed)
         # Segment editing on the plot (shift-drag, right-click, edge drag, Esc)
         self.plot_frame.segment_span_requested.connect(self._on_segment_span_requested)
@@ -3170,6 +3171,7 @@ class ChromaKitApp(QMainWindow):
         self.current_processed = processed
         # New processing: fresh baseline notes; the peaks are stale until the next Integrate
         self._baseline_warnings = list(zip(processed['baseline_note_times'], processed['baseline_notes']))
+        self._baseline_ms_range = ms_range   # breaks outside it split no baseline (inside-peak check)
         self._peak_warnings = []
         self._push_segment_warnings()
 
@@ -4364,8 +4366,13 @@ class ChromaKitApp(QMainWindow):
     def on_peaks_integrated(self, peaks):
         """Handle when peaks are integrated."""
         self.integrated_peaks = peaks
-        self._peak_warnings = breaks_inside_peaks_timed(
-            peaks, baseline_break_times(self.parameters_frame.get_parameters()))
+        times = baseline_break_times(self.parameters_frame.get_parameters())
+        ms_range = self._baseline_ms_range
+        if ms_range is not None:
+            # As _build_baseline_segments uses them: a break at or before the MS start doesn't
+            # split the baseline and one after the MS end is dropped, so neither splits a peak
+            times = [t for t in times if ms_range[0] < t <= ms_range[1]]
+        self._peak_warnings = breaks_inside_peaks_timed(peaks, times)
         self._push_segment_warnings()
 
         # Clear stale quantitation status — we're about to re-quantitate (or not)
