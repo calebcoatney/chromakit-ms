@@ -15,7 +15,13 @@ kept (they are stored outside the app folder).
 **Problems:** the log is at `%LOCALAPPDATA%\ChromaKit\logs\chromakit.log`. Running
 `ChromaKit.exe --self-test "%TEMP%\ck"` writes a check to `%TEMP%\ck\self-test.txt`.
 
-**Changes for existing users:**
+**Changes in 0.2.4:**
+- The ⓘ help icons beside section titles no longer cover the end of the title on macOS.
+- Changing a setting before opening a file no longer prints errors to the terminal.
+- For copies run from a source folder, **Update available** now also shows the reinstall command to run
+  after `git pull`. Without it, a copy installed before 0.2.0 can't run the update check.
+
+**Changes in 0.2.3** (if you are updating from 0.2.2 or earlier):
 - **Save Method always asks where to save.** The dialog opens on the loaded method file, so saving over
   it is still one click, but it is never silent. The method takes the name of the file you save to.
   Before, Save wrote over the loaded file without asking, which could change a shared method.
