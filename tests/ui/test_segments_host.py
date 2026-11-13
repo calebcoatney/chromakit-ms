@@ -311,13 +311,15 @@ def test_whole_run_break_table_lists_only_outside_breaks(qtbot):
     table = f.break_point_table
     assert table.rowCount() == 1
     assert table.cellWidget(0, 0).value() == 20.0
-    owned = copy.deepcopy(SPEC_BREAKS)
+    owned = [bp for bp in copy.deepcopy(f.current_params['baseline']['break_points'])
+             if bp['time'] != 20.0]
+    assert len(owned) == 3
     with qtbot.waitSignal(f.parameters_changed, timeout=500):
         table.cellWidget(0, 0).setValue(21.0)
     bps = f.current_params['baseline']['break_points']
     whole = [bp for bp in bps if bp['time'] == 21.0]
     assert whole and whole[0]['overrides']['lambda'] == 55.0 and whole[0]['tolerance'] == 0.2
-    assert [bp['time'] for bp in bps if bp['time'] != 21.0] == [b['time'] for b in owned]
+    assert [bp for bp in bps if bp['time'] != 21.0] == owned
 
 
 def test_whole_run_break_inside_segment_rejected(qtbot):
@@ -438,3 +440,30 @@ def test_whole_run_row_summary_follows_whole_run_edits(qtbot):
     assert 'λ 10000' in cell()
     f.lam_spinbox.setValue(6)
     assert 'λ 1e+06' in cell()
+
+
+def test_range_filters_without_windows_warn(qtbot, caplog):
+    m = ChromaMethod(name='t', signal_type='gc')
+    m.peaks.range_filters = [[1.0, 2.0]]  # no file load gives this: _migrate_v1 builds windows
+    f = ParametersFrame()
+    qtbot.addWidget(f)
+    with caplog.at_level('WARNING', logger='ui.frames.parameters'):
+        f.apply_method(m)
+    assert 'range_filters' in caplog.text and 'no peak_windows' in caplog.text
+
+
+def test_panel_refreshes_once_per_segment_change(qtbot, monkeypatch):
+    f = _frame(qtbot, [W1, W2])
+    calls = []
+    real = f.segments_panel.set_view
+    monkeypatch.setattr(f.segments_panel, 'set_view', lambda *a: (calls.append(1), real(*a)))
+    f.open_segment('w1')
+    f.segment_set_edge('end', 5.0)
+    assert len(calls) == 1
+    f.commit_open_segment()
+    assert len(calls) == 2
+    f.segments_panel.delete_requested.emit('w2')
+    assert len(calls) == 3
+    combo = f.segments_panel.outside_combo
+    combo.setCurrentIndex(combo.findData('global'))
+    assert len(calls) == 4

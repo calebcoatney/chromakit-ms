@@ -204,7 +204,8 @@ class ParametersFrame(QWidget):
         self._segment_hidden = {}      # setting group key -> isHidden() before it opened
         self._segment_warnings = {}    # segment id -> warning lines
         self._whole_run_breaks = []    # whole-run break dicts in table row order
-        # The Whole run row summarises whole-run values; any edit may change them
+        # The one place the Segments table refreshes: every change emits parameters_changed
+        # (the Whole run row summarises whole-run values, so any edit may change it)
         self.parameters_changed.connect(lambda _params: self._refresh_segments_panel())
         
         # Create main layout
@@ -1017,6 +1018,13 @@ class ParametersFrame(QWidget):
         return ' · '.join(parts)
 
     def _refresh_segments_panel(self):
+        peaks = self.current_params.get('peaks') or {}
+        if peaks.get('range_filters') and not self.current_params.get('peak_windows'):
+            # ChromaMethod always turns range_filters into windows; params like these were
+            # built some other way, and the first segment edit rewrites the mirror from windows
+            logger.warning("Parameters have peaks.range_filters %s but no peak_windows; the "
+                           "Segments table shows no segments and a segment edit drops them",
+                           peaks['range_filters'])
         view = segments_view(self.current_params)
         self.segments_panel.set_view(view, self._whole_run_summary(view),
                                      self.current_params.get('outside_windows', 'ignore'))
@@ -1024,8 +1032,8 @@ class ParametersFrame(QWidget):
             self.segments_panel.set_row_warning(sid, '\n'.join(lines))
 
     def _after_segment_change(self):
-        """Redraw what shows the segments and whole-run breaks after current_params changed."""
-        self._refresh_segments_panel()
+        """Redraw the whole-run breaks after a segment change (the Segments table follows
+        parameters_changed)."""
         self._rebuild_break_point_rows()
         self._update_overrides_note()
 
@@ -1141,6 +1149,8 @@ class ParametersFrame(QWidget):
         self._after_segment_change()
         if emit:
             self.parameters_changed.emit(self.current_params)
+        else:
+            self._refresh_segments_panel()
 
     def _require_editor(self):
         if self.segment_editor is None:
@@ -1193,7 +1203,6 @@ class ParametersFrame(QWidget):
     def _on_outside_changed(self, mode):
         self.current_params['outside_windows'] = mode
         self._sync_range_filter_mirror()
-        self._refresh_segments_panel()
         self.parameters_changed.emit(self.current_params)
 
     def _make_overrides_note(self):
@@ -1452,7 +1461,6 @@ class ParametersFrame(QWidget):
             return
         self.current_params = params
         self._whole_run_breaks = bps
-        self._refresh_segments_panel()
         self.parameters_changed.emit(self.current_params)
 
     @staticmethod
