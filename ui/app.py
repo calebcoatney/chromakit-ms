@@ -36,6 +36,7 @@ import matplotlib
 
 # Import the data handler directly as a required dependency
 from logic.data_handler import DataHandler
+from logic.segments import segments_view
 
 # Resolved from this file, not the working directory: in a frozen onedir build ui/app.py sits in
 # _internal/ui/, so this is _internal/resources/file.ico (bundled by packaging/windows/chromakit.spec).
@@ -229,6 +230,8 @@ class ChromaKitApp(QMainWindow):
         self.parameters_frame.save_method_requested.connect(self.save_method)
         self.parameters_frame.load_method_requested.connect(self.load_method)
         self.parameters_frame.gcxgc_display_changed.connect(self._on_gcxgc_display_changed)
+        self._open_segment_state = None   # the open segment's draft, as segment_state_changed last sent it
+        self.parameters_frame.segment_state_changed.connect(self._on_segment_state_changed)
         
         # Connect button frame signals
         self.button_frame.export_clicked.connect(self.on_export)
@@ -3134,11 +3137,25 @@ class ChromaKitApp(QMainWindow):
                 new_file=new_file
             )
 
+            self._refresh_segment_overlay()
+
             # Force a repaint
             self.plot_frame.canvas.draw_idle()
 
         # Store the processed data for reference
         self.current_processed = processed
+
+    def _on_segment_state_changed(self, state):
+        self._open_segment_state = state
+        self._refresh_segment_overlay()
+
+    def _refresh_segment_overlay(self):
+        """Hand the plot the method's segments, its whole-run breaks and the open segment."""
+        params = self.parameters_frame.current_params
+        self.plot_frame.set_segment_overlay(
+            params.get('peak_windows') or [],
+            [float(bp['time']) for bp in segments_view(params)['whole_run_breaks']],
+            self._open_segment_state)
 
     def _apply_peak_splitting(self, processed, params):
         """Run the peak splitting pipeline and inject results into processed data.
