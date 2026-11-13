@@ -151,10 +151,10 @@ def test_load_and_resave_peak_ranges_and_grouping(qtbot, tmp_path, monkeypatch):
     app.load_method()
 
     parameters = app.parameters_frame
-    assert parameters.range_filter_table.rowCount() == 2
+    segments = parameters.segments_panel.table
+    assert segments.rowCount() == 3  # Whole run + 2 segments
     assert parameters.peak_group_table.rowCount() == 1
-    assert parameters.range_filter_table.cellWidget(1, 0).value() == 3.5
-    assert parameters.range_filter_table.cellWidget(1, 1).value() == 4.75
+    assert (segments.item(2, 1).text(), segments.item(2, 2).text()) == ('3.5', '4.75')
     assert parameters.peak_group_table.cellWidget(0, 0).value() == 5.0
     assert parameters.peak_group_table.cellWidget(0, 1).value() == 6.0
 

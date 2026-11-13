@@ -13,7 +13,7 @@ PARAMETER_SECTIONS = [
     ('peaks', 'Peak Detection'),
     ('negative_peaks', 'Negative Peak Detection'),
     ('shoulders', 'Shoulder Detection'),
-    ('range_filters', 'Peak Range Filters'),
+    ('segments', 'Segments'),
     ('peak_grouping', 'Peak Grouping'),
 ]
 

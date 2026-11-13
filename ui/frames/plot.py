@@ -7,6 +7,39 @@ from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
     NavigationToolbar2QT as NavigationToolbar
 )
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
+from matplotlib.text import Text
+
+# Segment overlay (design 2026-11-12 §4.3). Its zorders sit above the integration
+# shading (fill_between, zorder 1) and below the peak annotations (text, zorder 3).
+SEGMENT_BAND_COLOR = '#3b7ddd'
+SEGMENT_GREY_COLOR = '#888888'
+SEGMENT_BREAK_COLOR = '#7a4c00'
+SEGMENT_EXCLUDED_COLOR = '#999999'
+SEGMENT_FADED_ALPHA = 0.3
+SEGMENT_BAND_BOTTOM = 0.97   # bands fill the top 3 % of the axes; vertical lines stop below them
+SEGMENT_MIN_WIDTH_PX = 3     # logical px: a shorter shift-drag or edge drag is a click; an edge keeps this gap
+SEGMENT_EDGE_GRAB_PX = 6     # logical px: a press this close to an open segment's edge drags that edge
+SEGMENT_TIME_DECIMALS = 4    # emitted span/edge times: 0.1 ms in minutes
+SEGMENT_DRAG_ALPHA = 0.2     # the temporary span shown during a shift-drag
+BASELINE_CHANGE_TEXT = "Change the baseline here"
+
+
+class _BandLabel(Text):
+    """A segment band's label, drawn only while it fits inside its band at the current zoom."""
+
+    def __init__(self, span, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.span = span
+
+    def fits(self, renderer) -> bool:
+        px = self.axes.transData.transform([(self.span[0], 0), (self.span[1], 0)])[:, 0]
+        return self.get_window_extent(renderer).width + 6 <= abs(px[1] - px[0])
+
+    def draw(self, renderer):
+        if self.get_visible() and self.fits(renderer):
+            super().draw(renderer)
 
 class PlotFrame(QWidget):
     """Frame for displaying chromatogram and TIC plots."""
@@ -34,6 +67,12 @@ class PlotFrame(QWidget):
     
     # Signal for adding peaks to RT table
     add_to_rt_table_requested = Signal(int)  # Peak index for adding to RT table
+
+    # Segment editing on the chromatogram (design 2026-11-12 §4.3); app routes them to ParametersFrame
+    segment_span_requested = Signal(float, float)   # shift-drag; start < end in data units
+    baseline_change_requested = Signal(float)       # right-click inside the open segment
+    segment_edge_moved = Signal(str, float)         # 'start' | 'end', new time, on release
+    segment_escape = Signal()                       # Esc on the canvas with a segment open
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,6 +96,7 @@ class PlotFrame(QWidget):
         # Add figure to canvas
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setFocusPolicy(Qt.FocusPolicy.ClickFocus)   # key_press_event (Esc) needs focus
         
         # Add toolbar
         self.toolbar = NavigationToolbar(self.canvas, self)
@@ -77,9 +117,22 @@ class PlotFrame(QWidget):
         # Replace existing mouse click connection with new connections
         self.canvas.mpl_connect('button_press_event', self._on_plot_click)
         self.canvas.mpl_connect('button_release_event', self._on_button_release)
+        self.canvas.mpl_connect('motion_notify_event', self._on_motion)
+        self.canvas.mpl_connect('key_press_event', self._on_key_press)
         
         # GCxGC mode state
         self._gcxgc_peaks: list = []
+
+        # Segment overlay (set_segment_overlay); redrawn after every plot_chromatogram
+        self._segment_artists: list = []
+        self._segment_windows: list = []
+        self._segment_break_times: list = []
+        self._open_segment = None
+        self._segment_fit_key = None      # (id, start, end) the y-axis was last fitted to
+        self._segment_saved_ylim = None   # the ylim to restore when the segment closes
+        self._displayed_trace = None      # (x, trace, baseline) as plot_chromatogram shows them
+        self._span_drag = None            # shift-drag in progress: {'x0', 'px0', 'patch'}
+        self._edge_drag = None            # edge drag in progress: {'edge', 'other', 'orig', 'line', 'px0'}
         
         # Track click information
         self._click_time = 0
@@ -336,6 +389,7 @@ class PlotFrame(QWidget):
         
         # Plot the main chromatogram
         self.chromatogram_ax.plot(x, main_y, 'b-', linewidth=1, label='Chromatogram')
+        self._displayed_trace = (np.asarray(x), np.asarray(main_y), np.asarray(baseline_to_show))
         
         # Plot baseline
         self.chromatogram_ax.plot(x, baseline_to_show, 'r--', linewidth=1, alpha=0.7, label='Baseline')
@@ -355,18 +409,21 @@ class PlotFrame(QWidget):
                         # When showing uncorrected view, add baseline height to marker position
                         marker_y += data['baseline_y'][idx]
                 
+                marker_line = None
                 if meta['type'] == 'peak':
-                    self.chromatogram_ax.plot(marker_x, marker_y, marker='*', color='orange',
+                    marker_line, = self.chromatogram_ax.plot(marker_x, marker_y, marker='*', color='orange',
                                          markersize=8, alpha=0.9,
                                          label='Peak' if 'Peak' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
                 elif meta['type'] == 'shoulder':
-                    self.chromatogram_ax.plot(marker_x, marker_y, marker='^', color='red',
+                    marker_line, = self.chromatogram_ax.plot(marker_x, marker_y, marker='^', color='red',
                                          markersize=8, alpha=0.9,
                                          label='Shoulder' if 'Shoulder' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
                 elif meta['type'] == 'negative_peak':
-                    self.chromatogram_ax.plot(marker_x, marker_y, marker='v', color='cyan',
+                    marker_line, = self.chromatogram_ax.plot(marker_x, marker_y, marker='v', color='cyan',
                                          markersize=8, alpha=0.9,
                                          label='Neg. Peak' if 'Neg. Peak' not in self.chromatogram_ax.get_legend_handles_labels()[1] else None)
+                if marker_line is not None:
+                    marker_line.peak_x = marker_x   # the segment overlay fades by apex
         
         # Draw peak splitting component curves from pipeline
         if fitted_curves:
@@ -422,6 +479,10 @@ class PlotFrame(QWidget):
         # or if previous limits weren't set
         refit_view = new_file or mode_changed or previous_xlim is None or previous_ylim is None
         if refit_view:
+            # The full view below replaces the one saved when the segment opened;
+            # the overlay saves this one instead and fits the open segment again.
+            self._segment_fit_key = None
+            self._segment_saved_ylim = None
             if len(x) > 0 and len(main_y) > 0:
                 x_min, x_max = np.min(x), np.max(x)
                 x_padding = (x_max - x_min) * 0.02  # 2% padding
@@ -479,6 +540,8 @@ class PlotFrame(QWidget):
             # Restore previous view limits for parameter changes
             self.chromatogram_ax.set_xlim(previous_xlim)
             self.chromatogram_ax.set_ylim(previous_ylim)
+
+        self._draw_segment_overlay()
         
         # Before returning, apply theme if available
         if colors:
@@ -662,9 +725,21 @@ class PlotFrame(QWidget):
         self._click_time = time.time()
         self._last_click_x = event.xdata
         self._is_right_button = event.button == 3  # Right button is 3 in matplotlib
-        
+
+        # Shift-drag (new segment) or a press on the open segment's edge; a press that
+        # never becomes a drag still ends as the plain click recorded above.
+        if event.button == 1:
+            self._begin_segment_drag(event)
+
+        if not (self._is_right_button and event.inaxes == self.chromatogram_ax):
+            return
+        # Inside the open segment, right-click offers a baseline change (on a peak: in its menu).
+        # Not while pan/zoom is active: a modal menu would swallow the toolbar's right-drag.
+        change_x = (round(event.xdata, SEGMENT_TIME_DECIMALS)
+                    if not self.toolbar.mode and self._in_open_segment(event.xdata) else None)
+
         # Only handle right-clicks on the chromatogram axis specifically
-        if self._is_right_button and event.inaxes == self.chromatogram_ax and hasattr(self, 'integrated_peaks') and self.integrated_peaks:
+        if hasattr(self, 'integrated_peaks') and self.integrated_peaks:
             # Check if the click is near any integrated peak
             found_peak = False
             
@@ -677,7 +752,7 @@ class PlotFrame(QWidget):
                 
                 if (bound_lo <= event.xdata <= bound_hi) or distance < abs(bound_hi - bound_lo) * 0.1:
                     found_peak = True
-                    self._show_peak_context_menu(i, event)
+                    self._show_peak_context_menu(i, event, baseline_change_x=change_x)
                     
                     self._last_click_x = None
                     self._is_right_button = False
@@ -687,9 +762,18 @@ class PlotFrame(QWidget):
             # letting the regular right-click behavior proceed
             if found_peak:
                 return
+
+        if change_x is not None:
+            self._show_baseline_change_menu(change_x)
+            self._last_click_x = None
+            self._is_right_button = False
     
     def _on_button_release(self, event):
         """Handle mouse button release on the plot."""
+        if self._finish_segment_drag(event):
+            self._last_click_x = None
+            self._is_right_button = False
+            return
         if event.inaxes is None or self._last_click_x is None:
             return
             
@@ -769,6 +853,136 @@ class PlotFrame(QWidget):
         # Reset click tracking
         self._last_click_x = None
         self._is_right_button = False
+
+    # ── segment editing gestures ─────────────────────────────────────────────
+
+    def _in_open_segment(self, x) -> bool:
+        seg = self._open_segment
+        if seg is None or x is None:
+            return False
+        lo, hi = sorted((float(seg['start']), float(seg['end'])))
+        return lo <= x <= hi
+
+    def _data_x(self, event) -> float:
+        """The chromatogram x under the mouse, also when the mouse has left the axes."""
+        return float(self.chromatogram_ax.transData.inverted().transform((event.x, event.y))[0])
+
+    def _x_px(self, x) -> float:
+        ax = self.chromatogram_ax
+        return float(ax.transData.transform((x, ax.get_ylim()[0]))[0])
+
+    def _px(self, logical: float) -> float:
+        """Logical px in the physical px that matplotlib's Qt events and transforms use."""
+        return logical * self.canvas.device_pixel_ratio
+
+    def _dragged(self, drag, event) -> bool:
+        """True once the pointer is more than SEGMENT_MIN_WIDTH_PX from where the drag began."""
+        return abs(event.x - drag['px0']) > self._px(SEGMENT_MIN_WIDTH_PX)
+
+    def _begin_segment_drag(self, event):
+        """Start an edge drag (press near an open segment's edge) or a shift-drag span."""
+        if event.inaxes is not self.chromatogram_ax or self.toolbar.mode:
+            return
+        seg = self._open_segment
+        if seg is not None:
+            lo, hi = sorted((float(seg['start']), float(seg['end'])))
+            near = [(abs(event.x - self._x_px(t)), edge, t, other)
+                    for edge, t, other in (('start', lo, hi), ('end', hi, lo))]
+            dist, edge, t, other = min(near)
+            if dist <= self._px(SEGMENT_EDGE_GRAB_PX):
+                line = next((ln for ln in self._segment_artists
+                             if getattr(ln, 'segment_role', None) == 'edge' and ln.get_xdata()[0] == t),
+                            None)
+                if line is None:
+                    raise RuntimeError(f"Open segment {seg['id']!r} has no edge line at {t}")
+                self._edge_drag = {'edge': edge, 'other': other, 'orig': t, 'line': line,
+                                   'px0': event.x}
+                return
+        if 'shift' in (event.modifiers or ()):
+            self._span_drag = {'x0': float(event.xdata), 'px0': event.x, 'patch': None}
+
+    def _edge_drag_x(self, drag, event) -> float:
+        """The dragged edge's time, kept SEGMENT_MIN_WIDTH_PX short of the other edge."""
+        ax = self.chromatogram_ax
+        x0, x1 = ax.get_xlim()
+        min_gap = self._px(SEGMENT_MIN_WIDTH_PX) * abs(x1 - x0) / ax.bbox.width
+        x = self._data_x(event)
+        if drag['edge'] == 'start':
+            return min(x, drag['other'] - min_gap)
+        return max(x, drag['other'] + min_gap)
+
+    @staticmethod
+    def _round_past(x: float, other: float, below: bool) -> float:
+        """x rounded to SEGMENT_TIME_DECIMALS, then stepped until it stays strictly below
+        (or above) ``other``; only needed when zoomed in past the rounding step."""
+        step = 10.0 ** -SEGMENT_TIME_DECIMALS
+        x = round(x, SEGMENT_TIME_DECIMALS)
+        while (x >= other) if below else (x <= other):
+            x = round(x - step if below else x + step, SEGMENT_TIME_DECIMALS)
+        return x
+
+    def _on_motion(self, event):
+        if self._span_drag is None and self._edge_drag is None:
+            return
+        x = self._data_x(event)
+        if self._span_drag is not None:
+            drag = self._span_drag
+            if drag['patch'] is None:
+                drag['patch'] = Rectangle((drag['x0'], 0), 0, 1,
+                                          transform=self.chromatogram_ax.get_xaxis_transform(),
+                                          facecolor=SEGMENT_BAND_COLOR, edgecolor='none',
+                                          alpha=SEGMENT_DRAG_ALPHA, zorder=2.4)
+                drag['patch'].segment_role = 'drag_span'
+                self.chromatogram_ax.add_artist(drag['patch'])   # leaves the data limits alone
+            drag['patch'].set_width(x - drag['x0'])
+        else:
+            if not self._dragged(self._edge_drag, event):
+                return   # a press with a little wobble is still a click (it may select a peak)
+            x = self._edge_drag_x(self._edge_drag, event)
+            self._edge_drag['line'].set_xdata([x, x])
+        self.canvas.draw_idle()
+
+    def _finish_segment_drag(self, event) -> bool:
+        """End a drag on release; True if it emitted (so the release is not also a click)."""
+        span, edge = self._span_drag, self._edge_drag
+        self._cancel_segment_drag()
+        if span is not None and self._dragged(span, event):
+            x1 = self._data_x(event)
+            lo = round(min(span['x0'], x1), SEGMENT_TIME_DECIMALS)
+            self.segment_span_requested.emit(lo, self._round_past(max(span['x0'], x1), lo, below=False))
+            return True
+        if edge is not None and self._dragged(edge, event):
+            x = self._round_past(self._edge_drag_x(edge, event), edge['other'],
+                                 below=edge['edge'] == 'start')
+            edge['line'].set_xdata([x, x])   # stays put until the editor's preview redraws it
+            self.segment_edge_moved.emit(edge['edge'], x)
+            return True
+        return False
+
+    def _cancel_segment_drag(self):
+        """Drop a drag in progress: remove the temporary span, put a dragged edge back."""
+        if self._span_drag is not None and self._span_drag['patch'] is not None:
+            self._span_drag['patch'].remove()
+            self.canvas.draw_idle()
+        if self._edge_drag is not None:
+            orig = self._edge_drag['orig']
+            self._edge_drag['line'].set_xdata([orig, orig])
+            self.canvas.draw_idle()
+        self._span_drag = None
+        self._edge_drag = None
+
+    def _on_key_press(self, event):
+        if event.key != 'escape':
+            return
+        self._cancel_segment_drag()
+        if self._open_segment is not None:
+            self.segment_escape.emit()
+
+    def _show_baseline_change_menu(self, x):
+        menu = QMenu(self)
+        action = menu.addAction(BASELINE_CHANGE_TEXT)
+        if menu.exec(QCursor.pos()) is action:
+            self.baseline_change_requested.emit(float(x))
 
     def _clear_peak_highlights(self):
         """Clear any peak highlights."""
@@ -987,10 +1201,12 @@ class PlotFrame(QWidget):
             shade_y = self.shade_top_peaks[i] + offset
             shade_baseline = self.shade_floor_peaks[i] + offset
 
+            apex_x = getattr(peak, 'retention_time', None) or peak.position
             if getattr(peak, 'skim_model', None) is not None:  # a rider, its parent reported or not
                 line, = self.chromatogram_ax.plot(
                     self.x_peaks[i], shade_baseline, linestyle='--', color='crimson', linewidth=1.4)
                 line.is_skim_line = True
+                line.peak_x = apex_x
 
             collection = self.chromatogram_ax.fill_between(
                 self.x_peaks[i],
@@ -1004,13 +1220,15 @@ class PlotFrame(QWidget):
             )
             # Store peak number for later identification
             collection.peak_number = i + 1
+            collection.peak_x = apex_x
             
             # Add warning marker for saturated or convoluted peaks - adjust position to match view
             marker_y = shade_y[len(shade_y)//2]  # Use middle point height
             
+            warning_line = None
             if is_saturated:
-                self.chromatogram_ax.plot(
-                    getattr(peak, 'retention_time', None) or peak.position,
+                warning_line, = self.chromatogram_ax.plot(
+                    apex_x,
                     marker_y,
                     marker='D',
                     markersize=12,
@@ -1020,8 +1238,8 @@ class PlotFrame(QWidget):
                     linestyle='None'
                 )
             elif is_convoluted:
-                self.chromatogram_ax.plot(
-                    getattr(peak, 'retention_time', None) or peak.position,
+                warning_line, = self.chromatogram_ax.plot(
+                    apex_x,
                     marker_y,
                     marker='^',
                     markersize=12,
@@ -1030,16 +1248,155 @@ class PlotFrame(QWidget):
                     alpha=0.8,
                     linestyle='None'
                 )
+            if warning_line is not None:
+                warning_line.peak_x = apex_x
         
         # Restore previous limits
         if xlim is not None:
             self.chromatogram_ax.set_xlim(xlim)
         if ylim is not None:
             self.chromatogram_ax.set_ylim(ylim)
+
+        self._apply_segment_fade()   # the shading above is new since the overlay drew
         
         # Update the plot
         self.canvas.draw_idle()
     
+    # ── segment overlay ──────────────────────────────────────────────────────
+
+    def set_segment_overlay(self, windows: list[dict], break_times: list[float],
+                            open_segment: dict | None) -> None:
+        """Show the method's segments on the chromatogram; kept across later replots.
+
+        windows: peak_windows dicts (id, label, start, end). break_times: the whole-run
+        baseline breaks only; a segment's own start/end breaks are implied by its edges.
+        open_segment: None, or {'id', 'label', 'start', 'end', 'partway': [t, ...]} for the
+        segment open in the editor (its draft, which may not be in ``windows`` yet).
+        """
+        self._segment_windows = [dict(w) for w in windows]
+        self._segment_break_times = [float(t) for t in break_times]
+        self._open_segment = dict(open_segment) if open_segment is not None else None
+        self._draw_segment_overlay()
+        self.canvas.draw_idle()
+
+    def _segment_add(self, artist, role):
+        artist.segment_role = role
+        artist.set_label('_segment_overlay')
+        self.chromatogram_ax.add_artist(artist)   # add_artist leaves the data limits alone
+        self._segment_artists.append(artist)
+
+    def _draw_segment_overlay(self):
+        """(Re)draw the overlay into chromatogram_ax from the stored windows/breaks/open segment."""
+        for artist in self._segment_artists:
+            if artist.axes is not None:           # ax.clear() already detached the rest
+                artist.remove()
+        self._segment_artists = []
+        if hasattr(self, '_gcxgc_axes'):
+            return
+        ax = self.chromatogram_ax
+        xaxis = ax.get_xaxis_transform()            # x in data, y in axes fraction
+        seg = self._open_segment
+
+        bands = [w for w in self._segment_windows if seg is None or w['id'] != seg['id']]
+        for w in bands + ([seg] if seg is not None else []):
+            start, end = float(w['start']), float(w['end'])
+            name = w.get('label') or w['id']
+            if w is seg:
+                name += ' (editing)'
+            self._segment_add(Rectangle((start, SEGMENT_BAND_BOTTOM), end - start,
+                                        1 - SEGMENT_BAND_BOTTOM, transform=xaxis,
+                                        facecolor=SEGMENT_BAND_COLOR, edgecolor='none',
+                                        alpha=0.85, zorder=2.5), 'band')
+            self._segment_add(_BandLabel((start, end), (start + end) / 2,
+                                         (1 + SEGMENT_BAND_BOTTOM) / 2, name, transform=xaxis,
+                                         color='white', fontsize=7, ha='center', va='center',
+                                         zorder=2.6, clip_on=True), 'label')
+
+        for t in self._segment_break_times:
+            self._segment_add(Line2D([t, t], [0, SEGMENT_BAND_BOTTOM], transform=xaxis, color=SEGMENT_BREAK_COLOR,
+                                     linestyle='--', linewidth=1.0, zorder=2.5), 'break')
+
+        if seg is not None:
+            lo, hi = sorted((float(seg['start']), float(seg['end'])))
+            # Grey reaches well past the data so panning or zooming out stays covered.
+            ends = [lo, hi, *ax.get_xlim()]
+            if self._displayed_trace is not None and len(self._displayed_trace[0]):
+                ends += [float(np.nanmin(self._displayed_trace[0])),
+                         float(np.nanmax(self._displayed_trace[0]))]
+            reach = 10 * (max(ends) - min(ends))
+            for edge, far in ((lo, min(ends) - reach), (hi, max(ends) + reach)):
+                self._segment_add(Rectangle((edge, 0), far - edge, 1, transform=xaxis,
+                                            facecolor=SEGMENT_GREY_COLOR, edgecolor='none',
+                                            alpha=0.18, zorder=1.5), 'grey')
+                self._segment_add(Line2D([edge, edge], [0, SEGMENT_BAND_BOTTOM], transform=xaxis,
+                                         color=SEGMENT_BAND_COLOR, linewidth=1.2, zorder=2.5), 'edge')
+            for t in seg.get('partway') or []:
+                self._segment_add(Line2D([t, t], [0, SEGMENT_BAND_BOTTOM], transform=xaxis, color=SEGMENT_BREAK_COLOR,
+                                         linestyle='--', linewidth=1.0, zorder=2.5), 'partway')
+
+        excluded = []
+        if self.chromatogram_data is not None:
+            excluded = self.chromatogram_data.get('range_excluded_peaks_x')
+            excluded = np.asarray(excluded if excluded is not None else [], dtype=float)
+        if len(excluded) and self._displayed_trace is not None:
+            x, trace, _ = self._displayed_trace
+            order = np.argsort(x)                 # np.interp needs ascending x (FTIR runs high→low)
+            ys = np.interp(excluded, x[order], trace[order])
+            self._segment_add(Line2D(excluded, ys, linestyle='none', marker='o', markersize=7,
+                                     markerfacecolor='none', markeredgecolor=SEGMENT_EXCLUDED_COLOR,
+                                     markeredgewidth=1.2, zorder=2.5), 'excluded')
+
+        self._fit_segment_ylim()
+        self._apply_segment_fade()
+
+    def _fit_segment_ylim(self):
+        """Fit y to the open segment when its id or span changes; restore the old ylim on close.
+
+        A preview that keeps the span leaves the y-axis alone, so the user's zoom stands.
+        """
+        seg = self._open_segment
+        ax = self.chromatogram_ax
+        if seg is None:
+            if self._segment_fit_key is not None and self._segment_saved_ylim is not None:
+                ax.set_ylim(self._segment_saved_ylim)
+            self._segment_fit_key = None
+            self._segment_saved_ylim = None
+            return
+        key = (seg['id'], float(seg['start']), float(seg['end']))
+        if key == self._segment_fit_key or self._displayed_trace is None:
+            return
+        if self._segment_fit_key is None:
+            self._segment_saved_ylim = ax.get_ylim()
+        self._segment_fit_key = key
+        x, trace, baseline = self._displayed_trace
+        lo, hi = sorted(key[1:])
+        inside = (x >= lo) & (x <= hi)
+        values = np.concatenate([trace[inside], baseline[inside]])
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return      # the span holds no data points (beyond the run, or MS-gated): keep the view
+        y0, y1 = float(values.min()), float(values.max())
+        pad = 0.05 * (y1 - y0) or 0.05 * abs(y1) or 1.0
+        ax.set_ylim(y0 - pad, y1 + pad)
+
+    def _apply_segment_fade(self):
+        """Peak markers and shading whose apex lies outside the open segment drop to alpha 0.3;
+        everything else gets its own alpha back."""
+        seg = self._open_segment
+        if seg is not None:
+            lo, hi = sorted((float(seg['start']), float(seg['end'])))
+        for artist in self.chromatogram_ax.get_children():
+            peak_x = getattr(artist, 'peak_x', None)
+            if peak_x is None:
+                continue
+            outside = seg is not None and not (lo <= peak_x <= hi)
+            if outside and not hasattr(artist, 'segment_alpha'):
+                artist.segment_alpha = artist.get_alpha()
+                artist.set_alpha(SEGMENT_FADED_ALPHA)
+            elif not outside and hasattr(artist, 'segment_alpha'):
+                artist.set_alpha(artist.segment_alpha)
+                del artist.segment_alpha
+
     def update_annotations(self):
         """Update peak annotations based on compound identifications."""
         # This will be called when compounds are identified
@@ -1179,9 +1536,9 @@ class PlotFrame(QWidget):
                 except:
                     pass
     
-    def _show_peak_context_menu(self, peak_index, event):
-        """Show context menu for a peak."""
-        from PySide6.QtWidgets import QMenu
+    def _show_peak_context_menu(self, peak_index, event, baseline_change_x=None):
+        """Show context menu for a peak; with baseline_change_x (a click inside the open
+        segment) it also offers a baseline change there."""
         from PySide6.QtCore import QPoint
         from PySide6.QtGui import QClipboard
         
@@ -1250,9 +1607,16 @@ class PlotFrame(QWidget):
             convolution_action = menu.addAction("⚠️ Possible Peak Convolution")
             convolution_action.setEnabled(False)  # Just for display
         
+        change_action = None
+        if baseline_change_x is not None:
+            menu.addSeparator()
+            change_action = menu.addAction(BASELINE_CHANGE_TEXT)
+
         # Show the menu at current cursor position instead of using matplotlib event coordinates
         cursor_pos = QCursor.pos()  # Get global cursor position
-        menu.exec_(cursor_pos)      # Show menu at cursor position
+        chosen = menu.exec(cursor_pos)      # Show menu at cursor position
+        if change_action is not None and chosen is change_action:
+            self.baseline_change_requested.emit(float(baseline_change_x))
 
     def _request_ms_search(self, peak_index):
         """Request MS search for a peak."""

@@ -29,6 +29,7 @@ import rainbow as rb
 import sys
 import os
 import json
+import logging
 import datetime
 import time
 import traceback
@@ -36,6 +37,9 @@ import matplotlib
 
 # Import the data handler directly as a required dependency
 from logic.data_handler import DataHandler
+from logic.segments import baseline_break_times, breaks_inside_peaks_timed, segments_view
+
+logger = logging.getLogger(__name__)
 
 # Resolved from this file, not the working directory: in a frozen onedir build ui/app.py sits in
 # _internal/ui/, so this is _internal/resources/file.ico (bundled by packaging/windows/chromakit.spec).
@@ -229,6 +233,18 @@ class ChromaKitApp(QMainWindow):
         self.parameters_frame.save_method_requested.connect(self.save_method)
         self.parameters_frame.load_method_requested.connect(self.load_method)
         self.parameters_frame.gcxgc_display_changed.connect(self._on_gcxgc_display_changed)
+        self._open_segment_state = None   # the open segment's draft, as segment_state_changed last sent it
+        # Segment warnings as (time, message): the last processing's baseline notes, and the
+        # breaks inside peaks of the last Integrate (stale once processing reruns)
+        self._baseline_warnings = []
+        self._peak_warnings = []
+        self._baseline_ms_range = None    # the MS range the last processing used
+        self.parameters_frame.segment_state_changed.connect(self._on_segment_state_changed)
+        # Segment editing on the plot (shift-drag, right-click, edge drag, Esc)
+        self.plot_frame.segment_span_requested.connect(self._on_segment_span_requested)
+        self.plot_frame.baseline_change_requested.connect(self.parameters_frame.segment_add_partway)
+        self.plot_frame.segment_edge_moved.connect(self.parameters_frame.segment_set_edge)
+        self.plot_frame.segment_escape.connect(self.parameters_frame.cancel_open_segment)
         
         # Connect button frame signals
         self.button_frame.export_clicked.connect(self.on_export)
@@ -380,6 +396,7 @@ class ChromaKitApp(QMainWindow):
         self._loading_method = True
         try:
             self.parameters_frame.apply_method(self.current_method)
+            self._clear_segment_warnings()   # they described the previous method's processing
             if self._gcxgc_mode and self._gcxgc_run is not None:
                 # apply_method rebuilt the widgets: give them the run's file values back
                 self.parameters_frame.set_gcxgc_run_info(self._gcxgc_run)
@@ -437,6 +454,11 @@ class ChromaKitApp(QMainWindow):
         dialog; the dialog itself confirms replacing an existing file.
         """
         from pathlib import Path
+        # An open segment is saved first; its write-back reaches current_method via parameters_changed
+        if not self.parameters_frame.commit_open_segment():
+            self.status_bar.showMessage(
+                "Method not saved: the open segment has an error (see the segment editor); fix it or Cancel it")
+            return
         start = (str(self.current_method_path) if self.current_method_path
                  else f"{self.current_method.name}.chromethod")
         path, _ = QFileDialog.getSaveFileName(
@@ -607,11 +629,24 @@ class ChromaKitApp(QMainWindow):
             return
         from logic.method import ChromaMethod
         # Rebuild the processing-params slice into current_method, preserving identity fields.
-        updated = ChromaMethod.from_gui_params(
-            params,
-            name=self.current_method.name,
-            signal_type=self.current_method.signal_type,
-        )
+        try:
+            updated = ChromaMethod.from_gui_params(
+                params,
+                name=self.current_method.name,
+                signal_type=self.current_method.signal_type,
+            )
+        except ValueError as exc:  # pydantic's ValidationError is a ValueError
+            # current_method keeps its last valid state, so Save Method would not write these
+            # parameters: say so instead of leaving only a traceback in the console
+            logger.exception("Parameters not written to the method: %s", exc)
+            if hasattr(exc, 'errors'):
+                err = exc.errors()[0]
+                reason = f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+            else:
+                reason = str(exc)
+            self.status_bar.showMessage(f"Method not updated: invalid parameters ({reason}); "
+                                        "Save Method would not include this change")
+            return
         updated.rt_table = self.current_method.rt_table
         updated.rf_table = self.current_method.rf_table
         updated.rt_matching = self.current_method.rt_matching
@@ -1031,6 +1066,7 @@ class ChromaKitApp(QMainWindow):
             self.plot_frame.clear_peak_data()
             
             # Clear any stored peak data in the app
+            self._clear_segment_warnings()
             if hasattr(self, 'integrated_peaks'):
                 delattr(self, 'integrated_peaks')
             if hasattr(self, 'integration_results'):
@@ -2089,6 +2125,7 @@ class ChromaKitApp(QMainWindow):
         processing the earlier sample and exporting its peaks into whatever folder
         data_handler.current_directory_path still names."""
         self.current_processed = None
+        self._clear_segment_warnings()
         for name in ('integrated_peaks', 'integration_results'):
             if hasattr(self, name):
                 delattr(self, name)
@@ -2359,6 +2396,8 @@ class ChromaKitApp(QMainWindow):
         
         # Check if integration was successful
         if not integration_results:
+            self._peak_warnings = []       # no kept peaks for a break to fall inside
+            self._push_segment_warnings()
             self.status_bar.showMessage(self._no_peaks_reason(self.parameters_frame.get_parameters()))
             return
         
@@ -2834,6 +2873,14 @@ class ChromaKitApp(QMainWindow):
                                 "Process GCxGC runs one at a time.")
         return True
 
+    def _refuse_run_with_open_segment(self) -> bool:
+        """R22: a batch or automation run reads (and a per-detector batch restores) the method,
+        so an open segment's unsaved draft would run and could be persisted; True when refused."""
+        if not self.parameters_frame.has_open_segment():
+            return False
+        self.status_bar.showMessage("Save or cancel the open segment first")
+        return True
+
     def on_automation_clicked(self):
         """Handle automation button click."""
         if self._refuse_batch_in_gcxgc_mode():
@@ -2843,6 +2890,8 @@ class ChromaKitApp(QMainWindow):
 
     def start_automation(self):
         """Start the automation process."""
+        if self._refuse_run_with_open_segment():
+            return
         # Check for current directory
         if not hasattr(self.data_handler, 'current_directory_path') or not self.data_handler.current_directory_path:
             self.status_bar.showMessage("No directory selected")
@@ -3120,6 +3169,11 @@ class ChromaKitApp(QMainWindow):
 
         # Always store for downstream use (integration, export)
         self.current_processed = processed
+        # New processing: fresh baseline notes; the peaks are stale until the next Integrate
+        self._baseline_warnings = list(zip(processed['baseline_note_times'], processed['baseline_notes']))
+        self._baseline_ms_range = ms_range   # breaks outside it split no baseline (inside-peak check)
+        self._peak_warnings = []
+        self._push_segment_warnings()
 
         if not skip_render:
             # Update the chromatogram plot
@@ -3129,11 +3183,42 @@ class ChromaKitApp(QMainWindow):
                 new_file=new_file
             )
 
+            self._refresh_segment_overlay()
+
             # Force a repaint
             self.plot_frame.canvas.draw_idle()
 
         # Store the processed data for reference
         self.current_processed = processed
+
+    def _push_segment_warnings(self):
+        self.parameters_frame.set_segment_warnings(self._baseline_warnings + self._peak_warnings)
+
+    def _clear_segment_warnings(self):
+        self._baseline_warnings, self._peak_warnings = [], []
+        self._push_segment_warnings()
+
+    def _on_segment_state_changed(self, state):
+        self._open_segment_state = state
+        self._refresh_segment_overlay()
+
+    def _on_segment_span_requested(self, start, end):
+        """Shift-drag on the plot: open a new (unsaved) segment over the span."""
+        pf = self.parameters_frame
+        if pf.has_open_segment():   # never discard a draft the user is editing
+            self.status_bar.showMessage("Save or cancel the open segment first")
+            return
+        if pf.section_groups['segments'].isHidden():   # hidden in Configure Visible Parameters
+            pf.set_section_visibility({'segments': True})
+        pf.open_segment(None, (start, end))
+
+    def _refresh_segment_overlay(self):
+        """Hand the plot the method's segments, its whole-run breaks and the open segment."""
+        params = self.parameters_frame.current_params
+        self.plot_frame.set_segment_overlay(
+            params.get('peak_windows') or [],
+            [float(bp['time']) for bp in segments_view(params)['whole_run_breaks']],
+            self._open_segment_state)
 
     def _apply_peak_splitting(self, processed, params):
         """Run the peak splitting pipeline and inject results into processed data.
@@ -4281,6 +4366,14 @@ class ChromaKitApp(QMainWindow):
     def on_peaks_integrated(self, peaks):
         """Handle when peaks are integrated."""
         self.integrated_peaks = peaks
+        times = baseline_break_times(self.parameters_frame.get_parameters())
+        ms_range = self._baseline_ms_range
+        if ms_range is not None:
+            # As _build_baseline_segments uses them: a break at or before the MS start doesn't
+            # split the baseline and one after the MS end is dropped, so neither splits a peak
+            times = [t for t in times if ms_range[0] < t <= ms_range[1]]
+        self._peak_warnings = breaks_inside_peaks_timed(peaks, times)
+        self._push_segment_warnings()
 
         # Clear stale quantitation status — we're about to re-quantitate (or not)
         self.quantitation_frame.clear_status()
@@ -4449,7 +4542,7 @@ class ChromaKitApp(QMainWindow):
     
     def show_batch_queue_dialog(self):
         """Show the batch job setup dialog before the progress dialog."""
-        if self._refuse_batch_in_gcxgc_mode():
+        if self._refuse_batch_in_gcxgc_mode() or self._refuse_run_with_open_segment():
             return
         from ui.dialogs.batch_job_dialog import BatchJobDialog
         
@@ -4462,6 +4555,8 @@ class ChromaKitApp(QMainWindow):
     
     def start_batch_processing(self, directories, options):
         """Start batch processing with the selected directories and options."""
+        if self._refuse_run_with_open_segment():
+            return
         if not directories:
             self.status_bar.showMessage("No directories to process")
             return
