@@ -29,6 +29,7 @@ import rainbow as rb
 import sys
 import os
 import json
+import logging
 import datetime
 import time
 import traceback
@@ -37,6 +38,8 @@ import matplotlib
 # Import the data handler directly as a required dependency
 from logic.data_handler import DataHandler
 from logic.segments import baseline_break_times, breaks_inside_peaks_timed, segments_view
+
+logger = logging.getLogger(__name__)
 
 # Resolved from this file, not the working directory: in a frozen onedir build ui/app.py sits in
 # _internal/ui/, so this is _internal/resources/file.ico (bundled by packaging/windows/chromakit.spec).
@@ -625,11 +628,24 @@ class ChromaKitApp(QMainWindow):
             return
         from logic.method import ChromaMethod
         # Rebuild the processing-params slice into current_method, preserving identity fields.
-        updated = ChromaMethod.from_gui_params(
-            params,
-            name=self.current_method.name,
-            signal_type=self.current_method.signal_type,
-        )
+        try:
+            updated = ChromaMethod.from_gui_params(
+                params,
+                name=self.current_method.name,
+                signal_type=self.current_method.signal_type,
+            )
+        except ValueError as exc:  # pydantic's ValidationError is a ValueError
+            # current_method keeps its last valid state, so Save Method would not write these
+            # parameters: say so instead of leaving only a traceback in the console
+            logger.exception("Parameters not written to the method: %s", exc)
+            if hasattr(exc, 'errors'):
+                err = exc.errors()[0]
+                reason = f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+            else:
+                reason = str(exc)
+            self.status_bar.showMessage(f"Method not updated: invalid parameters ({reason}); "
+                                        "Save Method would not include this change")
+            return
         updated.rt_table = self.current_method.rt_table
         updated.rf_table = self.current_method.rf_table
         updated.rt_matching = self.current_method.rt_matching

@@ -165,6 +165,62 @@ def new_segment(params, start, end):
     return record
 
 
+# ── validating ─────────────────────────────────────────────────────────────────
+
+# Section names as the editor's group titles show them (ui/frames/segments.py GROUPS)
+_SECTION_TITLES = {'baseline': 'Baseline', 'peaks': 'Peak detection', 'smoothing': 'Smoothing',
+                   'shoulders': 'Shoulders', 'rider': 'Tail skim', 'negative_peaks': 'Negative peaks'}
+
+
+def _allowed(model, key):
+    """'1 to 10', '>= 3', '> 0 and <= 1' from a model field's bounds; '' when it has none."""
+    field = next((f for name, f in model.model_fields.items() if key in (name, f.alias)), None)
+    bounds = {}
+    for meta in (field.metadata if field is not None else []):
+        for op in ('ge', 'gt', 'le', 'lt'):
+            if getattr(meta, op, None) is not None:
+                bounds[op] = getattr(meta, op)
+    if set(bounds) == {'ge', 'le'}:
+        return f"{bounds['ge']:g} to {bounds['le']:g}"
+    signs = {'ge': '>=', 'gt': '>', 'le': '<=', 'lt': '<'}
+    return ' and '.join(f"{signs[op]} {bounds[op]:g}" for op in ('ge', 'gt', 'le', 'lt') if op in bounds)
+
+
+def validate_record(record) -> None:
+    """Raise ValueError naming the field and its allowed range if a value breaks the limits of
+    its ``*Overrides`` model in logic/method.py (what ``ChromaMethod`` enforces on load)."""
+    from logic.method import (  # lazy: logic.method is pydantic; this module stays free of it
+        BaselineOverrides, NegativePeakOverrides, PeakOverrides, RiderOverrides,
+        ShoulderOverrides, SmoothingOverrides,
+    )
+    models = {'smoothing': SmoothingOverrides, 'peaks': PeakOverrides,
+              'shoulders': ShoulderOverrides, 'negative_peaks': NegativePeakOverrides,
+              'rider': RiderOverrides}
+    name = record.get('label') or record['id']
+    checks = [(_SECTION_TITLES[s], models[s], record.get(s)) for s in SEGMENT_SECTIONS]
+    checks.append((_SECTION_TITLES['baseline'], BaselineOverrides, record.get('baseline')))
+    for row in record.get('partway') or []:
+        checks.append((f"Baseline change at {float(row['time']):g}:", BaselineOverrides,
+                       row.get('overrides')))
+    after = record.get('after') or {}
+    if after.get('mode') == 'custom':
+        checks.append(('After the segment:', BaselineOverrides, after.get('overrides')))
+    for where, model, values in checks:
+        try:
+            model.model_validate(values or {})
+        except ValueError as exc:  # pydantic's ValidationError is a ValueError
+            err = exc.errors()[0] if hasattr(exc, 'errors') else None
+            if err is None:
+                raise
+            key = '.'.join(str(p) for p in err['loc'])
+            allowed = _allowed(model, str(err['loc'][0])) if len(err['loc']) == 1 else ''
+            if allowed:
+                reason = f"{err.get('input')} is out of range (allowed {allowed})"
+            else:
+                reason = f"is not valid: {err['msg']}"
+            raise ValueError(f"Segment '{name}': {where} {key} {reason}") from None
+
+
 # ── writing ────────────────────────────────────────────────────────────────────
 # Edits never rewrite a segment the user didn't edit (design §4.1): only the edited
 # segment's own breaks change, plus the end break of a segment ending where the edited

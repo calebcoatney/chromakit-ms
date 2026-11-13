@@ -15,7 +15,7 @@ import numpy as np
 from logic.method import GCxGCParams, RiderParams
 from logic.segments import (
     apply_segment, new_segment, remove_segment, resume_overrides, segments_view,
-    set_whole_run_breaks, warnings_by_segment,
+    set_whole_run_breaks, validate_record, warnings_by_segment,
 )
 from logic.windows import _EDGE_TOL
 from ui.frames.parameter_help import PARAMETER_HELP, SECTION_KEY
@@ -1108,7 +1108,7 @@ class ParametersFrame(QWidget):
         editor = self.segment_editor
         editor.set_resume(resume_overrides(self._segment_snapshot, record['start']))  # R12
         try:
-            params = apply_segment(self._segment_snapshot, record)
+            params = self._apply_draft(record)
         except ValueError as exc:
             editor.show_error(str(exc))
         else:
@@ -1119,9 +1119,15 @@ class ParametersFrame(QWidget):
         self._show_segment_warnings()  # the draft span may now hold other warnings
         self._emit_segment_state(record)
 
+    def _apply_draft(self, record):
+        """The snapshot with ``record`` written back; ValueError (shown in the editor) when a
+        value breaks the method's limits or the segment doesn't fit. Preview and Save share it."""
+        validate_record(record)
+        return apply_segment(self._segment_snapshot, record)
+
     def _save_segment(self, record) -> bool:
         try:
-            params = apply_segment(self._segment_snapshot, record)
+            params = self._apply_draft(record)
         except ValueError as exc:
             self.segment_editor.show_error(str(exc))
             return False

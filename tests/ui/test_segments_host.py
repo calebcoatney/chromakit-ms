@@ -467,3 +467,74 @@ def test_panel_refreshes_once_per_segment_change(qtbot, monkeypatch):
     combo = f.segments_panel.outside_combo
     combo.setCurrentIndex(combo.findData('global'))
     assert len(calls) == 4
+
+
+# ── final fix wave #1: an out-of-range override blocks preview and Save ─────────
+
+def test_out_of_range_override_blocks_preview_and_save(qtbot):
+    f = _frame(qtbot, [W1, W2])
+    before = copy.deepcopy(f.current_params)
+    emitted = []
+    f.parameters_changed.connect(emitted.append)
+    f.open_segment('w1')
+    ed = f.segment_editor
+    type_into(ed.groups['shoulders'].fields['sensitivity'].edit, '20')
+    assert not emitted
+    assert f.current_params == before
+    assert not ed.error_label.isHidden()
+    assert 'sensitivity' in ed.error_label.text() and '1 to 10' in ed.error_label.text()
+    ed.save_button.click()
+    assert f.segment_editor is ed
+    assert f.commit_open_segment() is False
+    assert f.segment_editor is ed and f.current_params == before
+    assert 'sensitivity' in ed.error_label.text()
+    type_into(ed.groups['shoulders'].fields['sensitivity'].edit, '7')
+    assert ed.error_label.isHidden()
+    assert _win(f, 'w1')['shoulders']['sensitivity'] == 7
+    assert f.commit_open_segment() is True
+
+
+def _method_slice(m):
+    return ([w.model_dump(by_alias=True) for w in m.peak_windows],
+            [b.model_dump(by_alias=True) for b in m.baseline.break_points or []])
+
+
+def _assert_method_follows_gui(app):
+    pf = app.parameters_frame
+    rebuilt = ChromaMethod.from_gui_params(pf.current_params, name=app.current_method.name,
+                                           signal_type=app.current_method.signal_type)
+    assert _method_slice(rebuilt) == _method_slice(app.current_method)
+
+
+def test_current_method_matches_gui_after_segment_save_and_cancel(qtbot):
+    app = _app(qtbot)
+    pf = app.parameters_frame
+    pf.open_segment(None, (2.0, 3.0))
+    ed = pf.segment_editor
+    ed.fresh_check.setChecked(True)
+    type_into(ed.groups['baseline'].fields['lambda'].edit, '1e3')
+    type_into(ed.groups['shoulders'].fields['sensitivity'].edit, '20')   # refused
+    type_into(ed.groups['shoulders'].fields['sensitivity'].edit, '4')
+    assert pf.commit_open_segment()
+    _assert_method_follows_gui(app)
+    assert [w.shoulders.sensitivity for w in app.current_method.peak_windows] == [4]
+    pf.open_segment('w1')
+    pf.segment_set_edge('end', 3.5)
+    pf.segment_add_partway(3.0)
+    type_into(pf.segment_editor.groups['shoulders'].fields['sensitivity'].edit, '20')
+    pf.cancel_open_segment()
+    _assert_method_follows_gui(app)
+    assert [(w.start, w.end) for w in app.current_method.peak_windows] == [(2.0, 3.0)]
+
+
+def test_params_writeback_failure_is_loud(qtbot, caplog):
+    app = _app(qtbot)
+    before = app.current_method.model_dump()
+    params = copy.deepcopy(app.parameters_frame.current_params)
+    params['peak_windows'] = [{'id': 'w1', 'label': '', 'start': 2.0, 'end': 3.0,
+                               'shoulders': {'sensitivity': 20}}]
+    with caplog.at_level('ERROR', logger='ui.app'):
+        app._on_params_writeback(params)     # must not raise out of the slot
+    assert app.current_method.model_dump() == before
+    assert 'sensitivity' in caplog.text
+    assert 'not' in app.status_bar.currentMessage().lower()

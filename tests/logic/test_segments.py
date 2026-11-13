@@ -469,3 +469,48 @@ def test_custom_end_kept_on_segment_with_no_baseline():
     rec = seg(out, 'w1')
     rec['after'] = {'mode': 'resume', 'overrides': {}}
     assert anchored(S.apply_segment(out, rec), 'w1', 'end') == []
+
+
+# ── validate_record: the *Overrides models' limits (final fix wave #1) ──────────
+
+def _record(**sections):
+    r = S.new_segment(params_of(), 2.0, 3.0)
+    r.update(sections)
+    return r
+
+
+def test_validate_record_accepts_blank_and_in_range():
+    S.validate_record(_record())
+    S.validate_record(_record(shoulders={'sensitivity': 10}, smoothing={'median_kernel': 3, 'diff_order': 2},
+                              rider={'skim_max_valley_frac': 1.0, 'skim_height_ratio': 1.0},
+                              baseline={'lambda': 1e3}, fresh_baseline=True,
+                              partway=[{'time': 2.5, 'overrides': {'lambda': 1e4}}]))
+
+
+@pytest.mark.parametrize('section, values, words', [
+    ('shoulders', {'sensitivity': 20}, ['Shoulders', 'sensitivity', '20', '1 to 10']),
+    ('shoulders', {'sensitivity': 0}, ['sensitivity', '1 to 10']),
+    ('smoothing', {'median_kernel': 2}, ['Smoothing', 'median_kernel', '>= 3']),
+    ('smoothing', {'savgol_window': 1}, ['savgol_window', '>= 3']),
+    ('smoothing', {'diff_order': 3}, ['diff_order', '1 to 2']),
+    ('rider', {'skim_max_valley_frac': 0.0}, ['Tail skim', 'skim_max_valley_frac', '> 0', '<= 1']),
+    ('rider', {'skim_max_valley_frac': 1.5}, ['skim_max_valley_frac', '> 0', '<= 1']),
+    ('rider', {'skim_height_ratio': 0.5}, ['skim_height_ratio', '>= 1']),
+    ('rider', {'skim_valley_ratio': 0.9}, ['skim_valley_ratio', '>= 1']),
+])
+def test_validate_record_names_field_and_range(section, values, words):
+    with pytest.raises(ValueError) as exc:
+        S.validate_record(_record(**{section: values}))
+    msg = str(exc.value)
+    assert "Segment 'w1'" in msg
+    for word in words:
+        assert word in msg, (word, msg)
+
+
+def test_validate_record_checks_partway_and_custom_after():
+    with pytest.raises(ValueError, match='Baseline change at 2.5'):
+        S.validate_record(_record(partway=[{'time': 2.5, 'overrides': {'bogus': 1}}]))
+    with pytest.raises(ValueError, match='After the segment'):
+        S.validate_record(_record(after={'mode': 'custom', 'overrides': {'bogus': 1}}))
+    with pytest.raises(ValueError, match='Baseline'):
+        S.validate_record(_record(fresh_baseline=True, baseline={'bogus': 1}))
