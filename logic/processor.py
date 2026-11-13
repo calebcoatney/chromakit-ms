@@ -622,7 +622,8 @@ class ChromatogramProcessor:
                 if window_at(windows, px) is w:
                     keep(px, py, meta, w['id'])
 
-        kept.sort(key=lambda k: k[0])
+        # Array order: ascending x sorts ascending, descending x (e.g. FTIR) sorts descending.
+        kept.sort(key=lambda k: k[0], reverse=bool(x[0] > x[-1]))
         deduped = [k for i, k in enumerate(kept) if i == 0 or k[0] != kept[i - 1][0]]
         peaks_x = np.array([k[0] for k in deduped], dtype=float)
         peaks_y = np.array([k[1] for k in deduped], dtype=float)
