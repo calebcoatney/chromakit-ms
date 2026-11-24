@@ -3,6 +3,17 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 def main():
     """Main entry point for the application."""
+    # THROWAWAY Velopack spike
+    spike = None
+    if getattr(sys, "frozen", False):
+        try:
+            from util import velopack_spike as spike
+            spike.startup()
+        except ImportError:
+            spike = None
+        if spike is not None:
+            spike.headless(sys.argv)
+
     if len(sys.argv) >= 3 and sys.argv[1] == "--self-test":
         import os
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -26,7 +37,9 @@ def main():
         # Create and show the main window
         main_window = ChromaKitApp()
         main_window.show()
-        
+        if spike is not None:
+            spike.attach(app, main_window)
+
         # Start the event loop
         sys.exit(app.exec())
         

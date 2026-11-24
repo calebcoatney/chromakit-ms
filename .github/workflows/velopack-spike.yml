@@ -1,0 +1,85 @@
+name: Velopack spike (throwaway)
+on:
+  push:
+    branches: ['packaging/velopack-spike']
+permissions:
+  contents: read
+jobs:
+  spike:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: '3.12' }
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[ms] pyinstaller==6.22.3 velopack==1.2.161
+          dotnet tool install -g vpk --version 1.2.161
+      - name: Freeze and pack three fake versions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory out, out/feed-patch, out/feed-minor | Out-Null
+          foreach ($v in '0.2.90','0.2.91','0.3.90') {
+            "__version__ = `"$v`"" | Out-File -Encoding utf8NoBOM chromakit_version.py
+            pyinstaller packaging/windows/chromakit.spec --noconfirm --distpath d --workpath b --log-level WARN
+            if ($LASTEXITCODE) { exit 1 }
+            "Results: test build $v, nothing changed." | Out-File -Encoding utf8 notes.md
+            vpk pack --packId ChromaKitApp --packTitle ChromaKit --packVersion $v --packDir d/ChromaKit --mainExe ChromaKit.exe --channel stable --outputDir rel --releaseNotes notes.md --icon resources/file.ico
+            if ($LASTEXITCODE) { exit 1 }
+            if ($v -eq '0.2.90') { Copy-Item rel/*Setup.exe "out/ChromaKit-TEST-0.2.90-Setup.exe" }
+            if ($v -eq '0.2.91') { Copy-Item rel/*0.2.91* out/feed-patch; Copy-Item rel/releases.stable.json out/feed-patch }
+            if ($v -eq '0.3.90') { Copy-Item rel/*0.3.90* out/feed-minor; Copy-Item rel/releases.stable.json out/feed-minor }
+          }
+          Get-ChildItem rel, out -Recurse -File | ForEach-Object { '{0,10:n1} MB  {1}' -f ($_.Length/1MB), $_.FullName }
+      - uses: actions/upload-artifact@v4
+        with: { name: ChromaKit-update-test, path: out, compression-level: 0, retention-days: 14 }
+      - name: Install, update, uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = "$env:LOCALAPPDATA\ChromaKitApp"; $exe = "$app\current\ChromaKit.exe"
+          $mark = "$env:LOCALAPPDATA\ChromaKit\overrides\marker.txt"
+          New-Item -Force -ItemType File $mark -Value keep | Out-Null
+          $out = (Resolve-Path out).Path
+          $fail = @()
+          function Call($exe, $a) { $p = Start-Process $exe -ArgumentList $a -PassThru; $null = $p.Handle
+            if (-not $p.WaitForExit(300000)) { $p.Kill(); Write-Host "TIMEOUT $a" }; $p.ExitCode }
+          function Version { $f = "$env:RUNNER_TEMP\v.txt"; Remove-Item $f -ea 0
+            $null = Call $exe "--spike-version $f"; if (Test-Path $f) { (Get-Content $f -Raw).Trim() } else { 'none' } }
+          function WaitVersion($want) { for ($i=0; $i -lt 30; $i++) { Start-Sleep 4; if ((Test-Path $exe) -and -not (Get-Process Update -ea 0)) { $v = Version; if ($v -eq $want) { return $v } } }; return (Version) }
+          function Check($name, $ok, $detail) { Write-Host ("{0}  {1}: {2}" -f $(if ($ok) {'PASS'} else {'FAIL'}), $name, $detail); if (-not $ok) { $script:fail += $name } }
+          $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrator')
+          Write-Host "NOTE runner is admin: $admin (so this does not prove the no-admin install)"
+
+          $t = Get-Date; $code = Call "$out\ChromaKit-TEST-0.2.90-Setup.exe" '--silent'
+          Write-Host "setup exit $code after $([int]((Get-Date)-$t).TotalSeconds) s; running ChromaKit: $(@(Get-Process ChromaKit -ea 0).Count)"
+          Get-Process ChromaKit -ea 0 | Stop-Process -Force
+          $v = Version; Check 'installs' ($v -eq '0.2.90') $v
+
+          $f = "$env:RUNNER_TEMP\dl.txt"; $null = Call $exe "--spike-download $out\feed-minor $f"; Get-Content $f
+          $p = Start-Process $exe -PassThru; Start-Sleep 45; $alive = -not $p.HasExited
+          if ($alive) { $p.Kill(); $p.WaitForExit() }
+          Check 'opens normally' $alive "alive after 45 s: $alive"
+          $v = Version; Check 'a downloaded update is not applied unasked' ($v -eq '0.2.90') $v
+
+          $f = "$env:RUNNER_TEMP\up.txt"; $null = Call $exe "--spike-update $out\feed-patch $f"; Get-Content $f
+          $v = WaitVersion '0.2.91'; Check 'patch update applies' ($v -eq '0.2.91') $v
+
+          $other = Start-Process $exe -PassThru; Start-Sleep 30
+          $f = "$env:RUNNER_TEMP\up2.txt"; $null = Call $exe "--spike-update $out\feed-minor $f"; Get-Content $f
+          Start-Sleep 60
+          Write-Host "OBSERVE second window: still running = $(-not $other.HasExited); installed version file:"
+          Select-String -Path "$app\current\sq.version" -Pattern '<version>' -ea 0 | ForEach-Object { Write-Host $_.Line.Trim() }
+          if (-not $other.HasExited) { $other.Kill(); $other.WaitForExit() }
+          if ((Version) -ne '0.3.90') { $null = Call $exe "--spike-update $out\feed-minor $f" }
+          $v = WaitVersion '0.3.90'; Check 'minor update applies' ($v -eq '0.3.90') $v
+
+          $code = Call "$app\Update.exe" 'uninstall --silent'; Start-Sleep 15
+          Check 'uninstall removes the app' (-not (Test-Path $exe)) "exit $code"
+          Check 'user data survives uninstall' (Test-Path $mark) $mark
+          Get-ChildItem "$env:LOCALAPPDATA","$env:TEMP" -Filter '*elopack*' -ea 0 | ForEach-Object { $_.FullName }
+          $log = "$env:LOCALAPPDATA\velopack\velopack.log"; if (Test-Path $log) { Write-Host '--- velopack.log'; Get-Content $log -Tail 150 }
+          if ($fail) { Write-Host "FAILED: $($fail -join '; ')"; exit 1 }
