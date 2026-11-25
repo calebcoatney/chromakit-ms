@@ -51,12 +51,13 @@ setup(
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Science/Research",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Topic :: Scientific/Engineering :: Chemistry",
         "License :: OSI Approved :: Apache Software License",
     ],
-    python_requires=">=3.7",
+    # Upper bound: rainbow-api ships prebuilt wheels only up to 3.13; newer Pythons need a C++ compiler.
+    python_requires=">=3.10,<3.14",
 )

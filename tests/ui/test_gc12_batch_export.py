@@ -86,8 +86,8 @@ def test_workbook_written_with_records_and_logged(qtbot, monkeypatch):
     def fake_pair(gc1, gc2):
         return ("pairs", gc1, gc2)
 
-    def fake_write(pairs, path):
-        written.append((pairs, path))
+    def fake_write(pairs, path, add_placeholders=True):
+        written.append((pairs, path, add_placeholders))
         return _Summary()
 
     monkeypatch.setattr(gc12_workbook, "collect_injections", fake_collect)
@@ -101,10 +101,14 @@ def test_workbook_written_with_records_and_logged(qtbot, monkeypatch):
         ('/d/two', 'GC2', ['FID1A']),
     ]
     assert all(r is app._gc12_records for *_, r in collected)
-    assert written == [(("pairs", ["GC1:/d/one"], ["GC2:/d/two"]), '/out/paired.xlsx')]
+    assert written == [(("pairs", ["GC1:/d/one"], ["GC2:/d/two"]), '/out/paired.xlsx', False)]
     expected = "GC1&2 workbook written: /out/paired.xlsx (1 pair, summary text)"
     assert line == expected
     assert app.batch_dialog.lines == [expected]
+    written.clear()
+    app.batch_options = {**GC12_OPTIONS, 'gc12_add_placeholders': True}
+    app._finish_gc12_workbook()
+    assert written[0][2] is True
 
 
 def test_export_error_is_logged_not_raised(qtbot, monkeypatch):

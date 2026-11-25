@@ -8,6 +8,9 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                               QComboBox, QLineEdit, QWidget, QListWidgetItem)
 from PySide6.QtCore import Qt, Signal, QSize, QSettings
 
+from logic.detector_position import POSITIONS, LABELS as POSITION_LABELS, is_position
+from logic.detector_position import label as position_label
+
 logger = logging.getLogger(__name__)
 
 MAX_DETECTOR_RUNS = 4
@@ -36,6 +39,7 @@ class BatchJobDialog(QDialog):
         # Initialize directories list
         self.directories = []
         self.directory_instruments = {}  # folder path (as in self.directories) -> "GC1"/"GC2"/""
+        self._detector_choices = []  # channel names offered on rows with no instrument
         
         # Setup UI
         self.setup_ui()
@@ -165,6 +169,15 @@ class BatchJobDialog(QDialog):
         layout.addWidget(file_group)
 
         layout.addLayout(self._build_workbook_row())
+        self.placeholders_check = QCheckBox('Add "NO INJECTION" blanks for unpaired samples')
+        self.placeholders_check.setChecked(False)
+        self.placeholders_check.setToolTip(
+            "Unchecked: each raw formatting sheet lists only the samples found in its folders, "
+            "paired or not.\n"
+            "Checked: a sample with no partner on the other GC also gets a \"NO INJECTION\" "
+            "blank block on the other sheet, so the two sheets line up block for block.")
+        layout.addWidget(self.placeholders_check)
+        self._update_workbook_state()
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -227,6 +240,8 @@ class BatchJobDialog(QDialog):
                   and self._gc12_mode())
         self.workbook_edit.setEnabled(tagged)
         self.workbook_browse.setEnabled(tagged)
+        if hasattr(self, "placeholders_check"):
+            self.placeholders_check.setEnabled(tagged)
         self.tags_inert_hint.setVisible(not self._gc12_mode())
         if self.workbook_edit.text().strip():
             return
@@ -264,7 +279,8 @@ class BatchJobDialog(QDialog):
             instrument_combo = QComboBox()
             self._fill_instrument_combo(instrument_combo)
             instrument_combo.setAccessibleName(f"Instrument for detector {n}")
-            instrument_combo.setToolTip("GC1 or GC2; blank for a folder with no instrument tag")
+            instrument_combo.setToolTip("GC1 or GC2 (pick Front or Back detector); "
+                                        "blank for a folder with no instrument tag")
             detector_combo = QComboBox()
             detector_combo.setAccessibleName(f"Detector {n} channel")
             detector_combo.setEditable(True)
@@ -275,8 +291,9 @@ class BatchJobDialog(QDialog):
             method_edit.setPlaceholderText("Method file (.chromethod); blank = current settings")
             browse = QPushButton("Browse...")
             browse.setAccessibleName(f"Browse for detector {n} method")
-            browse.clicked.connect(
-                lambda _=False, c=detector_combo, e=method_edit: self._browse_method(c, e))
+            browse.clicked.connect(lambda _=False, i=n - 1: self._browse_method(i))
+            instrument_combo.currentIndexChanged.connect(
+                lambda _=0, i=n - 1: self._sync_detector_combo(i))
             row = QHBoxLayout()
             row.addWidget(instrument_combo)
             row.addWidget(detector_combo)
@@ -306,13 +323,68 @@ class BatchJobDialog(QDialog):
         self._prefill_first_row_from_main_window()
         return group
 
+    # ---- detector cell: a channel name, or Front/Back on a GC row ----
+
+    def _is_gc_row(self, i):
+        return bool(self.instrument_combos[i].currentData())
+
+    def _row_detector(self, i):
+        """'front'/'back' (or '') on a GC row, else the typed channel name."""
+        combo = self.detector_rows[i][0]
+        if self._is_gc_row(i):
+            return combo.currentData() or ""
+        return combo.currentText().strip()
+
+    def _free_position(self, i):
+        """The first of Front/Back no other row of this row's GC uses, else ''."""
+        used = self._positions_used_by_others(i)
+        return next((p for p in POSITIONS if p not in used), "")
+
+    def _positions_used_by_others(self, i):
+        instrument = self.instrument_combos[i].currentData()
+        return {self._row_detector(j) for j in range(len(self.detector_rows))
+                if j != i and self.instrument_combos[j].currentData() == instrument}
+
+    def _set_row_detector(self, i, value):
+        """Set a row's detector. On a GC row a channel name (old setups) becomes a free position."""
+        combo = self.detector_rows[i][0]
+        value = (value or "").strip()
+        if self._is_gc_row(i):
+            if value and not is_position(value):
+                value = self._free_position(i)
+            combo.setCurrentIndex(max(0, combo.findData(value.lower())))
+        else:
+            combo.setCurrentText("" if is_position(value) else value)
+
+    def _sync_detector_combo(self, i):
+        """Offer Front/Back on a GC row and channel names otherwise."""
+        combo = self.detector_rows[i][0]
+        previous = (combo.currentData() or "") if not combo.isEditable() else combo.currentText().strip()
+        gc_row = self._is_gc_row(i)
+        combo.blockSignals(True)
+        combo.clear()
+        combo.setEditable(not gc_row)
+        if gc_row:
+            combo.addItem("", "")
+            for p in POSITIONS:
+                combo.addItem(POSITION_LABELS[p], p)
+            combo.setToolTip("Front = the sample's first listed channel, Back = its second")
+            keep = is_position(previous) and previous not in self._positions_used_by_others(i)
+            combo.setCurrentIndex(max(0, combo.findData(previous if keep else self._free_position(i))))
+        else:
+            combo.addItems(self._detector_choices)
+            combo.setToolTip("Detector channel name, e.g. FID1A")
+            combo.setCurrentText("" if is_position(previous) else previous)
+        combo.blockSignals(False)
+
     # ---- setup rows: remembered, saved and loaded ----
 
     def get_setup_rows(self):
         """Raw rows as typed: [{'instrument', 'detector', 'method_path'}], blanks skipped."""
         rows = []
-        for inst_combo, (combo, method_edit) in zip(self.instrument_combos, self.detector_rows):
-            detector = combo.currentText().strip()
+        for i, (inst_combo, (combo, method_edit)) in enumerate(
+                zip(self.instrument_combos, self.detector_rows)):
+            detector = self._row_detector(i)
             method_path = method_edit.text().strip()
             if not detector and not method_path:
                 continue
@@ -345,12 +417,17 @@ class BatchJobDialog(QDialog):
         return parsed
 
     def _apply_rows(self, rows):
+        blank = {'instrument': "", 'detector': "", 'method_path': None}
+        rows = [rows[i] if i < len(rows) else blank for i in range(len(self.detector_rows))]
+        # Instruments first, with every GC detector cleared, so old channel names
+        # map to Front/Back in row order.
         for i, (inst_combo, (combo, method_edit)) in enumerate(
                 zip(self.instrument_combos, self.detector_rows)):
-            row = rows[i] if i < len(rows) else {'instrument': "", 'detector': "", 'method_path': None}
-            inst_combo.setCurrentIndex(max(0, inst_combo.findData(row['instrument'])))
-            combo.setCurrentText(row['detector'])
-            method_edit.setText(row['method_path'] or "")
+            inst_combo.setCurrentIndex(max(0, inst_combo.findData(rows[i]['instrument'])))
+            self._set_row_detector(i, "")
+            method_edit.setText(rows[i]['method_path'] or "")
+        for i, row in enumerate(rows):
+            self._set_row_detector(i, row['detector'])
 
     def _setup_payload(self):
         return {"version": SETUP_VERSION, "rows": self.get_setup_rows()}
@@ -464,26 +541,26 @@ class BatchJobDialog(QDialog):
         detector = getattr(method, "detector", None)
         if not path or not detector:
             return
-        combo, method_edit = self.detector_rows[0]
-        if combo.currentText().strip() or method_edit.text().strip():
+        _, method_edit = self.detector_rows[0]
+        if self._row_detector(0) or method_edit.text().strip():
             return
-        combo.setCurrentText(detector)
+        self._set_row_detector(0, detector)
         method_edit.setText(str(path))
 
-    def _browse_method(self, detector_combo, method_edit):
+    def _browse_method(self, i):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Method", "", "ChromaKit Method (*.chromethod)")
         if not path:
             return
-        method_edit.setText(path)
-        if not detector_combo.currentText().strip():
+        self.detector_rows[i][1].setText(path)
+        if not self._row_detector(i):
             try:
                 from logic.method import ChromaMethod
                 detector = ChromaMethod.from_file(path).detector
             except Exception:
                 detector = None
             if detector:
-                detector_combo.setCurrentText(detector)
+                self._set_row_detector(i, detector)
 
     def _refresh_detector_choices(self):
         """Offer the detector channels found in the first sample of the added directories."""
@@ -505,7 +582,10 @@ class BatchJobDialog(QDialog):
                 break
             if detectors:
                 break
+        self._detector_choices = detectors
         for i, (combo, _) in enumerate(self.detector_rows):
+            if self._is_gc_row(i):
+                continue  # Front/Back rows don't list channel names
             current = combo.currentText()
             combo.blockSignals(True)
             combo.clear()
@@ -531,10 +611,12 @@ class BatchJobDialog(QDialog):
         for n, (inst_combo, (combo, method_edit)) in enumerate(
                 zip(self.instrument_combos, self.detector_rows), start=1):
             instrument = inst_combo.currentData() or ""
-            detector = combo.currentText().strip()
+            detector = self._row_detector(n - 1)
             method_path = method_edit.text().strip()
             if not detector and not method_path:
                 continue
+            if instrument and not detector:
+                raise ValueError(f"Detector {n}: choose Front Detector or Back Detector.")
             if method_path:
                 if not os.path.isfile(method_path):
                     raise ValueError(f"Detector {n}: method file not found:\n{method_path}")
@@ -546,7 +628,8 @@ class BatchJobDialog(QDialog):
             if not detector:
                 raise ValueError(f"Detector {n}: enter a detector channel name.")
             if any(r['instrument'] == instrument and r['detector'] == detector for r in runs):
-                label = f"{instrument} {detector}" if instrument else f"Detector {detector}"
+                label = (f"{instrument} {position_label(detector)}" if instrument
+                         else f"Detector {detector}")
                 raise ValueError(f"{label} is listed more than once.")
             runs.append({'instrument': instrument, 'detector': detector,
                          'method_path': method_path or None})
@@ -566,8 +649,8 @@ class BatchJobDialog(QDialog):
                     raise ValueError(f"Folder {name} has no instrument tag; tag it GC1 or GC2.")
         for r in runs:
             if r['instrument'] and r['instrument'] not in tags_in_use:
-                raise ValueError(f"The {r['instrument']} {r['detector']} row has no folder tagged "
-                                 f"{r['instrument']}.")
+                raise ValueError(f"The {r['instrument']} {position_label(r['detector'])} row has "
+                                 f"no folder tagged {r['instrument']}.")
         if not runs:
             raise ValueError("Enter at least one detector, or uncheck "
                              "\"Process each detector below with its own method\".")
@@ -742,6 +825,7 @@ class BatchJobDialog(QDialog):
                 d: (self.directory_instruments.get(d, "") if self._gc12_mode() else "")
                 for d in self.directories},
             'gc12_workbook': workbook,
+            'gc12_add_placeholders': self.placeholders_check.isChecked(),
             'gc12_rows': [dict(r) for r in detector_runs],
         }
         self._remember_setup()

@@ -16,7 +16,7 @@ ChromaKit-MS is a Python application for inspecting and processing GC-MS (Gas Ch
 
 ## Requirements
 
-* Python 3.10+
+* Python 3.10–3.13 (`rainbow-api` has no prebuilt wheels for newer versions)
 * [PySide6](https://pypi.org/project/PySide6/) 6.9+
 * [rainbow-api](https://github.com/reciprocal-space/rainbow-api) (Agilent `.D` file parsing)
 * NumPy, SciPy, Matplotlib, pybaselines, openpyxl
@@ -43,6 +43,9 @@ pip install -e ".[ms]"
 ```
 
 This installs the `chromakit-ms` console entry point.
+
+On Windows with [uv](https://docs.astral.sh/uv/) installed, double-click or run `run.bat`: it creates a Python 3.13
+`.venv` and installs the dependencies on first run, then launches the app.
 
 To install straight from GitHub instead of a clone (the MS library search extra is included):
 

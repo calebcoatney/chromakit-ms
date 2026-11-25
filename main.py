@@ -58,6 +58,8 @@ def main():
     
     except Exception as e:
         # Handle any other startup errors
+        import traceback
+        traceback.print_exc()
         error_message = f"Error starting application: {str(e)}"
         QMessageBox.critical(None, "Error", error_message)
         sys.exit(1)
