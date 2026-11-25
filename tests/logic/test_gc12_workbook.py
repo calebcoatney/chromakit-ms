@@ -89,7 +89,9 @@ def test_paired_workbook_layout(tmp_path):
     assert g1["A3"].number_format == "m/dd/yy h:mm"
     assert g1["C4"].value == "Integrator"
     assert g1["B5"].value == 1.5
-    assert g2["A3"].value in (None, "") and g2["I3"].value in (None, "")
+    # the macro pairs GC2 with GC1 by name, then time: both channels of GC2 carry the date
+    assert g2["A3"].value == g1["A3"].value == T0 and g2["I3"].value == T0
+    assert g2["A3"].number_format == "m/dd/yy h:mm"
     assert g2["I1"].value.endswith("FID2B.ch")
     # block 1: rows 1-3 header, 4 column headers, 5-6 peaks; blank row 7; block 2 at 8
     assert g1["A6"].value == 2 and g1["A7"].value is None
@@ -187,28 +189,62 @@ def test_zero_peaks_row(tmp_path):
     assert book["GC1 raw formatting"]["A5"].value == "NO PEAKS FOUND"
 
 
-def test_missing_date_writes_marker_on_gc1(tmp_path, monkeypatch):
+def test_missing_date_writes_marker_on_both_sheets(tmp_path, monkeypatch):
     monkeypatch.setattr(wb, "acquisition_time", lambda d, det=None: None)
     i1, i2, _ = build(tmp_path)
     book, _ = write(tmp_path, i1, i2)
     assert book["GC1 raw formatting"]["A3"].value == "NO ACQUISITION TIME"
-    assert book["GC2 raw formatting"]["A3"].value in (None, "")
+    assert book["GC2 raw formatting"]["A3"].value == "NO ACQUISITION TIME"
 
 
-def test_unpaired_gets_full_placeholder_block(tmp_path):
+def _column(book, sheet, letter):
+    return [c.value for c in book[sheet][letter]]
+
+
+def _samples(book, sheet):
+    """Sample names in block order (the row under each Signal row)."""
+    col = _column(book, sheet, "A")
+    return [col[i + 1] for i, v in enumerate(col) if str(v or "").startswith("Signal:")]
+
+
+def test_unpaired_gc1_injection_leaves_no_block_on_gc2(tmp_path):
+    # A block with no peaks stops the macro's RT matching, so nothing stands in for the partner.
     i1, i2, _ = build(tmp_path, extra=["S099"])
     i1[1].acquired = T0 + datetime.timedelta(hours=2)
     book, summary = write(tmp_path, i1, i2)
-    g2 = book["GC2 raw formatting"]
-    assert g2["A8"].value == "Signal: (none)" and g2["I8"].value == "Signal: (none)"
-    assert g2["A9"].value == "NO GC2 INJECTION PAIRED WITH S099"
-    assert g2["A10"].value in (None, "")
-    assert g2["A11"].value == "Peak #" and g2["I11"].value == "Peak #"
-    assert g2["A12"].value == "NO INJECTION" and g2["I12"].value == "NO INJECTION"
+    assert _samples(book, "GC1 raw formatting") == ["S005", "S099"]
+    assert _samples(book, "GC2 raw formatting") == ["S005"]
+    for sheet in ("GC1 raw formatting", "GC2 raw formatting"):
+        assert not any("NO INJECTION" in str(v or "") or "(none)" in str(v or "")
+                       for v in _column(book, sheet, "A"))
     pairing = book["Pairing"]
     notes = [pairing.cell(row=r, column=9).value for r in range(2, 4)]
     assert any("no GC2 injection within 5 min" in (n or "") for n in notes)
     assert summary.gc1_unpaired == 1 and summary.gc2_unpaired == 0
+
+
+def test_unpaired_gc2_injection_leaves_no_block_on_gc1(tmp_path):
+    i1, i2, _ = build(tmp_path)
+    i2[0].acquired = T0 + datetime.timedelta(hours=2)
+    book, summary = write(tmp_path, i1, i2)
+    assert _samples(book, "GC1 raw formatting") == ["S005"]
+    assert _samples(book, "GC2 raw formatting") == ["S005"]
+    assert book["GC2 raw formatting"]["A3"].value == T0 + datetime.timedelta(hours=2)
+    assert summary.gc1_unpaired == 1 and summary.gc2_unpaired == 1
+
+
+def test_gc2_every_other_injection_keeps_gc2_blocks_together(tmp_path):
+    i1, i2, _ = build(tmp_path, extra=["S006", "S007"])
+    make_c(tmp_path, "GC2", "S007", GC2_DETS)
+    rec = {(os.path.join(str(tmp_path / "GC2"), f"{n}.C"), d): (True, "")
+           for n in ("S005", "S007") for d in GC2_DETS}
+    i2 = collect_injections(str(tmp_path / "GC2"), "GC2", GC2_DETS, rec)
+    for inj in i1 + i2:
+        inj.acquired = T0 + datetime.timedelta(minutes=25 * (int(inj.sample[1:]) - 5))
+    book, summary = write(tmp_path, i1, i2)
+    assert _samples(book, "GC1 raw formatting") == ["S005", "S006", "S007"]
+    assert _samples(book, "GC2 raw formatting") == ["S005", "S007"]
+    assert (summary.pairs, summary.gc1_unpaired) == (2, 1)
 
 
 def test_column_a_contiguous_in_every_block(tmp_path):
@@ -217,21 +253,14 @@ def test_column_a_contiguous_in_every_block(tmp_path):
     i1, i2, _ = build(tmp_path, rec, extra=["S099"])
     i1[1].acquired = T0 + datetime.timedelta(hours=2)
     book, _ = write(tmp_path, i1, i2)
-    for name, ts_blank in (("GC1 raw formatting", False), ("GC2 raw formatting", True)):
+    for name, blocks in (("GC1 raw formatting", 2), ("GC2 raw formatting", 1)):
         ws = book[name]
         rows = [r for r in range(1, ws.max_row + 1)]
         starts = [r for r in rows if str(ws.cell(r, 1).value or "").startswith("Signal:")]
-        assert len(starts) == 2
+        assert len(starts) == blocks
         for s in starts:
             r = s + 1
-            first = r + 1 if ts_blank else r  # GC2's timestamp row is blank
-            if ts_blank:
-                assert ws.cell(first, 1).value in (None, "")
-                r = first + 1
-            else:
-                r += 2
-            assert ws.cell(s + 1, 1).value not in (None, "")
-            # sample row .. (timestamp row on GC1) .. headers .. status/peaks
+            # sample row .. timestamp row .. headers .. status/peaks
             while r <= ws.max_row and ws.cell(r, 1).value not in (None, ""):
                 r += 1
             # the run ended: the rest of the block must not have more column-A cells

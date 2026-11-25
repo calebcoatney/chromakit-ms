@@ -250,12 +250,6 @@ def _status_line(ch: ChannelResult, peak_count: int | None = None) -> str | None
     return "NO PEAKS FOUND" if peak_count == 0 else None
 
 
-def _timestamp_value(inj: Injection | None, sheet_is_gc1: bool):
-    if not sheet_is_gc1:
-        return ""
-    return inj.acquired if inj is not None and inj.acquired is not None else _NO_TIME
-
-
 def _read_json(ch: ChannelResult) -> tuple[dict | None, ChannelResult]:
     """JSON data for an ok channel; a file that cannot be read turns it into a failure."""
     try:
@@ -270,8 +264,8 @@ def _write_status_row(ws, row: int, col: int, text: str) -> int:
     return row + 1
 
 
-def _write_injection_block(ws, row: int, inj: Injection, sheet_is_gc1: bool) -> int:
-    ts = _timestamp_value(inj, sheet_is_gc1)
+def _write_injection_block(ws, row: int, inj: Injection) -> int:
+    ts = inj.acquired if inj.acquired is not None else _NO_TIME  # the macro needs a non-empty row
     next_rows = []
     for k, ch in enumerate(inj.channels):
         col = 1 + k * _STRIDE
@@ -286,27 +280,6 @@ def _write_injection_block(ws, row: int, inj: Injection, sheet_is_gc1: bool) -> 
         if line:
             nxt = _write_status_row(ws, nxt, col, line)
         next_rows.append(nxt)
-    return _finish_block(ws, row, next_rows, sheet_is_gc1)
-
-
-def _write_placeholder_block(ws, row: int, other: Injection, sheet_is_gc1: bool, n_channels: int) -> int:
-    absent = "GC1" if sheet_is_gc1 else "GC2"
-    next_rows = []
-    for k in range(n_channels):
-        col = 1 + k * _STRIDE
-        data = {"signal": "Signal: (none)",
-                "sample_id": f"NO {absent} INJECTION PAIRED WITH {other.sample}",
-                "timestamp": _timestamp_value(None, sheet_is_gc1), "peaks": []}
-        nxt, _ = write_channel_block(ws, row, col, data, _CFG)
-        next_rows.append(_write_status_row(ws, nxt, col, "NO INJECTION"))
-    return _finish_block(ws, row, next_rows, sheet_is_gc1)
-
-
-def _finish_block(ws, row: int, next_rows: list[int], sheet_is_gc1: bool) -> int:
-    if not sheet_is_gc1:
-        # GC2's timestamp row (third header row) must be truly empty for the macro.
-        for k in range(len(next_rows)):
-            ws.cell(row=row + 2, column=1 + k * _STRIDE).value = None
     return max(next_rows) + 1  # one blank row between blocks
 
 
@@ -334,32 +307,31 @@ def _write_pairing_sheet(ws, pairs: list[Pair]) -> None:
 
 
 def write_paired_workbook(pairs: list[Pair], path: str) -> WorkbookSummary:
-    """Write the GC1/GC2 paste sheets and the Pairing sheet; injection k is the same on both."""
+    """Write the GC1/GC2 paste sheets and the Pairing sheet.
+
+    Each sheet lists only its own instrument's injections, dated: the performance
+    workbook's macro pairs GC2 with GC1 by sample name, then time. Nothing stands
+    in for a missing partner, because the macro stops matching retention times at
+    the first block with no peaks. A macro that pairs by order can't use this layout.
+    """
     book = openpyxl.Workbook()
     ws1 = book.active
     ws1.title = "GC1 raw formatting"
     ws2 = book.create_sheet("GC2 raw formatting")
     pairing = book.create_sheet("Pairing")
 
-    # shortcut: a side with no injections at all gets 1 placeholder channel column, upgrade if the detector count is ever needed there
     for p in pairs:
         for inj in (p.gc1, p.gc2):
             if inj and len(inj.channels) > _MAX_CHANNELS:
                 raise ValueError(
                     f"{inj.instrument} has {len(inj.channels)} channels for injection "
                     f"{inj.sample}; the paste layout holds at most {_MAX_CHANNELS} per instrument")
-    n1 = max((len(p.gc1.channels) for p in pairs if p.gc1), default=1)
-    n2 = max((len(p.gc2.channels) for p in pairs if p.gc2), default=1)
     row1 = row2 = 1
     for p in pairs:
         if p.gc1:
-            row1 = _write_injection_block(ws1, row1, p.gc1, True)
-        else:
-            row1 = _write_placeholder_block(ws1, row1, p.gc2, True, n1)
+            row1 = _write_injection_block(ws1, row1, p.gc1)
         if p.gc2:
-            row2 = _write_injection_block(ws2, row2, p.gc2, False)
-        else:
-            row2 = _write_placeholder_block(ws2, row2, p.gc1, False, n2)
+            row2 = _write_injection_block(ws2, row2, p.gc2)
     _write_pairing_sheet(pairing, pairs)
     book.save(path)
 
