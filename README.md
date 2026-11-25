@@ -16,7 +16,7 @@ ChromaKit-MS is a Python application for inspecting and processing GC-MS (Gas Ch
 
 ## Requirements
 
-* Python 3.10+
+* Python 3.10–3.13 (`rainbow-api` has no prebuilt wheels for newer versions)
 * [PySide6](https://pypi.org/project/PySide6/) 6.9+
 * [rainbow-api](https://github.com/reciprocal-space/rainbow-api) (Agilent `.D` file parsing)
 * NumPy, SciPy, Matplotlib, pybaselines, openpyxl
