@@ -104,7 +104,12 @@ def test_no_prefill_without_saved_path_or_detector(qtbot, tmp_path):
 def _row(dialog, i, instrument, detector, method_path=""):
     combo = dialog.instrument_combos[i]
     combo.setCurrentIndex(combo.findData(instrument))
-    _fill(dialog, i, detector, method_path)
+    if instrument:  # GC rows pick "front"/"back" ("" = blank)
+        det, edit = dialog.detector_rows[i]
+        det.setCurrentIndex(max(0, det.findData(detector)))
+        edit.setText(method_path)
+    else:
+        _fill(dialog, i, detector, method_path)
 
 
 def _folder(tmp_path, name):
@@ -128,19 +133,19 @@ def test_fid1a_on_both_instruments_is_valid(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "a"), "GC1")
     _add(dialog, _folder(tmp_path, "b"), "GC2")
     dialog.per_detector_check.setChecked(True)
-    _row(dialog, 0, "GC1", "FID1A")
-    _row(dialog, 1, "GC2", "FID1A")
+    _row(dialog, 0, "GC1", "front")
+    _row(dialog, 1, "GC2", "front")
     assert dialog.get_detector_runs() == [
-        {'instrument': 'GC1', 'detector': 'FID1A', 'method_path': None},
-        {'instrument': 'GC2', 'detector': 'FID1A', 'method_path': None},
+        {'instrument': 'GC1', 'detector': 'front', 'method_path': None},
+        {'instrument': 'GC2', 'detector': 'front', 'method_path': None},
     ]
 
 
 def test_duplicate_instrument_detector_raises(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "a"), "GC1")
     dialog.per_detector_check.setChecked(True)
-    _row(dialog, 0, "GC1", "FID1A")
-    _row(dialog, 1, "GC1", "FID1A")
+    _row(dialog, 0, "GC1", "front")
+    _row(dialog, 1, "GC1", "front")
     with pytest.raises(ValueError, match="more than once"):
         dialog.get_detector_runs()
 
@@ -159,8 +164,8 @@ def test_guess_instrument_from_path(dialog, tmp_path):
 def test_setup_round_trip(dialog, tmp_path):
     m = tmp_path / "a.chromethod"
     ChromaMethod(name="a", signal_type="gc").to_file(m)
-    _row(dialog, 0, "GC1", "FID1A", str(m))
-    _row(dialog, 1, "GC2", "FID1A")
+    _row(dialog, 0, "GC1", "front", str(m))
+    _row(dialog, 1, "GC2", "front")
     _row(dialog, 3, "", "TCD2B")
     before = dialog.get_setup_rows()
     assert len(before) == 3
@@ -186,7 +191,7 @@ def test_tagged_folder_without_row_is_refused(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "g1"), "GC1")
     _add(dialog, _folder(tmp_path, "g2"), "GC2")
     dialog.per_detector_check.setChecked(True)
-    _row(dialog, 0, "GC1", "FID1A")
+    _row(dialog, 0, "GC1", "front")
     with pytest.raises(ValueError) as e:
         dialog.get_detector_runs()
     assert str(e.value) == "Folder g2 is tagged GC2 but no detector row is for GC2."
@@ -195,8 +200,8 @@ def test_tagged_folder_without_row_is_refused(dialog, tmp_path):
 def test_row_whose_tag_no_folder_has_is_refused(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "g1"), "GC1")
     dialog.per_detector_check.setChecked(True)
-    _row(dialog, 0, "GC1", "FID1A")
-    _row(dialog, 1, "GC2", "FID1A")
+    _row(dialog, 0, "GC1", "front")
+    _row(dialog, 1, "GC2", "front")
     with pytest.raises(ValueError, match="GC2"):
         dialog.get_detector_runs()
 
@@ -206,13 +211,13 @@ def test_workbook_field_enabled_only_in_gc12_mode(dialog, tmp_path):
     path = _folder(tmp_path, "plain")
     _add(dialog, path)
     dialog.per_detector_check.setChecked(True)
-    _row(dialog, 0, "GC1", "FID1A")
+    _row(dialog, 0, "GC1", "front")
     assert not dialog.workbook_edit.isEnabled()  # no folder tagged
     dialog.set_directory_instrument(path, "GC1")
     assert dialog.workbook_edit.isEnabled()
     _row(dialog, 0, "", "FID1A")
     assert not dialog.workbook_edit.isEnabled()  # no row has an instrument
-    _row(dialog, 0, "GC1", "FID1A")
+    _row(dialog, 0, "GC1", "front")
     dialog.per_detector_check.setChecked(False)
     assert not dialog.workbook_edit.isEnabled()
 
@@ -228,14 +233,14 @@ def test_workbook_prefilled_when_both_tags_present(dialog, tmp_path):
 def test_workbook_needs_both_instruments(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "g1"), "GC1")
     dialog.per_detector_check.setChecked(True)
-    _row(dialog, 0, "GC1", "FID1A")
+    _row(dialog, 0, "GC1", "front")
     dialog.workbook_edit.setText(str(tmp_path / "out.xlsx"))
     with pytest.raises(ValueError, match="GC2"):
         dialog.get_workbook_path()
     _add(dialog, _folder(tmp_path, "g2"), "GC2")
-    _row(dialog, 1, "GC1", "TCD3C")
-    _row(dialog, 2, "GC2", "FID1A")
-    _row(dialog, 3, "GC2", "FID2B")
+    _row(dialog, 1, "GC1", "back")
+    _row(dialog, 2, "GC2", "front")
+    _row(dialog, 3, "GC2", "back")
     assert dialog.get_workbook_path() == str(tmp_path / "out.xlsx")
 
 
@@ -255,7 +260,7 @@ def test_workbook_needs_json_export(qtbot, tmp_path):
     _add(d, _folder(tmp_path, "g1"), "GC1")
     _add(d, _folder(tmp_path, "g2"), "GC2")
     d.per_detector_check.setChecked(True)
-    _row(d, 0, "GC1", "FID1A")
+    _row(d, 0, "GC1", "front")
     d.workbook_edit.setText(str(tmp_path / "out.xlsx"))
     with pytest.raises(ValueError) as e:
         d.get_workbook_path()
@@ -270,10 +275,10 @@ def test_options_carry_directory_instruments_and_workbook(dialog, tmp_path):
     out = str(tmp_path / "out.xlsx")
     dialog.workbook_edit.setText(out)
     dialog.per_detector_check.setChecked(True)
-    _row(dialog, 0, "GC1", "FID1A")
-    _row(dialog, 1, "GC1", "TCD3C")
-    _row(dialog, 2, "GC2", "FID1A")
-    _row(dialog, 3, "GC2", "FID2B")
+    _row(dialog, 0, "GC1", "front")
+    _row(dialog, 1, "GC1", "back")
+    _row(dialog, 2, "GC2", "front")
+    _row(dialog, 3, "GC2", "back")
     got = []
     dialog.start_batch.connect(lambda dirs, opts: got.append((dirs, opts)))
     dialog.on_start_processing()
@@ -281,11 +286,15 @@ def test_options_carry_directory_instruments_and_workbook(dialog, tmp_path):
     assert dirs == [g1, g2]
     assert opts['directory_instruments'] == {g1: "GC1", g2: "GC2"}
     assert opts['gc12_workbook'] == out
+    assert opts['gc12_add_placeholders'] is False
+    dialog.placeholders_check.setChecked(True)
+    dialog.on_start_processing()
+    assert got[1][1]['gc12_add_placeholders'] is True
     assert opts['detector_runs'] == opts['gc12_rows'] == [
-        {'instrument': 'GC1', 'detector': 'FID1A', 'method_path': None},
-        {'instrument': 'GC1', 'detector': 'TCD3C', 'method_path': None},
-        {'instrument': 'GC2', 'detector': 'FID1A', 'method_path': None},
-        {'instrument': 'GC2', 'detector': 'FID2B', 'method_path': None},
+        {'instrument': 'GC1', 'detector': 'front', 'method_path': None},
+        {'instrument': 'GC1', 'detector': 'back', 'method_path': None},
+        {'instrument': 'GC2', 'detector': 'front', 'method_path': None},
+        {'instrument': 'GC2', 'detector': 'back', 'method_path': None},
     ]
 
 
@@ -326,10 +335,10 @@ def test_setup_remembered_between_dialogs(qtbot, tmp_path):
     _add(d1, g2, "GC2")
     d1.workbook_edit.setText(str(tmp_path / "o.xlsx"))
     d1.per_detector_check.setChecked(True)
-    _row(d1, 0, "GC1", "FID1A")
-    _row(d1, 1, "GC1", "TCD3C")
-    _row(d1, 2, "GC2", "FID1A")
-    _row(d1, 3, "GC2", "FID2B")
+    _row(d1, 0, "GC1", "front")
+    _row(d1, 1, "GC1", "back")
+    _row(d1, 2, "GC2", "front")
+    _row(d1, 3, "GC2", "back")
     d1.on_start_processing()
     d2 = BatchJobDialog()
     qtbot.addWidget(d2)
@@ -343,8 +352,45 @@ def test_remembered_setup_beats_main_window_prefill(qtbot, tmp_path):
         json.dumps({"version": 1, "rows": [
             {"instrument": "GC2", "detector": "FID1A", "method_path": None}]}))
     d = _dialog_with_main(qtbot, tmp_path / "m.chromethod", "FID2B")
+    # an old setup's channel name on a GC row loads as that GC's Front detector
     assert d.get_setup_rows() == [
-        {"instrument": "GC2", "detector": "FID1A", "method_path": None}]
+        {"instrument": "GC2", "detector": "front", "method_path": None}]
+
+
+def test_gc_row_offers_front_and_back(dialog):
+    combo = dialog.detector_rows[0][0]
+    _row(dialog, 0, "GC1", "")
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "", "Front Detector", "Back Detector"]
+    assert not combo.isEditable()
+    _row(dialog, 0, "", "")
+    assert combo.isEditable()
+
+
+def test_new_gc_rows_default_to_front_then_back(dialog):
+    for i in range(3):
+        dialog.instrument_combos[i].setCurrentIndex(dialog.instrument_combos[i].findData("GC1"))
+    assert [dialog._row_detector(i) for i in range(3)] == ["front", "back", ""]
+
+
+def test_old_setup_channel_names_map_to_front_then_back(dialog, tmp_path):
+    path = tmp_path / "setup.json"
+    path.write_text(json.dumps({"version": 1, "rows": [
+        {"instrument": "GC1", "detector": "FID1A", "method_path": None},
+        {"instrument": "GC1", "detector": "TCD3C", "method_path": None},
+        {"instrument": "", "detector": "TCD2B", "method_path": None}]}))
+    dialog.load_setup(str(path))
+    assert [r['detector'] for r in dialog.get_setup_rows()] == ["front", "back", "TCD2B"]
+
+
+def test_gc_row_with_method_but_no_position_raises(dialog, tmp_path):
+    m = tmp_path / "a.chromethod"
+    ChromaMethod(name="a", signal_type="gc").to_file(m)
+    _add(dialog, _folder(tmp_path, "g1"), "GC1")
+    dialog.per_detector_check.setChecked(True)
+    _row(dialog, 0, "GC1", "", str(m))
+    with pytest.raises(ValueError, match="choose Front Detector or Back Detector"):
+        dialog.get_detector_runs()
 
 
 def test_corrupt_remembered_setup_is_ignored(qtbot):
@@ -395,7 +441,7 @@ def test_autotagged_folder_with_blank_instrument_rows_keeps_pr5_behaviour(dialog
 
 def test_filled_rows_are_not_used_when_box_unchecked(dialog, tmp_path):
     _autotagged(dialog, tmp_path)
-    _row(dialog, 0, "GC1", "FID1A")
+    _row(dialog, 0, "GC1", "front")
     assert not dialog.per_detector_check.isChecked()
     assert dialog.get_detector_runs() == []
     assert _start(dialog)['detector_runs'] == []
@@ -409,8 +455,8 @@ def ready(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "g1"), "GC1")
     _add(dialog, _folder(tmp_path, "g2"), "GC2")
     dialog.per_detector_check.setChecked(True)
-    for i, (tag, det) in enumerate([("GC1", "FID1A"), ("GC1", "TCD3C"),
-                                    ("GC2", "FID1A"), ("GC2", "FID2B")]):
+    for i, (tag, det) in enumerate([("GC1", "front"), ("GC1", "back"),
+                                    ("GC2", "front"), ("GC2", "back")]):
         _row(dialog, i, tag, det)
     dialog.workbook_edit.setText(str(tmp_path / "out.xlsx"))
     return dialog
@@ -469,23 +515,19 @@ def test_new_workbook_does_not_ask_to_overwrite(ready, monkeypatch):
     assert len(_press_start(ready)) == 1
 
 
-@pytest.mark.parametrize("extra", [[], [("GC1", "FID2B")]])
-def test_workbook_mode_needs_exactly_two_rows_per_instrument(ready, extra, boxes):
-    if extra:
-        _row(ready, 3, "GC1", "FID2B")  # GC1 now 3 rows, GC2 only 1
-    else:
-        _row(ready, 3, "", "")  # GC2 down to 1 row
+def test_workbook_mode_needs_exactly_two_rows_per_instrument(ready, boxes):
+    _row(ready, 3, "", "")  # GC2 down to 1 row
     assert _press_start(ready) == []
     assert boxes[0][0] == "Output Workbook"
-    assert "exactly 2" in boxes[0][1] and ("GC1 has 3" in boxes[0][1] or "GC2 has 1" in boxes[0][1])
+    assert "exactly 2" in boxes[0][1] and "GC2 has 1" in boxes[0][1]
 
 
 def test_three_rows_for_one_instrument_named_in_message(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "g1"), "GC1")
     _add(dialog, _folder(tmp_path, "g2"), "GC2")
     dialog.per_detector_check.setChecked(True)
-    for i, (tag, det) in enumerate([("GC1", "FID1A"), ("GC1", "TCD3C"), ("GC1", "FID2B"),
-                                    ("GC2", "FID1A")]):
+    for i, (tag, det) in enumerate([("GC1", "front"), ("GC1", "back"), ("GC1", "back"),
+                                    ("GC2", "front")]):
         _row(dialog, i, tag, det)
     dialog.workbook_edit.setText(str(tmp_path / "out.xlsx"))
     with pytest.raises(ValueError, match="GC1 has 3"):
@@ -496,7 +538,7 @@ def test_untagged_folder_without_untagged_row_refused(dialog, tmp_path, boxes):
     _add(dialog, _folder(tmp_path, "g1"), "GC1")
     _add(dialog, _folder(tmp_path, "mystery"))
     dialog.per_detector_check.setChecked(True)
-    _row(dialog, 0, "GC1", "FID1A")
+    _row(dialog, 0, "GC1", "front")
     with pytest.raises(ValueError) as e:
         dialog.get_detector_runs()
     assert str(e.value) == "Folder mystery has no instrument tag; tag it GC1 or GC2."
@@ -508,7 +550,7 @@ def test_untagged_folder_with_untagged_row_is_fine(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "g1"), "GC1")
     _add(dialog, _folder(tmp_path, "mystery"))
     dialog.per_detector_check.setChecked(True)
-    _row(dialog, 0, "GC1", "FID1A")
+    _row(dialog, 0, "GC1", "front")
     _row(dialog, 1, "", "FID1A")
     assert len(dialog.get_detector_runs()) == 2
 
@@ -518,7 +560,7 @@ def test_inert_tags_hint_toggles_with_gc12_mode(dialog, tmp_path):
     _add(dialog, _folder(tmp_path, "g1"), "GC1")
     dialog.per_detector_check.setChecked(True)
     assert not dialog.tags_inert_hint.isHidden()  # no row has an instrument yet
-    _row(dialog, 0, "GC1", "FID1A")
+    _row(dialog, 0, "GC1", "front")
     assert dialog.tags_inert_hint.isHidden()
     dialog.per_detector_check.setChecked(False)
     assert not dialog.tags_inert_hint.isHidden()

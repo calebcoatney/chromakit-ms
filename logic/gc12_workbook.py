@@ -18,6 +18,7 @@ import openpyxl
 import rainbow as rb
 from openpyxl.styles import Font
 
+from logic.detector_position import channel_for, is_position, label as position_label
 from logic.paste_blocks import (
     GC12_PASTE_FORMAT_CONFIG,
     channel_width,
@@ -171,25 +172,50 @@ def pair_injections(
 RunRecords = dict[tuple[str, str], tuple[bool, str]]  # (c_path, detector) -> (success, message)
 
 
-def _channel_result(c_path: str, sample: str, detector: str, records: RunRecords) -> ChannelResult:
+def _channel_result(c_path: str, sample: str, detector: str, records: RunRecords,
+                    channel: str | None = None) -> ChannelResult:
+    """*detector* is the job's key (a channel or a position); *channel* the sample's own name for it."""
+    channel = channel or detector
     record = records.get((c_path, detector))
     if record is None:
-        return ChannelResult(detector, "not_processed", "no result from this job")
+        return ChannelResult(channel, "not_processed", "no result from this job")
     ok, message = record
     if not ok:
         if message.startswith("Detector ") and "not found" in message:
-            return ChannelResult(detector, "missing", message)
-        return ChannelResult(detector, "failed", message)
+            return ChannelResult(channel, "missing", message)
+        return ChannelResult(channel, "failed", message)
     # Only a recorded success may use a JSON on disk; a stale file never counts.
-    json_path = os.path.join(c_path, "results", f"{sample} - {detector}.json")
+    json_path = os.path.join(c_path, "results", f"{sample} - {channel}.json")
     if not os.path.isfile(json_path):
-        return ChannelResult(detector, "failed", "no result file")
-    return ChannelResult(detector, "ok", message, json_path)
+        return ChannelResult(channel, "failed", "no result file")
+    return ChannelResult(channel, "ok", message, json_path)
+
+
+def _available_channels(c_path: str) -> list[str]:
+    """The sample's detector channels in listed order; [] when they can't be read."""
+    try:
+        from logic.c_folder import CFolder
+        return list(CFolder.open(c_path).get_available_detectors() or [])
+    except Exception as exc:
+        logger.warning("Could not list detector channels of %s: %s", c_path, exc)
+        return []
+
+
+def _channels_for(c_path: str, detectors: list[str]) -> list[str | None]:
+    """Each detector's channel in this sample: positions resolve by listed order, names stay."""
+    if not any(is_position(d) for d in detectors):
+        return list(detectors)
+    available = _available_channels(c_path)
+    return [channel_for(d, available) if is_position(d) else d for d in detectors]
 
 
 def collect_injections(directory: str, instrument: str, detectors: list[str],
                        records: RunRecords) -> list[Injection]:
-    """One Injection per .C folder of *directory* (same listing rule as AutomationWorker.run)."""
+    """One Injection per .C folder of *directory* (same listing rule as AutomationWorker.run).
+
+    *detectors* may hold positions (``"front"``/``"back"``); each resolves to that
+    sample's own channel.
+    """
     injections = []
     for item in sorted(os.listdir(directory)):
         c_path = os.path.join(directory, item)
@@ -204,11 +230,14 @@ def collect_injections(directory: str, instrument: str, detectors: list[str],
         d_dirs = sorted(d for d in glob.glob(os.path.join(glob.escape(c_path), "data", "*.D"))
                         if os.path.isdir(d))
         d_name = os.path.basename(d_dirs[0]) if d_dirs else None
-        acquired = acquisition_time(d_dirs[0], detectors[0]) if d_dirs and detectors else None
+        channels = _channels_for(c_path, detectors)
+        names = [ch or position_label(d) for d, ch in zip(detectors, channels)]
+        acquired = acquisition_time(d_dirs[0], channels[0]) if d_dirs and detectors else None
         injections.append(Injection(
             c_path=c_path, instrument=instrument, d_name=d_name, sample=sample,
             acquired=acquired, counter=injection_counter(d_name or stem),
-            channels=[_channel_result(c_path, sample, d, records) for d in detectors],
+            channels=[_channel_result(c_path, sample, d, records, name)
+                      for d, name in zip(detectors, names)],
         ))
     return injections
 
@@ -250,9 +279,7 @@ def _status_line(ch: ChannelResult, peak_count: int | None = None) -> str | None
     return "NO PEAKS FOUND" if peak_count == 0 else None
 
 
-def _timestamp_value(inj: Injection | None, sheet_is_gc1: bool):
-    if not sheet_is_gc1:
-        return ""
+def _timestamp_value(inj: Injection | None):
     return inj.acquired if inj is not None and inj.acquired is not None else _NO_TIME
 
 
@@ -270,8 +297,8 @@ def _write_status_row(ws, row: int, col: int, text: str) -> int:
     return row + 1
 
 
-def _write_injection_block(ws, row: int, inj: Injection, sheet_is_gc1: bool) -> int:
-    ts = _timestamp_value(inj, sheet_is_gc1)
+def _write_injection_block(ws, row: int, inj: Injection) -> int:
+    ts = _timestamp_value(inj)
     next_rows = []
     for k, ch in enumerate(inj.channels):
         col = 1 + k * _STRIDE
@@ -286,7 +313,7 @@ def _write_injection_block(ws, row: int, inj: Injection, sheet_is_gc1: bool) -> 
         if line:
             nxt = _write_status_row(ws, nxt, col, line)
         next_rows.append(nxt)
-    return _finish_block(ws, row, next_rows, sheet_is_gc1)
+    return max(next_rows) + 1  # one blank row between blocks
 
 
 def _write_placeholder_block(ws, row: int, other: Injection, sheet_is_gc1: bool, n_channels: int) -> int:
@@ -296,17 +323,9 @@ def _write_placeholder_block(ws, row: int, other: Injection, sheet_is_gc1: bool,
         col = 1 + k * _STRIDE
         data = {"signal": "Signal: (none)",
                 "sample_id": f"NO {absent} INJECTION PAIRED WITH {other.sample}",
-                "timestamp": _timestamp_value(None, sheet_is_gc1), "peaks": []}
+                "timestamp": _timestamp_value(None), "peaks": []}
         nxt, _ = write_channel_block(ws, row, col, data, _CFG)
         next_rows.append(_write_status_row(ws, nxt, col, "NO INJECTION"))
-    return _finish_block(ws, row, next_rows, sheet_is_gc1)
-
-
-def _finish_block(ws, row: int, next_rows: list[int], sheet_is_gc1: bool) -> int:
-    if not sheet_is_gc1:
-        # GC2's timestamp row (third header row) must be truly empty for the macro.
-        for k in range(len(next_rows)):
-            ws.cell(row=row + 2, column=1 + k * _STRIDE).value = None
     return max(next_rows) + 1  # one blank row between blocks
 
 
@@ -333,8 +352,13 @@ def _write_pairing_sheet(ws, pairs: list[Pair]) -> None:
             ws.cell(row=i + 1, column=col).number_format = _CFG["timestamp_format"]
 
 
-def write_paired_workbook(pairs: list[Pair], path: str) -> WorkbookSummary:
-    """Write the GC1/GC2 paste sheets and the Pairing sheet; injection k is the same on both."""
+def write_paired_workbook(pairs: list[Pair], path: str, add_placeholders: bool = True) -> WorkbookSummary:
+    """Write the GC1/GC2 paste sheets and the Pairing sheet.
+
+    Every injection is written on its own instrument's sheet. With *add_placeholders*,
+    an unpaired injection also gets a "NO INJECTION" block on the other sheet, so
+    injection k is the same on both; without it, nothing stands in for the missing partner.
+    """
     book = openpyxl.Workbook()
     ws1 = book.active
     ws1.title = "GC1 raw formatting"
@@ -353,12 +377,12 @@ def write_paired_workbook(pairs: list[Pair], path: str) -> WorkbookSummary:
     row1 = row2 = 1
     for p in pairs:
         if p.gc1:
-            row1 = _write_injection_block(ws1, row1, p.gc1, True)
-        else:
+            row1 = _write_injection_block(ws1, row1, p.gc1)
+        elif add_placeholders:
             row1 = _write_placeholder_block(ws1, row1, p.gc2, True, n1)
         if p.gc2:
-            row2 = _write_injection_block(ws2, row2, p.gc2, False)
-        else:
+            row2 = _write_injection_block(ws2, row2, p.gc2)
+        elif add_placeholders:
             row2 = _write_placeholder_block(ws2, row2, p.gc1, False, n2)
     _write_pairing_sheet(pairing, pairs)
     book.save(path)

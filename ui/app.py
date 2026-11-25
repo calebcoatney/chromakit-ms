@@ -4705,7 +4705,8 @@ class ChromaKitApp(QMainWindow):
                             folder, instrument, detectors, self._gc12_records)
                 per_instrument[instrument] = injections
             pairs = gc12_workbook.pair_injections(per_instrument["GC1"], per_instrument["GC2"])
-            summary = gc12_workbook.write_paired_workbook(pairs, path)
+            summary = gc12_workbook.write_paired_workbook(
+                pairs, path, add_placeholders=options.get('gc12_add_placeholders', False))
             line = f"GC1&2 workbook written: {path} ({summary.message()})"
             self.batch_dialog.add_log_message(line)
             return line

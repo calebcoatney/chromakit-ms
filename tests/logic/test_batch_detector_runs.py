@@ -104,6 +104,10 @@ def test_tagged_folder_without_rows_raises():
     ('FID2B', ['FID1A'], False, (None, True)),     # selection missing: auto-detect
     ('FID2B', ['FID1A'], True, (None, False)),     # explicit run missing: skip
     ('FID2B', [], True, ('FID2B', True)),          # channels unknown: trust request
+    ('front', ['TCD3C', 'FID1A'], True, ('TCD3C', True)),  # position: listed order, any name
+    ('back', ['TCD3C', 'FID1A'], True, ('FID1A', True)),
+    ('back', ['FID1A'], True, (None, False)),      # no second channel: skip
+    ('front', [], True, (None, False)),            # channels unknown: can't place it
 ])
 def test_resolve_detector(requested, available, explicit, expected):
     assert resolve_detector(requested, available, explicit) == expected

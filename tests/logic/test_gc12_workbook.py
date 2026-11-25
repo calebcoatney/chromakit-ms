@@ -89,7 +89,7 @@ def test_paired_workbook_layout(tmp_path):
     assert g1["A3"].number_format == "m/dd/yy h:mm"
     assert g1["C4"].value == "Integrator"
     assert g1["B5"].value == 1.5
-    assert g2["A3"].value in (None, "") and g2["I3"].value in (None, "")
+    assert isinstance(g2["A3"].value, datetime.datetime) and g2["A3"].value == g2["I3"].value
     assert g2["I1"].value.endswith("FID2B.ch")
     # block 1: rows 1-3 header, 4 column headers, 5-6 peaks; blank row 7; block 2 at 8
     assert g1["A6"].value == 2 and g1["A7"].value is None
@@ -187,12 +187,28 @@ def test_zero_peaks_row(tmp_path):
     assert book["GC1 raw formatting"]["A5"].value == "NO PEAKS FOUND"
 
 
-def test_missing_date_writes_marker_on_gc1(tmp_path, monkeypatch):
+def test_missing_date_writes_marker_on_both_sheets(tmp_path, monkeypatch):
     monkeypatch.setattr(wb, "acquisition_time", lambda d, det=None: None)
     i1, i2, _ = build(tmp_path)
     book, _ = write(tmp_path, i1, i2)
     assert book["GC1 raw formatting"]["A3"].value == "NO ACQUISITION TIME"
-    assert book["GC2 raw formatting"]["A3"].value in (None, "")
+    assert book["GC2 raw formatting"]["A3"].value == "NO ACQUISITION TIME"
+
+
+def test_front_back_rows_resolve_to_each_samples_channels(tmp_path, monkeypatch):
+    make_c(tmp_path, "GC1", "S005", GC1_DETS)
+    c = os.path.join(str(tmp_path / "GC1"), "S005.C")
+    monkeypatch.setattr(wb, "_available_channels", lambda path: list(GC1_DETS))
+    rec = {(c, "front"): (True, ""),
+           (c, "back"): (False, "Detector back not found in S005.C (available: FID1A) - skipping")}
+    inj = collect_injections(str(tmp_path / "GC1"), "GC1", ["front", "back"], rec)[0]
+    front, back = inj.channels
+    assert (front.detector, front.status) == ("FID1A", "ok")
+    assert front.json_path.endswith("S005 - FID1A.json")
+    assert (back.detector, back.status) == ("TCD3C", "missing")
+    monkeypatch.setattr(wb, "_available_channels", lambda path: ["FID1A"])
+    inj = collect_injections(str(tmp_path / "GC1"), "GC1", ["front", "back"], rec)[0]
+    assert inj.channels[1].detector == "Back Detector"
 
 
 def test_unpaired_gets_full_placeholder_block(tmp_path):
@@ -202,7 +218,7 @@ def test_unpaired_gets_full_placeholder_block(tmp_path):
     g2 = book["GC2 raw formatting"]
     assert g2["A8"].value == "Signal: (none)" and g2["I8"].value == "Signal: (none)"
     assert g2["A9"].value == "NO GC2 INJECTION PAIRED WITH S099"
-    assert g2["A10"].value in (None, "")
+    assert g2["A10"].value == "NO ACQUISITION TIME"
     assert g2["A11"].value == "Peak #" and g2["I11"].value == "Peak #"
     assert g2["A12"].value == "NO INJECTION" and g2["I12"].value == "NO INJECTION"
     pairing = book["Pairing"]
@@ -211,27 +227,39 @@ def test_unpaired_gets_full_placeholder_block(tmp_path):
     assert summary.gc1_unpaired == 1 and summary.gc2_unpaired == 0
 
 
+def test_without_placeholders_every_sample_is_written_and_no_blanks(tmp_path):
+    i1, i2, _ = build(tmp_path, extra=["S099"])
+    i1[1].acquired = T0 + datetime.timedelta(hours=2)
+    path = str(tmp_path / "out.xlsx")
+    summary = write_paired_workbook(pair_injections(i1, i2), path, add_placeholders=False)
+    book = openpyxl.load_workbook(path)
+    g1 = [c.value for c in book["GC1 raw formatting"]["A"]]
+    g2 = [c.value for c in book["GC2 raw formatting"]["A"]]
+    assert "S005" in g1 and "S099" in g1  # the unpaired GC1 sample is still written
+    assert sum(str(v or "").startswith("Signal:") for v in g1) == 2
+    assert sum(str(v or "").startswith("Signal:") for v in g2) == 1
+    for col_a in (g1, g2):
+        assert "Signal: (none)" not in col_a and "NO INJECTION" not in col_a
+        assert not any("PAIRED WITH" in str(v or "") for v in col_a)
+    assert summary.gc1_unpaired == 1
+
+
 def test_column_a_contiguous_in_every_block(tmp_path):
     def rec(r):
         r[(os.path.join(str(tmp_path / "GC1"), "S005.C"), "TCD3C")] = (False, "boom")
     i1, i2, _ = build(tmp_path, rec, extra=["S099"])
     i1[1].acquired = T0 + datetime.timedelta(hours=2)
     book, _ = write(tmp_path, i1, i2)
-    for name, ts_blank in (("GC1 raw formatting", False), ("GC2 raw formatting", True)):
+    for name in ("GC1 raw formatting", "GC2 raw formatting"):
         ws = book[name]
         rows = [r for r in range(1, ws.max_row + 1)]
         starts = [r for r in rows if str(ws.cell(r, 1).value or "").startswith("Signal:")]
         assert len(starts) == 2
         for s in starts:
-            r = s + 1
-            first = r + 1 if ts_blank else r  # GC2's timestamp row is blank
-            if ts_blank:
-                assert ws.cell(first, 1).value in (None, "")
-                r = first + 1
-            else:
-                r += 2
+            r = s + 3
             assert ws.cell(s + 1, 1).value not in (None, "")
-            # sample row .. (timestamp row on GC1) .. headers .. status/peaks
+            assert ws.cell(s + 2, 1).value not in (None, "")  # timestamp row
+            # sample row .. timestamp row .. headers .. status/peaks
             while r <= ws.max_row and ws.cell(r, 1).value not in (None, ""):
                 r += 1
             # the run ended: the rest of the block must not have more column-A cells

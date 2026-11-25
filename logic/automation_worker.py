@@ -5,6 +5,7 @@ import traceback
 import datetime
 import json
 from logic.c_folder import CFolder
+from logic.detector_position import channel_for, is_position, label as position_label
 from logic.ms_weighting import DEFAULT_WEIGHTING
 from logic.signal_profiles import SignalProfileRegistry, PipelineStage
 from util.thread_helpers import main_thread_dispatcher
@@ -54,6 +55,8 @@ def build_detector_runs(batch_opts, instrument: str = ""):
         method_path = (entry.get('method_path') or '').strip() or None
         method = ChromaMethod.from_file(method_path) if method_path else None
         detector = (entry.get('detector') or '').strip() or (method.detector if method else None)
+        if is_position(detector):
+            detector = detector.lower()
         if not detector:
             raise ValueError(
                 f"No detector given for method {method_path or '(current settings)'}"
@@ -76,10 +79,14 @@ def resolve_detector(requested, available, explicit):
     auto-detect". ``ok`` False means an explicitly requested detector is
     missing from this file and the run should be skipped. A non-explicit
     request (the app's current selection) that the file lacks falls back to
-    auto-detect so files with other channels still process.
+    auto-detect so files with other channels still process. A position
+    (``"front"``/``"back"``) picks the file's first/second listed channel.
     """
     if not requested:
         return None, True
+    if is_position(requested):
+        channel = channel_for(requested, available)
+        return (channel, True) if channel else (None, not explicit)
     if not available or requested in available:
         return requested, True
     if explicit:
@@ -222,6 +229,9 @@ class AutomationWorker(QRunnable):
                         self.signals.log_message.emit(msg)
                         self._complete(label, file_path, self._run_detector, False, msg)
                         continue
+                    if is_position(requested):
+                        self.signals.log_message.emit(
+                            f"{label}: {position_label(requested)} is {detector}")
 
                     self._process_file(file_path, label, signal_type, profile_stages,
                                        detector=detector, method=run['method'])
