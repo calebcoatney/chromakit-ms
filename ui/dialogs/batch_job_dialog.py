@@ -36,6 +36,7 @@ class BatchJobDialog(QDialog):
         # Initialize directories list
         self.directories = []
         self.directory_instruments = {}  # folder path (as in self.directories) -> "GC1"/"GC2"/""
+        self._folder_channels = {}  # folder path -> its first sample's channels, read once
         
         # Setup UI
         self.setup_ui()
@@ -283,6 +284,8 @@ class BatchJobDialog(QDialog):
             row.addWidget(method_edit, 1)
             row.addWidget(browse)
             form.addRow(f"Detector {n}:", row)
+            instrument_combo.currentIndexChanged.connect(
+                lambda _=0, i=n - 1: self._on_row_instrument_changed(i))
             self.detector_rows.append((detector_combo, method_edit))
             self.instrument_combos.append(instrument_combo)
         group_layout.addWidget(rows_widget)
@@ -431,6 +434,7 @@ class BatchJobDialog(QDialog):
         self.directory_instruments[path] = tag
         self._refresh_item_text(path)
         self._update_workbook_state()
+        self._refresh_detector_choices()
 
     def _refresh_item_text(self, path):
         tag = self.directory_instruments.get(path, "")
@@ -485,38 +489,71 @@ class BatchJobDialog(QDialog):
             if detector:
                 detector_combo.setCurrentText(detector)
 
-    def _refresh_detector_choices(self):
-        """Offer the detector channels found in the first sample of the added directories."""
-        detectors = []
-        for directory in self.directories:
-            try:
-                names = sorted(os.listdir(directory))
-            except OSError:
+    def _channels_of(self, directory):
+        """Detector channels of the folder's first .C sample; [] when there is none to read."""
+        if directory in self._folder_channels:
+            return self._folder_channels[directory]
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            return []
+        for name in names:
+            path = os.path.join(directory, name)
+            if not (os.path.isdir(path) and name.endswith('.C')):
                 continue
-            for name in names:
-                path = os.path.join(directory, name)
-                if not (os.path.isdir(path) and name.endswith('.C')):
-                    continue
-                try:
-                    from logic.c_folder import CFolder
-                    detectors = list(CFolder.open(path).get_available_detectors() or [])
-                except Exception:
-                    detectors = []
-                break
-            if detectors:
-                break
+            try:
+                from logic.c_folder import CFolder
+                channels = list(CFolder.open(path).get_available_detectors() or [])
+            except Exception as e:
+                logger.warning("Could not read the detector channels of %s: %s", path, e)
+                channels = []
+            if channels:
+                self._folder_channels[directory] = channels
+            return channels
+        return []
+
+    def _channels_for_instrument(self, instrument):
+        """Channels to offer on a row: from the folders with its tag, or any folder when blank."""
+        for directory in self.directories:
+            if instrument and self.directory_instruments.get(directory, "") != instrument:
+                continue
+            channels = self._channels_of(directory)
+            if channels:
+                return channels
+        return []
+
+    def _offer_channels(self, i):
+        """Fill row i's list for its instrument. Returns the channels; the row's text is kept."""
+        combo = self.detector_rows[i][0]
+        channels = self._channels_for_instrument(self.instrument_combos[i].currentData() or "")
+        current = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(channels)
+        combo.setCurrentText(current)
+        combo.blockSignals(False)
+        return channels
+
+    def _refresh_detector_choices(self):
+        """Offer each row the channels of its own instrument's folders (GC1 and GC2 differ).
+
+        An empty row with no instrument is filled with the i-th channel. A row with an
+        instrument is not: blank there means "use the method's detector".
+        """
         for i, (combo, _) in enumerate(self.detector_rows):
-            current = combo.currentText()
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItems(detectors)
-            if current:
-                combo.setCurrentText(current)
-            elif i < len(detectors):
+            channels = self._offer_channels(i)
+            if (not combo.currentText() and i < len(channels)
+                    and not self.instrument_combos[i].currentData()):
                 combo.setCurrentIndex(i)
-            else:
-                combo.setCurrentText("")
-            combo.blockSignals(False)
+
+    def _on_row_instrument_changed(self, i):
+        """Offer the new instrument's channels, dropping one picked from the old list that it lacks."""
+        combo = self.detector_rows[i][0]
+        current = combo.currentText()
+        was_offered = combo.findText(current, Qt.MatchExactly | Qt.MatchCaseSensitive) >= 0
+        channels = self._offer_channels(i)
+        if was_offered and current not in channels:
+            combo.setCurrentText("")
 
     def get_detector_runs(self):
         """Return [{'instrument', 'detector', 'method_path'}] for filled-in rows.
@@ -658,7 +695,6 @@ class BatchJobDialog(QDialog):
             
             # Add to the list
             self._append_directory(directory)
-            self._refresh_detector_choices()
             
             # Enable start button if we have directories
             self.start_button.setEnabled(True)
@@ -677,6 +713,7 @@ class BatchJobDialog(QDialog):
         for directory in to_remove:
             self.directories.remove(directory)
             self.directory_instruments.pop(directory, None)
+            self._folder_channels.pop(directory, None)
         
         # Remove from the widget
         for item in selected_items:
@@ -686,6 +723,7 @@ class BatchJobDialog(QDialog):
         # Disable start button if no directories left
         self.start_button.setEnabled(len(self.directories) > 0)
         self._update_workbook_state()
+        self._refresh_detector_choices()
     
     def show_context_menu(self, position):
         """Show context menu for the directory list."""
